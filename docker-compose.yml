@@ -1,0 +1,76 @@
+services:
+  web:
+    image: recipe-budget-service:${APP_IMAGE_TAG:-local}
+    build:
+      context: .
+      network: host
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    container_name: recipe_budget_service_web
+    environment:
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./data/app.db}
+      DATA_DIR: /app/data
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      BACKUP_ADMIN_USERNAME: ${BACKUP_ADMIN_USERNAME:-}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-false}
+      ENFORCE_SAME_ORIGIN: ${ENFORCE_SAME_ORIGIN:-true}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      BACKGROUND_JOBS_ENABLED: ${BACKGROUND_JOBS_ENABLED:-true}
+      TIMER_REMINDER_MINUTES: ${TIMER_REMINDER_MINUTES:-120}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      PUSH_ENDPOINT_HOSTS: ${PUSH_ENDPOINT_HOSTS:-}
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/app/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: unless-stopped
+    stop_grace_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: recipe_budget_service_caddy
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Меню{% endblock %}
+{% block content %}
+<div class="page-head compact-head menu-page-head">
+    <div>
+        <h1>Меню</h1>
+        <span class="subline">{{ week_title }}</span>
+    </div>
+    <div class="actions nowrap week-actions">
+        <a class="icon-btn" href="/menu?from_date={{ prev_date }}" title="Предыдущая неделя" aria-label="Предыдущая неделя"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+        <a class="btn ghost" href="/menu">Сегодня</a>
+        <a class="icon-btn" href="/menu?from_date={{ next_date }}" title="Следующая неделя" aria-label="Следующая неделя"><svg class="icon"><use href="#i-arrow-right"></use></svg></a>
+    </div>
+</div>
+
+<div class="card week-jump-form menu-tools">
+    <form method="get" action="/menu" class="inline-form compact-form">
+        <label>Неделя от даты
+            <input type="date" name="from_date" value="{{ from_date }}">
+        </label>
+        <button class="btn secondary" type="submit">Перейти</button>
+    </form>
+    <form method="post" action="/menu/shopping" class="inline-form compact-form">
+        <input type="hidden" name="from_date" value="{{ from_date }}">
+        <button class="btn" type="submit"><svg class="icon"><use href="#i-shopping"></use></svg> Список покупок на неделю</button>
+    </form>
+</div>
+
+<form method="post" action="/menu" class="card menu-add-form">
+    <label>Дата
+        <input type="date" name="plan_date" value="{{ default_plan_date }}" required>
+    </label>
+    <label>Приём
+        <input name="meal_name" placeholder="Завтрак, обед, ужин" value="Обед" required>
+    </label>
+    <label>Рецепт
+        <select name="recipe_id" required>
+            {% for recipe in recipes %}
+            <option value="{{ recipe.id }}">{{ recipe.title }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Заметка
+        <input name="note" placeholder="по желанию">
+    </label>
+    <button class="btn" type="submit" {% if not recipes %}disabled{% endif %} title="Добавить в меню" aria-label="Добавить в меню"><svg class="icon"><use href="#i-plus"></use></svg></button>
+</form>
+
+{% if not recipes %}
+<div class="empty">Сначала добавь хотя бы один рецепт.</div>
+{% endif %}
+
+<div class="menu-week">
+{% for day in days %}
+    <section class="card menu-day {% if day.is_today %}today{% endif %}">
+        <div class="menu-day-head">
+            <b>{{ day.weekday }}</b>
+            <span>{{ day.label }}</span>
+        </div>
+        <div class="menu-items">
+        {% for item in day.entries %}
+            <article class="menu-item">
+                <div>
+                    <span class="pill">{{ item.meal_name }}</span>
+                    <a href="/recipes/{{ item.recipe.id }}"><b>{{ item.recipe.title }}</b></a>
+                    {% if item.note %}<div class="subline">{{ item.note }}</div>{% endif %}
+                </div>
+                <form method="post" action="/menu/{{ item.id }}/delete" onsubmit="return confirm('Удалить из меню?')">
+                    <button class="mini-danger" type="submit" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button>
+                </form>
+            </article>
+        {% else %}
+            <div class="empty small">—</div>
+        {% endfor %}
+        </div>
+    </section>
+{% endfor %}
+</div>
+{% endblock %}

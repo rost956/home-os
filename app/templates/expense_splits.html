@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Долги{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Долги</h1><a class="icon-btn" href="/expenses" title="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a></div>
+<form method="post" action="/expenses/splits" class="card form compact-form split-form">
+    <input name="username" placeholder="Кто должен: nickname" required>
+    <input name="title" placeholder="За что" required>
+    <input name="total_amount" placeholder="Сумма покупки" inputmode="decimal" required>
+    <input name="debtor_amount" placeholder="Сколько вернуть, пусто = 50%" inputmode="decimal">
+    <input name="note" placeholder="Заметка">
+    <button class="btn" type="submit">Добавить</button>
+</form>
+<div class="grid two">
+<section class="card"><h2>Мне должны</h2><div class="list">{% for split in splits %}<div class="list-row {% if split.is_settled %}done{% endif %}"><div><b>{{ split.title }}</b><span class="subline">@{{ split.debtor.username }} · {{ split.created_at|msk_datetime('%d.%m.%Y') }}{% if split.note %} · {{ split.note }}{% endif %}</span></div><strong>{{ split.debtor_amount }} ₽</strong><form method="post" action="/expenses/splits/{{ split.id }}/toggle"><button class="icon-btn" title="Изменить статус" aria-label="Изменить статус"><svg class="icon"><use href="#i-check"></use></svg></button></form><form method="post" action="/expenses/splits/{{ split.id }}/delete"><button class="mini-danger" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button></form></div>{% else %}<div class="empty small">Пусто</div>{% endfor %}</div></section>
+<section class="card"><h2>Я должен</h2><div class="list">{% for split in incoming %}<div class="list-row {% if split.is_settled %}done{% endif %}"><div><b>{{ split.title }}</b><span class="subline">@{{ split.owner.username }} · {{ split.created_at|msk_datetime('%d.%m.%Y') }}</span></div><strong>{{ split.debtor_amount }} ₽</strong></div>{% else %}<div class="empty small">Пусто</div>{% endfor %}</div></section>
+</div>
+{% endblock %}

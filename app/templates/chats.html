@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Чаты{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Чаты</h1></div>
+<form method="post" action="/chats" class="card form inline-form three compact-form"><input name="username" required placeholder="@nickname"><input name="title" placeholder="Название чата"><button class="btn" type="submit" title="Создать чат" aria-label="Создать чат"><svg class="icon"><use href="#i-plus"></use></svg></button></form>
+<div class="list-card">
+{% for thread in threads %}
+    {% set other = thread.user_b if thread.user_a_id == user.id else thread.user_a %}
+    {% set unread = unread_by_thread.get(thread.id, 0) %}
+    {% set presence = presence_info(other) %}
+    <a class="title-row" href="/chats/{{ thread.id }}">
+        <span class="title-with-icon">{% if thread.is_pinned %}<svg class="icon pinned-mark" aria-label="Закреплено"><use href="#i-pin"></use></svg>{% endif %}{{ thread.title }}</span>
+        <small class="chat-list-meta">@{{ other.username }} · <span class="presence-inline {% if presence.is_online %}online{% endif %}"><i></i>{{ presence.text }}</span>{% if unread %} · {{ unread }} новых{% endif %}</small>
+    </a>
+{% else %}<div class="empty">Пусто</div>{% endfor %}
+</div>
+{% endblock %}

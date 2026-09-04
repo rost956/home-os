@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Импорт рецепта{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>JSON рецепт</h1>
+    <a class="icon-btn" href="/recipes" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+<div class="import-layout">
+    <form method="post" action="/recipes/import" class="card form recipe-json-card">
+        <label>JSON
+            <textarea name="recipe_json" rows="18" required spellcheck="false" class="code-textarea" placeholder="Вставь сюда JSON рецепта">{{ recipe_json }}</textarea>
+        </label>
+        <button class="btn" type="submit">Создать рецепт</button>
+    </form>
+
+    <aside class="import-side">
+        <details class="card action-panel" open>
+            <summary>Промпт для ChatGPT</summary>
+            <textarea class="code-textarea readonly-box prompt-box" rows="24" readonly>{{ prompt_text }}</textarea>
+            <button class="btn secondary full copy-btn" type="button" data-copy-target="prompt">Скопировать промпт</button>
+        </details>
+    </aside>
+</div>
+
+<textarea id="copyPrompt" hidden>{{ prompt_text }}</textarea>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const source = document.getElementById('copyPrompt');
+    document.querySelectorAll('[data-copy-target="prompt"]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            if (!source) return;
+            await navigator.clipboard.writeText(source.value);
+            const old = button.textContent;
+            button.textContent = 'Скопировано';
+            setTimeout(() => button.textContent = old, 1200);
+        });
+    });
+})();
+</script>
+{% endblock %}

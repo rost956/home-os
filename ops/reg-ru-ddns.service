@@ -1,0 +1,15 @@
+[Unit]
+Description=Update REG.RU DNS record when the public IP changes
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=__SERVICE_USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=/etc/recipe-budget-ddns.env
+ExecStart=/usr/bin/python3 __PROJECT_DIR__/scripts/reg_ru_ddns.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only

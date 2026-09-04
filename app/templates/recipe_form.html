@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}{% if recipe %}Редактировать рецепт{% else %}Новый рецепт{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>{% if recipe %}Редактирование рецепта{% else %}Новый рецепт{% endif %}</h1>
+    <a class="icon-btn" href="{% if recipe %}/recipes/{{ recipe.id }}{% else %}/recipes{% endif %}" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+<form method="post" action="{{ action }}" class="card form wide recipe-editor" enctype="multipart/form-data">
+    <label>Название
+        <input name="title" required value="{{ recipe.title if recipe else '' }}" placeholder="Булгур с курицей карри">
+    </label>
+    <label>Источник
+        <input name="source_url" type="url" value="{{ recipe.source_url if recipe and recipe.source_url else '' }}" placeholder="https://...">
+    </label>
+
+    <div class="photo-upload-block">
+        {% if recipe and recipe.image_path %}
+        <div class="recipe-photo-preview">
+            <img src="{{ recipe.image_path }}" alt="Фото рецепта">
+            <label class="check-row compact-check">
+                <input type="checkbox" name="remove_image" value="1">
+                <span>Удалить фото</span>
+            </label>
+        </div>
+        {% endif %}
+        <label>Фото
+            <input name="image_file" type="file" accept="image/jpeg,image/png,image/webp,image/gif">
+        </label>
+    </div>
+
+    <div class="form-row">
+        <label>Минуты всего
+            <input name="cook_time_minutes" type="number" min="0" value="{{ recipe.cook_time_minutes if recipe and recipe.cook_time_minutes is not none else '' }}">
+        </label>
+        <label>₽
+            <input name="cost" inputmode="decimal" value="{{ recipe.cost if recipe and recipe.cost is not none else '' }}" placeholder="650">
+        </label>
+        <label>Порции
+            <input name="servings" inputmode="decimal" value="{{ recipe.servings|fmt_decimal if recipe and recipe.servings is not none else '' }}" placeholder="2,5">
+        </label>
+    </div>
+    <label>Ингредиенты
+        <textarea name="ingredients" rows="8" required placeholder="Курица — 800 г&#10;Булгур — 400 г">{{ recipe.ingredients if recipe else '' }}</textarea>
+    </label>
+
+    <div class="editor-section-head">
+        <div>
+            <h2>Этапы</h2>
+            <div class="subline">Порядок приготовления</div>
+        </div>
+        <button class="icon-btn" type="button" id="addStep" title="Добавить этап" aria-label="Добавить этап"><svg class="icon"><use href="#i-plus"></use></svg></button>
+    </div>
+    <div class="steps-editor" id="stepsEditor">
+        {% for step in steps %}
+        <div class="step-edit-row">
+            <div class="step-number">{{ loop.index }}</div>
+            <div class="step-move-controls" aria-label="Порядок этапа">
+                <button class="mini-btn" type="button" title="Выше" aria-label="Выше" data-step-up><svg class="icon"><use href="#i-arrow-up"></use></svg></button>
+                <button class="mini-btn" type="button" title="Ниже" aria-label="Ниже" data-step-down><svg class="icon"><use href="#i-arrow-down"></use></svg></button>
+            </div>
+            <textarea name="step_text" rows="3" required placeholder="Что сделать на этом этапе">{{ step.text }}</textarea>
+            <input name="step_minutes" type="number" min="0" value="{{ step.minutes if step.minutes is not none else '' }}" placeholder="мин">
+            <button class="mini-danger" type="button" title="Удалить этап" aria-label="Удалить этап" data-remove-step><svg class="icon"><use href="#i-x"></use></svg></button>
+        </div>
+        {% endfor %}
+    </div>
+
+    <button class="btn" type="submit">Сохранить</button>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const root = document.getElementById('stepsEditor');
+    const add = document.getElementById('addStep');
+    if (!root || !add) return;
+
+    function rows() {
+        return Array.from(root.querySelectorAll('.step-edit-row'));
+    }
+
+    function renumber() {
+        const allRows = rows();
+        allRows.forEach((row, index) => {
+            row.querySelector('.step-number').textContent = String(index + 1);
+            const remove = row.querySelector('[data-remove-step]');
+            const up = row.querySelector('[data-step-up]');
+            const down = row.querySelector('[data-step-down]');
+            if (remove) remove.disabled = allRows.length <= 1;
+            if (up) up.disabled = index === 0;
+            if (down) down.disabled = index === allRows.length - 1;
+        });
+    }
+
+    function bindRow(row) {
+        const remove = row.querySelector('[data-remove-step]');
+        if (remove && !remove.dataset.bound) {
+            remove.dataset.bound = '1';
+            remove.addEventListener('click', () => {
+                if (rows().length <= 1) return;
+                row.remove();
+                renumber();
+            });
+        }
+
+        const up = row.querySelector('[data-step-up]');
+        if (up && !up.dataset.bound) {
+            up.dataset.bound = '1';
+            up.addEventListener('click', () => {
+                const previous = row.previousElementSibling;
+                if (!previous) return;
+                root.insertBefore(row, previous);
+                renumber();
+                row.querySelector('textarea')?.focus();
+            });
+        }
+
+        const down = row.querySelector('[data-step-down]');
+        if (down && !down.dataset.bound) {
+            down.dataset.bound = '1';
+            down.addEventListener('click', () => {
+                const next = row.nextElementSibling;
+                if (!next) return;
+                root.insertBefore(next, row);
+                renumber();
+                row.querySelector('textarea')?.focus();
+            });
+        }
+    }
+
+    add.addEventListener('click', () => {
+        const row = document.createElement('div');
+        row.className = 'step-edit-row';
+        row.innerHTML = `<div class="step-number"></div>
+            <div class="step-move-controls" aria-label="Порядок этапа">
+                <button class="mini-btn" type="button" title="Выше" aria-label="Выше" data-step-up><svg class="icon"><use href="#i-arrow-up"></use></svg></button>
+                <button class="mini-btn" type="button" title="Ниже" aria-label="Ниже" data-step-down><svg class="icon"><use href="#i-arrow-down"></use></svg></button>
+            </div>
+            <textarea name="step_text" rows="3" required placeholder="Что сделать на этом этапе"></textarea>
+            <input name="step_minutes" type="number" min="0" placeholder="мин">
+            <button class="mini-danger" type="button" title="Удалить этап" aria-label="Удалить этап" data-remove-step><svg class="icon"><use href="#i-x"></use></svg></button>`;
+        root.appendChild(row);
+        bindRow(row);
+        renumber();
+        row.querySelector('textarea').focus();
+    });
+
+    rows().forEach(bindRow);
+    renumber();
+})();
+</script>
+{% endblock %}

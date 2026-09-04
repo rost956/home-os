@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Аналитика трат{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div>
+        <h1>Аналитика</h1>
+        <div class="subline">Финансовый период: {{ current_period_label }} · старт {{ period_start_day }} числа</div>
+    </div>
+    <a class="icon-btn" href="/expenses" title="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+<form method="get" action="/expenses/analytics" class="card analytics-filter">
+    <label>Список
+        <select name="list_id">
+            <option value="">Все доступные</option>
+            {% for list in expense_lists %}
+            <option value="{{ list.id }}" {% if selected_list_id == list.id %}selected{% endif %}>{{ list.title }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>С
+        <input type="date" name="from_date" value="{{ from_date }}">
+    </label>
+    <label>По
+        <input type="date" name="to_date" value="{{ to_date }}">
+    </label>
+    <button class="btn" type="submit">Показать</button>
+</form>
+
+<div class="stats-grid">
+    <div class="card stat-card"><span>Всего</span><b>{{ total|fmt_decimal }} ₽</b></div>
+    <div class="card stat-card"><span>В день</span><b>{{ average|fmt_decimal }} ₽</b></div>
+    <div class="card stat-card"><span>Дней в выборке</span><b>{{ days_count }} дн.</b></div>
+    <div class="card stat-card"><span>Текущий период</span><b>{{ current_month_total|fmt_decimal }} ₽</b></div>
+    <div class="card stat-card"><span>К прошлому</span><b>{{ '+' if month_diff >= 0 else '' }}{{ month_diff|fmt_decimal }} ₽</b></div>
+    <div class="card stat-card forecast-stat"><span>Прогноз</span><b>{{ forecast|fmt_decimal }} ₽</b><small>Точность: {{ forecast_info.confidence }}</small></div>
+</div>
+
+
+<section class="card analytics-card">
+    <div class="card-head"><h2>Лимиты периода</h2><a class="chip" href="/expenses/planning">настроить</a></div>
+    {% if limit_total > 0 %}
+    <div class="limit-total-box">
+        <div class="bar-title"><b>Всего по лимитам</b><span>{{ limit_spent|fmt_decimal }} / {{ limit_total|fmt_decimal }} ₽</span></div>
+        <div class="bar-track limit-track total-limit-track"><div style="width: {{ limit_percent }}%"></div></div>
+        <div class="subline">{{ 'Перерасход' if limit_left < 0 else 'Осталось' }}: {{ limit_left|fmt_decimal }} ₽</div>
+    </div>
+    {% endif %}
+    <div class="bar-list">
+    {% for row in limit_rows %}
+        <div class="bar-row">
+            <div class="bar-title"><b>{{ row.category }}</b><span>{{ row.spent|fmt_decimal }} / {{ row.limit|fmt_decimal }} ₽</span></div>
+            <div class="bar-track limit-track"><div style="width: {{ row.percent }}%"></div></div>
+            <div class="subline">Осталось: {{ row.left|fmt_decimal }} ₽</div>
+        </div>
+    {% else %}
+        <div class="empty small">Лимиты не заданы</div>
+    {% endfor %}
+    </div>
+</section>
+
+<section class="card analytics-card">
+    <div class="card-head analytics-head">
+        <h2>По датам</h2>
+        {% if category_chart %}
+        <div class="chart-legend compact-legend">
+            {% for category in category_chart %}
+            <span><i style="background: {{ category.color }}"></i>{{ category.name }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% if daily_chart %}
+    <div class="date-chart stacked-date-chart compact-daily-chart analytics-date-chart" aria-label="График трат по датам" data-scroll-latest>
+        {% for day in daily_chart %}
+        <div class="date-bar-wrap" title="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
+            <div class="date-bar-stack" aria-label="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
+                {% for segment in day.segments %}
+                <div class="date-bar-segment" style="height: {{ segment.height }}%; background: {{ segment.color }}" title="{{ segment.name }} · {{ segment.total|fmt_decimal }} ₽"></div>
+                {% endfor %}
+            </div>
+            <div class="date-axis-label" aria-label="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
+                <span class="date-axis-date">{{ day.label }}</span>
+                <span class="date-axis-total">{{ day.total|fmt_decimal }} ₽</span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty small">Нет данных</div>
+    {% endif %}
+</section>
+
+<div class="grid two analytics-split">
+    <section class="card analytics-card">
+        <h2>Категории</h2>
+        <div class="bar-list">
+        {% for category in category_chart %}
+            <div class="bar-row">
+                <div class="bar-title">
+                    <b><i class="category-dot" style="background: {{ category.color }}"></i>{{ category.name }}</b>
+                    <span>{{ category.total|fmt_decimal }} ₽</span>
+                </div>
+                <div class="bar-track"><div style="width: {{ category.percent }}%; background: {{ category.color }}"></div></div>
+            </div>
+        {% else %}
+            <div class="empty small">Нет данных</div>
+        {% endfor %}
+        </div>
+    </section>
+
+    <section class="card analytics-card">
+        <h2>Крупные траты</h2>
+        <div class="list">
+        {% for item in top_items %}
+            <div class="list-row compact-row">
+                <div>
+                    <b>{{ item.title }}</b>
+                    <span class="subline">{{ item.date.strftime('%d.%m') }} · {{ item.category }} · {{ item.list_title }}</span>
+                </div>
+                <strong>{{ item.amount|fmt_decimal }} ₽</strong>
+            </div>
+        {% else %}
+            <div class="empty small">Нет данных</div>
+        {% endfor %}
+        </div>
+    </section>
+</div>
+{% endblock %}

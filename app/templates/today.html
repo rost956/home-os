@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Сегодня{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div><h1>Сегодня</h1><div class="subline">{{ today.strftime('%d.%m.%Y') }}</div></div>
+    <div class="actions dashboard-actions">
+        <a class="btn secondary" href="/recipes/new">Рецепт</a>
+        <a class="btn secondary" href="/shopping">Покупки</a>
+        <a class="btn secondary" href="/expenses">Траты</a>
+    </div>
+</div>
+
+<section class="dashboard-summary">
+    <a class="card dashboard-metric" href="/expenses">
+        <span>Траты сегодня</span>
+        <b>{{ today_expense_total|fmt_decimal }} ₽</b>
+    </a>
+    <a class="card dashboard-metric" href="/shopping">
+        <span>Купить</span>
+        <b>{{ active_shopping_count }}</b>
+    </a>
+    <a class="card dashboard-metric" href="/watch">
+        <span>Смотреть</span>
+        <b>{{ active_watch_count }}</b>
+    </a>
+    <a class="card dashboard-metric" href="/chats">
+        <span>Чаты</span>
+        <b>{{ unread_total }}</b>
+    </a>
+</section>
+
+<div class="grid two dashboard-grid">
+    <section class="card content-card">
+        <div class="card-head"><h2>Меню</h2><a class="chip" href="/menu">неделя</a></div>
+        <div class="list today-list">
+        {% for item in menu_items %}
+            <div class="list-row today-row">
+                <div class="item-text">
+                    <b class="item-title">{{ item.meal_name }}</b>
+                    <span class="subline item-meta"><a href="/recipes/{{ item.recipe.id }}">{{ item.recipe.title }}</a></span>
+                </div>
+            </div>
+        {% else %}<div class="empty small">На сегодня ничего не запланировано</div>{% endfor %}
+        </div>
+    </section>
+
+    <section class="card content-card">
+        <div class="card-head"><h2>Траты сегодня</h2><span class="pill">{{ today_expense_total|fmt_decimal }} ₽</span></div>
+        <div class="list today-list">
+        {% for item in today_expenses %}
+            <div class="list-row today-row">
+                <div class="item-text">
+                    <b class="item-title">{{ item.title }}</b>
+                    <span class="subline item-meta">{{ item.category.name }}</span>
+                </div>
+                <strong class="row-sum">{{ item.amount }} ₽</strong>
+            </div>
+        {% else %}<div class="empty small">Трат пока нет</div>{% endfor %}
+        </div>
+    </section>
+
+    <section class="card content-card">
+        <div class="card-head"><h2>Купить</h2><a class="chip" href="/shopping">все</a></div>
+        <div class="list today-list">
+        {% for item in shopping_items %}
+            <div class="list-row today-row">
+                <div class="item-text">
+                    <b class="item-title">{{ item.title }}</b>
+                    <span class="subline item-meta">{% if item.amount %}{{ item.amount }} · {% endif %}{{ item.department }}</span>
+                </div>
+            </div>
+        {% else %}<div class="empty small">Покупок нет</div>{% endfor %}
+        </div>
+    </section>
+
+    <section class="card content-card">
+        <div class="card-head"><h2>Хотелки</h2><a class="chip" href="/wishlist">все</a></div>
+        <div class="list today-list">
+        {% for item in wishlist_items %}
+            <div class="list-row today-row">
+                <div class="item-text">
+                    <b class="item-title">{{ item.title }}</b>
+                    <span class="subline item-meta">{{ item.status|wish_status }} · {{ item.priority|wish_priority }}</span>
+                </div>
+                {% if item.price %}<strong class="row-sum">{{ item.price }} ₽</strong>{% endif %}
+            </div>
+        {% else %}<div class="empty small">Активных хотелок нет</div>{% endfor %}
+        </div>
+    </section>
+
+    <section class="card content-card">
+        <div class="card-head"><h2>Продолжить смотреть</h2><a class="chip" href="/watch">все</a></div>
+        <div class="list today-list">
+        {% for item in watch_items %}
+            <div class="list-row today-row">
+                <div class="item-text">
+                    <b class="item-title">{{ item.title }}</b>
+                    <span class="subline item-meta">{{ item.kind|watch_kind }} · {{ item.status|watch_status }}{% if item.season is not none %} · сезон {{ item.season }}{% endif %}{% if item.episode is not none %} · серия {{ item.episode }}{% endif %}{% if item.minute is not none %} · {{ item.minute }} мин.{% endif %}</span>
+                </div>
+                {% set safe_watch_url = item.watch_url|http_url %}{% if safe_watch_url %}<a class="icon-btn" href="{{ safe_watch_url }}" target="_blank" rel="noopener noreferrer" title="Смотреть"><svg class="icon"><use href="#i-external"></use></svg></a>{% endif %}
+            </div>
+        {% else %}<div class="empty small">Ничего не запланировано</div>{% endfor %}
+        </div>
+    </section>
+</div>
+{% endblock %}

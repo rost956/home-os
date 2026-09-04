@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Хотелки{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Хотелки</h1></div>
+
+<details class="card action-panel" open>
+    <summary><span class="summary-label"><svg class="icon"><use href="#i-plus"></use></svg> Хотелка</span></summary>
+    <form method="post" action="/wishlist" class="form wishlist-form compact-form">
+        <input name="title" required placeholder="Название">
+        <input name="url" placeholder="Ссылка">
+        <input name="price" inputmode="decimal" placeholder="Цена ₽">
+        <select name="priority"><option value="low">Низкий</option><option value="medium" selected>Средний</option><option value="high">Высокий</option></select>
+        <select name="status"><option value="want">Хочу</option><option value="saving">Коплю</option><option value="bought">Куплено</option><option value="paused">Отложено</option><option value="declined">Передумал</option></select>
+        <input name="goal_amount" inputmode="decimal" placeholder="Цель ₽">
+        <input name="saved_amount" inputmode="decimal" placeholder="Накоплено ₽">
+        <input name="note" placeholder="Заметка">
+        <button class="btn" type="submit">Добавить</button>
+    </form>
+</details>
+
+<div class="action-grid">
+    <details class="card action-panel"><summary><span class="summary-label"><svg class="icon"><use href="#i-link"></use></svg> Доступ</span></summary>
+        <form method="post" action="/wishlist/share" class="inline-form compact-form"><input name="username" placeholder="nickname" required><button class="btn" type="submit" title="Открыть доступ" aria-label="Открыть доступ"><svg class="icon"><use href="#i-plus"></use></svg></button></form>
+        <div class="share-list">{% for share in shares_given %}<div class="share-chip"><span>@{{ share.user.username }}</span><form method="post" action="/wishlist/share/{{ share.id }}/delete"><button type="submit" title="Закрыть доступ" aria-label="Закрыть доступ"><svg class="icon"><use href="#i-x"></use></svg></button></form></div>{% endfor %}</div>
+    </details>
+    {% if shared_owners %}<section class="card slim"><div class="chips">{% for share in shared_owners %}<a class="chip" href="/wishlist/shared/{{ share.owner.username }}">@{{ share.owner.username }}</a>{% endfor %}</div></section>{% endif %}
+</div>
+
+<div class="grid compact">
+{% for item in items %}
+<article class="card hover-card wish-card {% if item.is_done or item.status == 'bought' %}done{% endif %}">
+    <div class="card-head"><h2>{{ item.title }}</h2>{% if item.price is not none %}<span class="pill">{{ item.price }} ₽</span>{% endif %}</div>
+    <div class="chips"><span class="chip">{{ item.priority|wish_priority }}</span><span class="chip">{{ item.status|wish_status }}</span>{% if item.expense_item_id %}<span class="chip good">в тратах</span>{% endif %}</div>
+    {% if item.url %}<div class="link-block">{{ item.url|linkify }}</div>{% endif %}
+    {% if item.goal_amount %}
+    {% set saved = item.saved_amount or 0 %}
+    {% set percent = ((saved / item.goal_amount) * 100)|int if item.goal_amount else 0 %}
+    <div class="bar-row"><div class="bar-title"><b>Накопление</b><span>{{ saved }} / {{ item.goal_amount }} ₽</span></div><div class="bar-track"><div style="width: {{ percent if percent <= 100 else 100 }}%"></div></div></div>
+    {% endif %}
+    {% if item.note %}<p>{{ item.note|linkify }}</p>{% endif %}
+    <details class="inline-editor"><summary class="chip">править</summary>
+        <form method="post" action="/wishlist/{{ item.id }}/update" class="form compact-form">
+            <input name="title" value="{{ item.title }}" required>
+            <input name="url" value="{{ item.url or '' }}" placeholder="Ссылка">
+            <input name="price" value="{{ item.price if item.price is not none else '' }}" inputmode="decimal" placeholder="Цена">
+            <select name="priority"><option value="low" {% if item.priority == 'low' %}selected{% endif %}>Низкий</option><option value="medium" {% if item.priority == 'medium' %}selected{% endif %}>Средний</option><option value="high" {% if item.priority == 'high' %}selected{% endif %}>Высокий</option></select>
+            <select name="status"><option value="want" {% if item.status == 'want' %}selected{% endif %}>Хочу</option><option value="saving" {% if item.status == 'saving' %}selected{% endif %}>Коплю</option><option value="bought" {% if item.status == 'bought' %}selected{% endif %}>Куплено</option><option value="paused" {% if item.status == 'paused' %}selected{% endif %}>Отложено</option><option value="declined" {% if item.status == 'declined' %}selected{% endif %}>Передумал</option></select>
+            <input name="goal_amount" value="{{ item.goal_amount if item.goal_amount is not none else '' }}" inputmode="decimal" placeholder="Цель">
+            <input name="saved_amount" value="{{ item.saved_amount if item.saved_amount is not none else '' }}" inputmode="decimal" placeholder="Накоплено">
+            <input name="note" value="{{ item.note or '' }}" placeholder="Заметка">
+            <button class="btn" type="submit">Сохранить</button>
+        </form>
+    </details>
+    <div class="actions card-actions">
+        {% if item.expense_item_id %}
+        <form method="post" action="/wishlist/{{ item.id }}/undo-expense"><button class="icon-btn" title="Убрать из трат и вернуть статус" aria-label="Убрать из трат и вернуть статус"><svg class="icon"><use href="#i-reset"></use></svg></button></form>
+        {% elif expense_lists %}
+        <form method="post" action="/wishlist/{{ item.id }}/to-expense" class="mini-form"><select name="expense_list_id">{% for list in expense_lists %}<option value="{{ list.id }}">{{ list.title }}</option>{% endfor %}</select><button class="icon-btn" title="Куплено в траты" aria-label="Куплено в траты"><svg class="icon"><use href="#i-expenses"></use></svg></button></form>
+        {% endif %}
+        <form method="post" action="/wishlist/{{ item.id }}/toggle"><button class="icon-btn" type="submit" title="Изменить статус" aria-label="Изменить статус"><svg class="icon"><use href="{{ '#i-reset' if item.is_done else '#i-check' }}"></use></svg></button></form>
+        <form method="post" action="/wishlist/{{ item.id }}/delete"><button class="icon-btn danger-icon" type="submit" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button></form>
+    </div>
+</article>
+{% else %}<div class="empty">Пусто</div>{% endfor %}
+</div>
+{% endblock %}

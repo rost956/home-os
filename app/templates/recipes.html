@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Рецепты{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>Рецепты</h1>
+    <div class="actions nowrap">
+        <a class="btn secondary" href="/recipes/import"><svg class="icon"><use href="#i-download"></use></svg> JSON</a>
+        <a class="btn" href="/recipes/new"><svg class="icon"><use href="#i-plus"></use></svg> Добавить</a>
+    </div>
+</div>
+
+<form method="get" action="/recipes" class="card filters-card auto-search" id="recipeSearchForm">
+    <input name="q" value="{{ q }}" placeholder="Поиск" autocomplete="off" id="recipeSearchInput">
+    <select name="tag" id="recipeTagFilter">
+        <option value="">Все теги</option>
+        {% for one_tag in tags %}<option value="{{ one_tag }}" {% if tag == one_tag.lower() %}selected{% endif %}>#{{ one_tag }}</option>{% endfor %}
+    </select>
+    <input name="max_time" inputmode="numeric" value="{{ max_time }}" placeholder="до N мин">
+    <input name="max_cost" inputmode="decimal" value="{{ max_cost }}" placeholder="до N ₽">
+    <input name="servings_min" inputmode="decimal" value="{{ servings_min }}" placeholder="от N порц.">
+    <button class="icon-btn filled search-submit" type="submit" title="Найти"><svg class="icon"><use href="#i-search"></use></svg></button>
+</form>
+
+<div class="list-card recipe-list-card">
+{% for recipe in recipes %}
+    <div class="recipe-list-entry {% if recipe.owner_id == user.id %}has-favorite{% endif %}">
+        <a class="title-row recipe-row" href="/recipes/{{ recipe.id }}">
+            <span class="recipe-title">{{ recipe.title }}</span>
+            <small class="recipe-meta">
+                {% if recipe.cook_time_minutes is not none %}<span><svg class="icon"><use href="#i-clock"></use></svg>{{ recipe.cook_time_minutes }} мин</span>{% endif %}
+                {% if recipe.cost is not none %}<span>{{ recipe.cost|fmt_decimal }} ₽</span>{% endif %}
+                {% if recipe.servings is not none %}<span><svg class="icon"><use href="#i-servings"></use></svg>{{ recipe.servings|fmt_decimal }}</span>{% endif %}
+                {% if recipe.tags %}<span class="recipe-tags">{{ recipe.tags }}</span>{% endif %}
+            </small>
+        </a>
+        {% if recipe.owner_id == user.id %}<form method="post" action="/recipes/{{ recipe.id }}/favorite" class="recipe-favorite-form"><button class="icon-btn favorite-btn{% if recipe.is_favorite %} filled{% endif %}" type="submit" title="Избранное" aria-label="Избранное"><svg class="icon"><use href="#i-star"></use></svg></button></form>{% endif %}
+    </div>
+{% else %}
+    <div class="empty">Пусто</div>
+{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const form = document.getElementById('recipeSearchForm');
+    const input = document.getElementById('recipeSearchInput');
+    if (!form) return;
+    let timer = null;
+    form.querySelectorAll('input, select').forEach((el) => {
+        el.addEventListener('input', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => form.requestSubmit(), 450);
+        });
+        el.addEventListener('change', () => form.requestSubmit());
+    });
+})();
+</script>
+{% endblock %}

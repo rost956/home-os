@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}{{ shopping_list.title }}{% endblock %}
+{% block content %}
+<div class="page-head compact-head shopping-head">
+    <div><h1>{{ shopping_list.title }}</h1><div class="subline">@{{ shopping_list.owner.username }}</div></div>
+    <a class="icon-btn" href="/shopping" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+{% macro department_picker(name_prefix, selected='', allow_auto=false) -%}
+<div class="department-picker" data-department-picker>
+    <select class="department-select" data-department-select aria-label="Отдел">
+        {% if allow_auto %}<option value="" {% if not selected %}selected{% endif %}>Авто</option>{% endif %}
+        {% for department in department_options %}
+            <option value="{{ department }}" {% if selected == department %}selected{% endif %}>{{ department }}</option>
+        {% endfor %}
+        <option value="__custom__">Новый отдел</option>
+    </select>
+    <input class="department-custom hidden" data-department-custom name="department_custom" placeholder="Название отдела">
+    <input type="hidden" data-department-hidden name="department" value="{{ selected }}">
+</div>
+{%- endmacro %}
+
+<div class="action-grid shopping-actions">
+    <details class="card action-panel" open><summary><span class="summary-label"><svg class="icon"><use href="#i-plus"></use></svg> Позиция</span></summary>
+        <form method="post" action="/shopping/lists/{{ shopping_list.id }}/items" class="expense-add-form shopping-add-form">
+            <input name="title" required placeholder="Название">
+            <input name="amount" placeholder="Количество">
+            {{ department_picker('add', '', true) }}
+            <button class="btn" type="submit" title="Добавить позицию" aria-label="Добавить позицию"><svg class="icon"><use href="#i-plus"></use></svg></button>
+        </form>
+    </details>
+    {% if shopping_list.owner_id == user.id %}
+    <details class="card action-panel"><summary><span class="summary-label"><svg class="icon"><use href="#i-link"></use></svg> Доступ</span></summary>
+        <form method="post" action="/shopping/lists/{{ shopping_list.id }}/share" class="inline-form compact-form"><input name="username" placeholder="nickname" required><select name="can_edit"><option value="1">Можно менять</option><option value="0">Только просмотр</option></select><button class="btn" type="submit" title="Открыть доступ" aria-label="Открыть доступ"><svg class="icon"><use href="#i-plus"></use></svg></button></form>
+        <div class="share-list">{% for share in shopping_list.shares %}<div class="share-chip"><span>@{{ share.user.username }} · {{ 'редактор' if share.can_edit else 'просмотр' }}</span><form method="post" action="/shopping/lists/{{ shopping_list.id }}/share/{{ share.id }}/delete"><button type="submit" title="Закрыть доступ" aria-label="Закрыть доступ"><svg class="icon"><use href="#i-x"></use></svg></button></form></div>{% endfor %}</div>
+    </details>
+    {% endif %}
+</div>
+
+<div class="grid two shopping-groups">
+{% for department, items in departments.items() %}
+<section class="card category-card shopping-category-card">
+    <h2>{{ department }}</h2>
+    <div class="list shopping-list-items">
+    {% for item in items %}
+    <div class="list-row shopping-row {% if item.is_done %}done{% endif %}">
+        <form class="shopping-check-form" method="post" action="/shopping/items/{{ item.id }}/toggle"><button class="check-btn" type="submit" title="Отметить" aria-label="Отметить"><svg class="icon"><use href="{{ '#i-check' if item.is_done else '#i-circle' }}"></use></svg></button></form>
+
+        <div class="shopping-main item-text">
+            <b class="item-title">{{ item.title }}</b>
+            <span class="subline item-meta">{{ item.amount if item.amount else 'без количества' }}</span>
+            {% if item.price is not none %}<span class="shopping-price-chip">{{ "%.2f"|format(item.price) }} ₽</span>{% endif %}
+        </div>
+
+        <details class="shopping-item-menu">
+            <summary class="icon-btn" title="Действия" aria-label="Действия"><svg class="icon"><use href="#i-more"></use></svg></summary>
+            <div class="shopping-item-panel">
+                <form method="post" action="/shopping/items/{{ item.id }}/department" class="shopping-panel-form department-form department-update-form" title="Исправить отдел">
+                    <span class="panel-label">Отдел</span>
+                    {{ department_picker('item-' ~ item.id, item.department, false) }}
+                    <button class="icon-btn department-learn-btn" type="submit" name="remember" value="1" title="Сохранить отдел и запомнить правило" aria-label="Сохранить отдел и запомнить правило"><svg class="icon"><use href="#i-check"></use></svg></button>
+                </form>
+
+                <form method="post" action="/shopping/items/{{ item.id }}/price" class="shopping-panel-form price-form">
+                    <span class="panel-label">Цена</span>
+                    <input name="price" value="{{ item.price if item.price is not none else '' }}" placeholder="₽" inputmode="decimal">
+                    <button class="icon-btn" type="submit" title="Сохранить цену" aria-label="Сохранить цену"><svg class="icon"><use href="#i-check"></use></svg></button>
+                </form>
+
+                {% if item.price is not none and expense_lists %}
+                <form method="post" action="/shopping/items/{{ item.id }}/to-expense" class="shopping-panel-form mini-form">
+                    <span class="panel-label">В траты</span>
+                    <select name="expense_list_id">{% for list in expense_lists %}<option value="{{ list.id }}">{{ list.title }}</option>{% endfor %}</select>
+                    <button class="icon-btn" type="submit" title="В траты" aria-label="В траты"><svg class="icon"><use href="#i-expenses"></use></svg></button>
+                </form>
+                {% endif %}
+
+                <form method="post" action="/shopping/items/{{ item.id }}/delete" class="shopping-panel-form delete-form">
+                    <button class="btn danger full" type="submit"><svg class="icon"><use href="#i-trash"></use></svg> Удалить</button>
+                </form>
+            </div>
+        </details>
+    </div>
+    {% endfor %}
+    </div>
+</section>
+{% else %}<div class="empty">Пусто</div>{% endfor %}
+</div>
+{% if shopping_list.owner_id == user.id %}<form method="post" action="/shopping/lists/{{ shopping_list.id }}/delete" onsubmit="return confirm('Удалить список?')"><button class="btn danger" type="submit"><svg class="icon"><use href="#i-trash"></use></svg> Удалить список</button></form>{% endif %}
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+(function () {
+    document.querySelectorAll('[data-department-picker]').forEach((picker) => {
+        const select = picker.querySelector('[data-department-select]');
+        const custom = picker.querySelector('[data-department-custom]');
+        const hidden = picker.querySelector('[data-department-hidden]');
+        if (!select || !custom || !hidden) return;
+
+        function syncDepartment() {
+            const isCustom = select.value === '__custom__';
+            custom.classList.toggle('hidden', !isCustom);
+            custom.required = isCustom;
+            hidden.value = isCustom ? custom.value.trim() : select.value;
+            if (isCustom) custom.focus();
+        }
+
+        select.addEventListener('change', syncDepartment);
+        custom.addEventListener('input', syncDepartment);
+        const form = picker.closest('form');
+        if (form) form.addEventListener('submit', syncDepartment, true);
+        syncDepartment();
+    });
+
+    document.querySelectorAll('.shopping-check-form').forEach((form) => {
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const row = form.closest('.shopping-row');
+            const button = form.querySelector('.check-btn');
+            if (!row || !button || button.disabled) return;
+            const wasDone = row.classList.contains('done');
+            button.disabled = true;
+            try {
+                const response = await fetch(form.action, {method: 'POST', body: new FormData(form)});
+                if (!response.ok) throw new Error('toggle failed');
+                row.classList.toggle('done', !wasDone);
+                button.innerHTML = `<svg class="icon"><use href="${wasDone ? '#i-circle' : '#i-check'}"></use></svg>`;
+            } catch (e) {
+                row.classList.toggle('done', wasDone);
+                button.innerHTML = `<svg class="icon"><use href="${wasDone ? '#i-check' : '#i-circle'}"></use></svg>`;
+            } finally {
+                button.disabled = false;
+            }
+        });
+    });
+
+
+    document.querySelectorAll('.shopping-item-menu').forEach((details) => {
+        details.addEventListener('toggle', () => {
+            const row = details.closest('.shopping-row');
+            if (details.open) {
+                document.querySelectorAll('.shopping-item-menu[open]').forEach((other) => {
+                    if (other !== details) other.open = false;
+                });
+                if (row) row.classList.add('menu-open');
+            } else if (row) {
+                row.classList.remove('menu-open');
+            }
+        });
+    });
+
+    document.addEventListener('click', (event) => {
+        if (event.target.closest('.shopping-item-menu')) return;
+        document.querySelectorAll('.shopping-item-menu[open]').forEach((details) => {
+            details.open = false;
+            const row = details.closest('.shopping-row');
+            if (row) row.classList.remove('menu-open');
+        });
+    });
+})();
+</script>
+{% endblock %}

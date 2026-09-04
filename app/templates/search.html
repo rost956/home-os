@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Поиск{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Поиск</h1></div>
+<form method="get" action="/search" class="card search compact-search">
+    <input name="q" value="{{ q }}" placeholder="Искать людей, рецепты, траты, покупки, фильмы" autofocus>
+    <button class="btn" type="submit">Найти</button>
+</form>
+{% if q %}
+<div class="grid two search-results-grid">
+    <section class="card search-result-card"><h2>Люди</h2>{% for found_user in results.users %}<div class="title-row search-user-row"><span>@{{ found_user.username }}</span><form method="post" action="/chats"><input type="hidden" name="username" value="{{ found_user.username }}"><button class="btn secondary" type="submit">Чат</button></form></div>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Рецепты</h2>{% for r in results.recipes %}<a class="title-row" href="/recipes/{{ r.id }}"><span>{{ r.title }}</span><small>{{ r.tags or '' }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Траты</h2>{% for e in results.expenses %}<a class="title-row" href="/expenses/lists/{{ e.category.expense_list.id }}"><span>{{ e.title }}</span><small>{{ e.amount }} ₽ · {{ e.category.name }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Покупки</h2>{% for s in results.shopping %}<a class="title-row" href="/shopping/lists/{{ s.shopping_list.id }}"><span>{{ s.title }}</span><small>{{ s.department }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Хотелки</h2>{% for w in results.wishlist %}<a class="title-row" href="/wishlist"><span>{{ w.title }}</span><small>{{ w.status }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Чаты</h2>{% for c in results.chats %}<a class="title-row" href="/chats/{{ c.id }}"><span>{{ c.title }}</span><small>{{ c.updated_at|msk_datetime('%d.%m') }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+    <section class="card"><h2>Сериалы и фильмы</h2>{% for item in results.watch %}<a class="title-row" href="/watch"><span>{{ item.title }}</span><small>{{ item.kind }}</small></a>{% else %}<div class="empty small">Нет</div>{% endfor %}</section>
+</div>
+{% endif %}
+{% endblock %}

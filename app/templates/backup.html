@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Бэкап{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Бэкап</h1></div>
+<div class="grid two">
+{% if can_download_backup %}
+<section class="card content-card"><h2>Скачать</h2><p class="subline">Архив содержит базу и загруженные файлы из data.</p><div class="actions"><a class="btn" href="/backup/download">Скачать ZIP</a><form method="post" action="/backup/create"><button class="btn secondary" type="submit">Создать на сервере</button></form></div></section>
+{% endif %}
+<section class="card content-card"><h2>Экспорт JSON</h2><p class="subline">Рецепты, моменты, траты, покупки и хотелки в переносимом формате.</p><a class="btn secondary" href="/export/data.json">Скачать JSON</a></section>
+</div>
+<section class="card content-card">
+    <h2>Импорт JSON</h2>
+    <form method="post" action="/import-data" enctype="multipart/form-data" class="form compact-form">
+        <input type="file" name="data_file" accept="application/json,.json">
+        <textarea name="data_text" rows="5" placeholder="или вставь JSON сюда"></textarea>
+        <button class="btn" type="submit">Импортировать</button>
+    </form>
+</section>
+{% if can_download_backup %}
+<section class="card"><h2>Последние архивы</h2><div class="list">{% for b in backups %}<div class="list-row"><div><b>{{ b.name }}</b><div class="subline">{{ (b.stat().st_size / 1024 / 1024)|round(2) }} МБ</div></div><a class="btn secondary" href="/backup/files/{{ b.name }}">Скачать</a></div>{% else %}<div class="empty small">Пока нет</div>{% endfor %}</div></section>
+{% endif %}
+{% endblock %}

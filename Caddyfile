@@ -1,0 +1,20 @@
+{$CADDY_SITE_ADDRESS:localhost} {
+    encode zstd gzip
+    request_body {
+        max_size 16MB
+    }
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "0"
+        Referrer-Policy "same-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=15552000"
+    }
+    reverse_proxy web:8000 {
+        health_uri /health
+        health_interval 30s
+        health_timeout 5s
+    }
+}

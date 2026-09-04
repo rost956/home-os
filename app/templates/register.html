@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Регистрация{% endblock %}
+{% block content %}
+<section class="auth-card">
+    <h1>Регистрация</h1>
+    <form method="post" action="/register" class="form">
+        <label>Ник
+            <input name="username" required autocomplete="username" minlength="3" maxlength="50" pattern="[\w.-]+" placeholder="nickname" value="{{ username or '' }}">
+        </label>
+        <label>Пароль
+            <input name="password" type="password" required autocomplete="new-password" minlength="8" maxlength="256">
+        </label>
+        <label>Повторите пароль
+            <input name="password_confirm" type="password" required autocomplete="new-password" minlength="8" maxlength="256">
+        </label>
+        <button class="btn" type="submit">Создать аккаунт</button>
+    </form>
+    <p class="muted">Уже есть аккаунт? <a href="/login">Войти</a></p>
+</section>
+{% endblock %}

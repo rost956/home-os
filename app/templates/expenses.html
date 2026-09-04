@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Траты{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>Траты</h1>
+    <div class="actions nowrap">
+        <a class="icon-btn filled" href="/expenses/analytics" title="Аналитика"><svg class="icon"><use href="#i-analytics"></use></svg></a>
+        <a class="icon-btn" href="/expenses/planning" title="Лимиты"><svg class="icon"><use href="#i-limits"></use></svg></a>
+        <a class="icon-btn" href="/expenses/splits" title="Долги"><svg class="icon"><use href="#i-splits"></use></svg></a>
+        <a class="icon-btn" href="/expenses/export.xlsx" title="Скачать Excel"><svg class="icon"><use href="#i-download"></use></svg></a>
+    </div>
+</div>
+
+<form method="post" action="/expenses/lists" class="card form inline-form compact-form">
+    <input name="title" required placeholder="Новый список">
+    <button class="btn" type="submit" title="Создать список" aria-label="Создать список"><svg class="icon"><use href="#i-plus"></use></svg></button>
+</form>
+
+<section class="recent-expenses-section">
+    <div class="section-title-row recent-expenses-head">
+        <h2>Последние траты</h2>
+        <span class="subline">свежие операции</span>
+    </div>
+    <div class="recent-expenses-panel">
+    {% for row in recent_expenses %}
+        <a class="recent-expense-row" href="/expenses/categories/{{ row.category.id }}">
+            <div class="recent-expense-main">
+                <b>{{ row.item.title }}</b>
+                <span>{{ row.category.name }} · {{ row.expense_list.title }}</span>
+            </div>
+            <div class="recent-expense-side">
+                <strong>{{ row.item.amount }} ₽</strong>
+                <time>{{ row.item.created_at|msk_datetime('%d.%m') }}</time>
+            </div>
+        </a>
+    {% else %}
+        <div class="empty small">Пока нет трат</div>
+    {% endfor %}
+    </div>
+</section>
+
+<div class="section-title">Мои</div>
+<div class="grid compact">
+{% for list in owned %}
+    <article class="card hover-card mini-card">
+        <div class="card-head">
+            <h2>{{ list.title }}</h2>
+            <span class="pill">{{ list.total }} ₽</span>
+        </div>
+        <div class="subline">{{ list.categories|length }} кат. · {{ list.shares|length }} доступ.</div>
+        <a class="stretch-link" href="/expenses/lists/{{ list.id }}" aria-label="Открыть {{ list.title }}"></a>
+    </article>
+{% else %}
+    <div class="empty">Пусто</div>
+{% endfor %}
+</div>
+
+<div class="section-title">Мне открыли</div>
+<div class="grid compact">
+{% for list in shared %}
+    <article class="card hover-card mini-card">
+        <div class="card-head">
+            <h2>{{ list.title }}</h2>
+            <span class="pill">{{ list.total }} ₽</span>
+        </div>
+        <div class="subline">@{{ list.owner.username }}</div>
+        <a class="stretch-link" href="/expenses/lists/{{ list.id }}" aria-label="Открыть {{ list.title }}"></a>
+    </article>
+{% else %}
+    <div class="empty">Пусто</div>
+{% endfor %}
+</div>
+{% endblock %}

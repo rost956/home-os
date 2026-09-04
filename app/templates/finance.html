@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Доходы и траты{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Доходы и траты</h1><div class="subline">{{ period_label }}</div></div><a class="icon-btn" href="/income" title="Доходы"><svg class="icon"><use href="#i-income"></use></svg></a></div>
+
+<form method="get" action="/finance" class="card analytics-filter"><label>С<input type="date" name="from_date" value="{{ from_date }}"></label><label>По<input type="date" name="to_date" value="{{ to_date }}"></label><button class="btn" type="submit">Показать</button></form>
+
+<section class="finance-summary-grid">
+    <div class="card finance-metric income"><span>Доходы</span><b>+{{ income_total|fmt_decimal }} ₽</b></div>
+    <div class="card finance-metric expense"><span>Траты</span><b>-{{ expense_total|fmt_decimal }} ₽</b></div>
+    <div class="card finance-metric balance {% if balance < 0 %}negative{% endif %}"><span>Баланс</span><b>{{ '+' if balance >= 0 else '' }}{{ balance|fmt_decimal }} ₽</b></div>
+    <div class="card finance-metric"><span>Накопления</span><b>{% if savings_rate is not none %}{{ savings_rate|fmt_decimal }}%{% else %}—{% endif %}</b></div>
+</section>
+
+<section class="card cashflow-card">
+    <div class="card-head cashflow-head">
+        <div><h2>Денежный поток по дням</h2><div class="subline">Фактические поступления и траты{% if chart_has_forecast %}, затем прогноз расходов{% endif %}</div></div>
+        <div class="cashflow-legend"><span class="income"><i></i>Доход</span><span class="expense"><i></i>Траты</span>{% if chart_has_forecast %}<span class="forecast"><i></i>Прогноз</span>{% endif %}</div>
+    </div>
+    <div class="cashflow-chart" aria-label="График доходов и трат по дням" data-scroll-latest>
+    {% for day in cashflow_chart %}
+        <div class="cashflow-day {% if day.is_forecast %}forecast-day{% endif %} {% if day.has_recurring %}recurring-forecast{% endif %}" title="{{ day.label }} · доход {{ day.income|fmt_decimal }} ₽ · траты {{ day.expense|fmt_decimal }} ₽{% if day.forecast_expense %} · прогноз {{ day.forecast_expense|fmt_decimal }} ₽{% endif %}">
+            <div class="cashflow-bars">
+                <div class="cashflow-bar income" style="height: {{ day.income_height }}%"></div>
+                <div class="cashflow-bar expense" style="height: {{ day.expense_height }}%"></div>
+                <div class="cashflow-bar forecast" style="height: {{ day.forecast_height }}%"></div>
+            </div>
+            <div class="cashflow-label"><span>{{ day.label }}</span><b class="{% if day.net < 0 %}negative-text{% else %}positive-text{% endif %}">{{ '+' if day.net >= 0 else '' }}{{ day.net|fmt_decimal }}</b></div>
+        </div>
+    {% endfor %}
+    </div>
+</section>
+
+<section class="card finance-forecast-card">
+    <div class="card-head"><div><h2>Прогноз до конца периода</h2><div class="subline">Модель: {{ forecast_info.method }}, история за {{ forecast_info.days }} дн., точность {{ forecast_info.confidence }}</div></div><span class="pill">{{ forecast_info.daily_rate|fmt_decimal }} ₽ / день</span></div>
+    <div class="finance-forecast-values"><div><span>Ожидаемые траты</span><b>{{ forecast_info.forecast|fmt_decimal }} ₽</b></div><div><span>Доходы периода</span><b>{{ period_income|fmt_decimal }} ₽</b></div><div><span>Остаток</span><b class="{% if forecast_balance < 0 %}negative-text{% else %}positive-text{% endif %}">{{ '+' if forecast_balance >= 0 else '' }}{{ forecast_balance|fmt_decimal }} ₽</b></div></div>
+</section>
+{% endblock %}

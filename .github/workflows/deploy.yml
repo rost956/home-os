@@ -1,0 +1,50 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: [self-hosted, linux, ARM64, home-server, production]
+    timeout-minutes: 30
+    env:
+      DEPLOY_TARGET: ${{ vars.PRODUCTION_PATH || '/opt/recipe_budget_service' }}
+    steps:
+      - name: Check out the verified revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Deploy with backup and rollback
+        id: deploy
+        run: |
+          STARTED_AT="$(date +%s)"
+          bash scripts/deploy_production.sh \
+            --source "$GITHUB_WORKSPACE" \
+            --target "$DEPLOY_TARGET" \
+            --revision "${{ github.event.workflow_run.head_sha }}"
+          FINISHED_AT="$(date +%s)"
+          echo "duration=$((FINISHED_AT - STARTED_AT))" >> "$GITHUB_OUTPUT"
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "## Production deployment"
+            echo "- Revision: \`${{ github.event.workflow_run.head_sha }}\`"
+            echo "- Job status: \`${{ job.status }}\`"
+            echo "- Duration: \`${{ steps.deploy.outputs.duration || 'failed before completion' }}\` seconds"
+            echo "- Target: \`$DEPLOY_TARGET\`"
+          } >> "$GITHUB_STEP_SUMMARY"

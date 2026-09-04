@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<section class="auth-card">
+    <h1>Вход</h1>
+    <form method="post" action="/login" class="form">
+        <label>Ник
+            <input name="username" required autocomplete="username" placeholder="nickname" maxlength="50">
+        </label>
+        <label>Пароль
+            <input name="password" type="password" required autocomplete="current-password" maxlength="256">
+        </label>
+        <button class="btn" type="submit">Войти</button>
+    </form>
+    {% if registration_enabled %}<p class="muted">Нет аккаунта? <a href="/register">Зарегистрироваться</a></p>{% endif %}
+</section>
+{% endblock %}

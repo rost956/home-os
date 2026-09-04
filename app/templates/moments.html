@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Моменты{% endblock %}
+{% block content %}
+<div class="page-head compact-head moments-head">
+    <div><h1>Моменты</h1><div class="subline">{{ moment_count }} {{ 'запись' if moment_count == 1 else 'записей' }} за выбранный месяц</div></div>
+    <a class="icon-btn" href="/today" title="Сегодня" aria-label="Сегодня"><svg class="icon"><use href="#i-home"></use></svg></a>
+</div>
+
+<section class="card moments-tools">
+    <form method="get" action="/moments" class="moments-month-form">
+        <label>Месяц<input type="month" name="month" value="{{ month }}"></label>
+        <button class="icon-btn" type="submit" title="Показать" aria-label="Показать"><svg class="icon"><use href="#i-search"></use></svg></button>
+    </form>
+    <a class="btn secondary" href="/moments?month={{ today.strftime('%Y-%m') }}">Текущий месяц</a>
+</section>
+
+<section class="card moments-calendar" aria-label="Календарь моментов">
+    <div class="card-head"><div><h2>{{ month_label }}</h2><div class="subline">Быстрый обзор событий по дням</div></div></div>
+    <div class="moments-calendar-weekdays">{% for weekday in calendar_weekdays %}<span>{{ weekday }}</span>{% endfor %}</div>
+    <div class="moments-calendar-grid">
+    {% for day in calendar_days %}
+        {% if day["items"] %}
+        <a class="moment-calendar-day has-moments {% if not day.is_current_month %}outside-month{% endif %} {% if day.is_today %}today{% endif %}" href="#moment-day-{{ day.day.isoformat() }}" title="{{ day.day.strftime('%d.%m.%Y') }}">
+        {% else %}
+        <div class="moment-calendar-day {% if not day.is_current_month %}outside-month{% endif %} {% if day.is_today %}today{% endif %}">
+        {% endif %}
+            <span class="moment-calendar-date">{{ day.number }}</span>
+            {% if day["items"] %}
+            <div class="moment-calendar-previews">
+                {% for moment in day["items"][:2] %}
+                <span class="moment-calendar-preview {% if moment.photo_path %}with-photo{% endif %}">
+                    {% if moment.photo_path %}<img src="{{ moment.photo_path }}" alt="" loading="lazy">{% endif %}
+                    <b>{{ moment.title }}</b>
+                </span>
+                {% endfor %}
+                {% if day["items"]|length > 2 %}<span class="moment-calendar-more">+{{ day["items"]|length - 2 }}</span>{% endif %}
+            </div>
+            {% endif %}
+        {% if day["items"] %}</a>{% else %}</div>{% endif %}
+    {% endfor %}
+    </div>
+</section>
+
+<details class="card action-panel moment-create-panel" open>
+    <summary><svg class="icon"><use href="#i-plus"></use></svg> Записать момент</summary>
+    <form method="post" action="/moments" enctype="multipart/form-data" class="form moment-form">
+        <div class="form-row two-cols">
+            <label>Заголовок<input name="title" required maxlength="180" placeholder="Например, прогулка у реки"></label>
+            <label>Дата<input name="happened_on" type="date" value="{{ today.isoformat() }}" required></label>
+        </div>
+        <label>Что происходило<textarea name="description" rows="4" placeholder="Где были, что делали, что запомнилось"></textarea></label>
+        <div class="moment-form-footer">
+            <label class="photo-picker">Фотография<input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label>
+            <button class="btn" type="submit"><svg class="icon"><use href="#i-plus"></use></svg> Сохранить</button>
+        </div>
+    </form>
+</details>
+
+<section class="moments-stream" aria-label="Лента моментов">
+{% for group in day_groups %}
+    <div class="moment-day-group" id="moment-day-{{ group.day.isoformat() }}">
+        <div class="moment-day-label"><span>{{ group.label }}</span><i></i></div>
+        <div class="moment-day-items">
+        {% for moment in group["items"] %}
+            <article class="card moment-card {% if not moment.photo_path %}no-photo{% endif %}">
+                {% if moment.photo_path %}<a class="moment-photo" href="{{ moment.photo_path }}" target="_blank" rel="noopener"><img src="{{ moment.photo_path }}" alt="{{ moment.title }}" loading="lazy"></a>{% endif %}
+                <div class="moment-card-body">
+                    <div class="moment-card-head"><h2>{{ moment.title }}</h2><span class="subline">{{ moment.created_at|msk_datetime('%H:%M') }}</span></div>
+                    {% if moment.description %}<p class="moment-description">{{ moment.description|linkify }}</p>{% endif %}
+                    <details class="action-panel moment-edit-panel">
+                        <summary>Редактировать</summary>
+                        <form method="post" action="/moments/{{ moment.id }}/update" enctype="multipart/form-data" class="form compact-form moment-form">
+                            <div class="form-row two-cols">
+                                <label>Заголовок<input name="title" value="{{ moment.title }}" required maxlength="180"></label>
+                                <label>Дата<input name="happened_on" type="date" value="{{ moment.happened_on.isoformat() }}" required></label>
+                            </div>
+                            <label>Описание<textarea name="description" rows="4">{{ moment.description or '' }}</textarea></label>
+                            <div class="moment-form-footer">
+                                <label class="photo-picker">Другая фотография<input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label>
+                                {% if moment.photo_path %}<label class="check-row compact-check"><input type="checkbox" name="remove_photo" value="1"><span>Убрать фото</span></label>{% endif %}
+                                <button class="btn" type="submit">Сохранить</button>
+                            </div>
+                        </form>
+                        <form method="post" action="/moments/{{ moment.id }}/delete" onsubmit="return confirm('Удалить этот момент?')">
+                            <button class="btn danger full" type="submit">Удалить</button>
+                        </form>
+                    </details>
+                </div>
+            </article>
+        {% endfor %}
+        </div>
+    </div>
+{% else %}
+    <div class="empty moments-empty">В этом месяце пока нет записей.</div>
+{% endfor %}
+</section>
+{% endblock %}

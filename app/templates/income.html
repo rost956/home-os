@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Доходы{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div><h1>Доходы</h1><div class="subline">Финансовый период: {{ period_label }}</div></div>
+    <div class="actions"><a class="icon-btn filled" href="/finance" title="Доходы и траты"><svg class="icon"><use href="#i-finance"></use></svg></a></div>
+</div>
+
+<section class="card income-total-card">
+    <span>Поступило за период</span>
+    <b>{{ period_total|fmt_decimal }} ₽</b>
+</section>
+
+<details class="card action-panel" open>
+    <summary><svg class="icon"><use href="#i-plus"></use></svg> Добавить доход</summary>
+    <form method="post" action="/income" class="income-form">
+        <input name="title" required placeholder="Зарплата, подработка, возврат">
+        <input name="amount" required inputmode="decimal" placeholder="Сумма">
+        <input name="income_date" type="date" value="{{ today.isoformat() }}">
+        <input name="source" placeholder="Источник">
+        <input name="note" placeholder="Заметка">
+        <button class="btn" type="submit">Добавить</button>
+    </form>
+</details>
+
+<section class="card income-list-card">
+    <div class="card-head"><h2>Последние поступления</h2><a class="chip" href="/finance">Отчёт</a></div>
+    <div class="list">
+    {% for item in items %}
+        <article class="income-row">
+            <div class="income-row-main"><b>{{ item.title }}</b><span>{{ item.received_at|msk_datetime('%d.%m.%Y') }}{% if item.source %} · {{ item.source }}{% endif %}{% if item.note %} · {{ item.note }}{% endif %}</span></div>
+            <strong>+{{ item.amount|fmt_decimal }} ₽</strong>
+            <details class="inline-editor"><summary class="icon-btn" title="Редактировать"><svg class="icon"><use href="#i-edit"></use></svg></summary>
+                <form method="post" action="/income/{{ item.id }}/update" class="form compact-form income-edit-form">
+                    <input name="title" value="{{ item.title }}" required><input name="amount" value="{{ item.amount|fmt_decimal }}" required inputmode="decimal"><input name="income_date" type="date" value="{{ item.received_at|msk_datetime('%Y-%m-%d') }}" required><input name="source" value="{{ item.source or '' }}"><input name="note" value="{{ item.note or '' }}"><button class="btn" type="submit">Сохранить</button>
+                </form>
+                <form method="post" action="/income/{{ item.id }}/delete" onsubmit="return confirm('Удалить доход?')"><button class="btn danger full" type="submit">Удалить</button></form>
+            </details>
+        </article>
+    {% else %}<div class="empty small">Доходов пока нет</div>{% endfor %}
+    </div>
+</section>
+{% endblock %}

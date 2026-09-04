@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.title }}{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div>
+        <h1>{{ recipe.title }}</h1>
+        <div class="subline">@{{ recipe.owner.username }} · {{ recipe.updated_at|msk_datetime('%d.%m.%Y %H:%M') }}</div>
+    </div>
+    <div class="actions nowrap">
+        <a class="icon-btn" href="/recipes" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+        {% if recipe.owner_id == user.id %}<a class="icon-btn filled" href="/recipes/{{ recipe.id }}/edit" title="Редактировать" aria-label="Редактировать"><svg class="icon"><use href="#i-edit"></use></svg></a>{% endif %}
+    </div>
+</div>
+
+{% if recipe.image_path %}
+<section class="recipe-photo-hero">
+    <img src="{{ recipe.image_path }}" alt="{{ recipe.title }}">
+</section>
+{% endif %}
+
+<section class="card slim recipe-toolbar">
+    <div class="meta">
+        {% if recipe.cook_time_minutes is not none %}<span><svg class="icon"><use href="#i-clock"></use></svg>{{ recipe.cook_time_minutes }} мин</span>{% endif %}
+        {% if recipe.cost is not none %}<span>{{ recipe.cost|fmt_decimal }} ₽</span>{% endif %}
+        {% if recipe.servings is not none %}<span><svg class="icon"><use href="#i-servings"></use></svg>{{ recipe.servings|fmt_decimal }}</span>{% endif %}
+        {% if recipe.cost_per_serving is not none %}<span>{{ recipe.cost_per_serving }} ₽/порц.</span>{% endif %}
+        {% if recipe.tags %}<span># {{ recipe.tags }}</span>{% endif %}
+        {% set recipe_source_url = recipe.source_url|http_url %}{% if recipe_source_url %}<a class="chip" href="{{ recipe_source_url }}" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-external"></use></svg> источник</a>{% endif %}
+    </div>
+    <button class="btn" type="button" id="startCooking" {% if not steps %}disabled title="Сначала добавьте этапы"{% endif %}><svg class="icon"><use href="#i-play"></use></svg> Начать</button>
+</section>
+
+<section class="card slim shopping-from-recipe">
+    <form method="post" action="/recipes/{{ recipe.id }}/shopping" class="inline-form compact-form">
+        <input type="hidden" name="servings" value="{{ target_servings|fmt_decimal if target_servings is not none else '' }}">
+        <button class="btn secondary" type="submit"><svg class="icon"><use href="#i-shopping"></use></svg> В список покупок</button>
+    </form>
+</section>
+
+{% if price_estimate.rows %}
+<section class="card slim recipe-cost-card">
+    <div class="card-head">
+        <div>
+            <h2>Оценка по ценам из покупок</h2>
+            <div class="subline">Найдено цен: {{ price_estimate.matched }} из {{ price_estimate.rows|length }}</div>
+        </div>
+        <strong>{{ price_estimate.total|fmt_decimal }} ₽</strong>
+    </div>
+    <div class="price-match-list">
+        {% for row in price_estimate.rows[:6] %}
+        <div class="price-match-row">
+            <span>{{ row.title }}{% if row.amount %} · {{ row.amount }}{% endif %}</span>
+            {% if row.price %}<b>{{ row.price.price|fmt_decimal }} ₽</b>{% else %}<small>нет цены</small>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% if recipe.owner_id == user.id and price_estimate.total > 0 %}
+    <form method="post" action="/recipes/{{ recipe.id }}/cost-from-prices" class="card-actions">
+        <input type="hidden" name="servings" value="{{ target_servings|fmt_decimal if target_servings is not none else '' }}">
+        <button class="btn secondary" type="submit">Обновить стоимость рецепта</button>
+    </form>
+    {% endif %}
+</section>
+{% endif %}
+
+<section class="card slim servings-card">
+    <form method="get" action="/recipes/{{ recipe.id }}" class="servings-form">
+        <label>Порций нужно
+            <input name="servings" inputmode="decimal" value="{{ target_servings|fmt_decimal if target_servings is not none else '' }}" placeholder="2,5" {% if base_servings is none %}disabled{% endif %}>
+        </label>
+        <button class="btn secondary" type="submit" {% if base_servings is none %}disabled{% endif %}>Пересчитать</button>
+        {% if base_servings is not none %}
+        <div class="subline servings-note">Оригинал: {{ base_servings|fmt_decimal }} порц.</div>
+        {% else %}
+        <div class="subline servings-note">В рецепте не указано исходное число порций</div>
+        {% endif %}
+    </form>
+</section>
+
+<section class="card cook-mode {% if not timer_status.exists %}hidden{% endif %}" id="cookMode">
+    <div class="cook-progress"><div id="cookProgressBar"></div></div>
+
+    <div class="cook-timer-panel" id="cookTimerPanel">
+        <div>
+            <div class="subline">Таймер готовки</div>
+            <div class="cook-timer-value" id="cookTimerValue">{{ timer_status.minutes }} мин</div>
+            <div class="subline" id="cookTimerState">
+                {% if timer_status.is_running %}идёт с {{ timer_status.started_at }}{% elif timer_status.exists and timer_status.seconds > 0 %}остановлен{% else %}не запущен{% endif %}
+            </div>
+        </div>
+        <div class="cook-timer-actions">
+            <button class="btn secondary" type="button" id="timerStart"><svg class="icon"><use href="#i-play"></use></svg> Таймер</button>
+            <button class="btn secondary" type="button" id="timerStop"><svg class="icon"><use href="#i-stop"></use></svg> Стоп</button>
+            <button class="icon-btn" type="button" id="timerReset" title="Сбросить таймер" aria-label="Сбросить таймер"><svg class="icon"><use href="#i-reset"></use></svg></button>
+        </div>
+    </div>
+
+    <div class="timer-record-box {% if timer_status.is_running or timer_status.seconds <= 0 %}hidden{% endif %}" id="timerRecordBox">
+        <div>Записать фактическое время готовки: <b id="timerRecordMinutes">{{ timer_status.minutes }}</b> мин?</div>
+        {% if recipe.owner_id == user.id %}
+        <button class="btn" type="button" id="timerRecord">Записать в рецепт</button>
+        {% else %}
+        <div class="subline">Записать время можно только в свой рецепт.</div>
+        {% endif %}
+    </div>
+
+    <div class="cook-card">
+        <div class="subline" id="cookCounter"></div>
+        <h2 id="cookTitle"></h2>
+        <pre id="cookText"></pre>
+        <div class="pill hidden" id="cookMinutes"></div>
+    </div>
+    <div class="cook-actions">
+        <button class="icon-btn" type="button" id="cookPrev" title="Предыдущий этап" aria-label="Предыдущий этап"><svg class="icon"><use href="#i-arrow-left"></use></svg></button>
+        <button class="btn" type="button" id="cookNext">Дальше</button>
+    </div>
+</section>
+
+<div class="grid two">
+    <section class="card content-card">
+        <div class="section-title-row">
+            <h2>Ингредиенты</h2>
+            {% if scale_ratio is not none and scale_ratio != 1 %}<span class="pill">× {{ scale_ratio|fmt_decimal }}</span>{% endif %}
+        </div>
+        <div class="ingredients-list">
+            {% for item in scaled_ingredients %}
+            <div class="ingredient-line{% if item.changed %} changed{% endif %}">
+                <span>{{ item.scaled }}</span>
+                {% if item.changed %}<small>{{ item.original }}</small>{% endif %}
+            </div>
+            {% else %}
+            <div class="empty small">Нет ингредиентов</div>
+            {% endfor %}
+        </div>
+    </section>
+    <section class="card content-card">
+        <h2>Этапы</h2>
+        <div class="steps-view">
+        {% for step in steps %}
+            <article class="step-view-row">
+                <div class="step-number">{{ loop.index }}</div>
+                <div>
+                    <pre>{{ step.text }}</pre>
+                    {% if step.minutes is not none %}<span class="subline meta-with-icon"><svg class="icon"><use href="#i-clock"></use></svg>{{ step.minutes }} мин</span>{% endif %}
+                </div>
+            </article>
+        {% else %}
+            <div class="empty small">Нет этапов</div>
+        {% endfor %}
+        </div>
+    </section>
+</div>
+
+{% if recipe.owner_id == user.id %}
+<form method="post" action="/recipes/{{ recipe.id }}/delete" onsubmit="return confirm('Удалить рецепт?')">
+    <button class="btn danger" type="submit"><svg class="icon"><use href="#i-trash"></use></svg> Удалить</button>
+</form>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const recipeId = {{ recipe.id }};
+    const canRecord = {{ 'true' if recipe.owner_id == user.id else 'false' }};
+    const steps = {{ cook_steps|tojson }};
+    let timer = {{ timer_status|tojson }};
+
+    const startBtn = document.getElementById('startCooking');
+    const box = document.getElementById('cookMode');
+    const title = document.getElementById('cookTitle');
+    const text = document.getElementById('cookText');
+    const counter = document.getElementById('cookCounter');
+    const minutes = document.getElementById('cookMinutes');
+    const prev = document.getElementById('cookPrev');
+    const next = document.getElementById('cookNext');
+    const bar = document.getElementById('cookProgressBar');
+    const timerValue = document.getElementById('cookTimerValue');
+    const timerState = document.getElementById('cookTimerState');
+    const timerStart = document.getElementById('timerStart');
+    const timerStop = document.getElementById('timerStop');
+    const timerReset = document.getElementById('timerReset');
+    const timerRecord = document.getElementById('timerRecord');
+    const timerRecordBox = document.getElementById('timerRecordBox');
+    const timerRecordMinutes = document.getElementById('timerRecordMinutes');
+    let index = 0;
+    let timerPoll = null;
+
+    async function postTimer(action) {
+        const response = await fetch(`/recipes/${recipeId}/timer/${action}`, {
+            method: 'POST',
+            headers: {'Accept': 'application/json'}
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Ошибка таймера');
+        }
+        return response.json();
+    }
+
+    async function fetchTimer() {
+        const response = await fetch(`/recipes/${recipeId}/timer/status`, {headers: {'Accept': 'application/json'}});
+        if (!response.ok) return;
+        timer = await response.json();
+        renderTimer();
+    }
+
+    function renderTimer() {
+        if (!timerValue) return;
+        const mins = Number(timer.minutes || 0);
+        timerValue.textContent = `${mins} мин`;
+        timerRecordMinutes.textContent = String(mins);
+        if (timer.is_running) {
+            timerState.textContent = timer.started_at ? `идёт с ${timer.started_at}` : 'идёт';
+        } else if (Number(timer.seconds || 0) > 0) {
+            timerState.textContent = timer.stopped_at ? `остановлен ${timer.stopped_at}` : 'остановлен';
+        } else {
+            timerState.textContent = 'не запущен';
+        }
+        timerStart.disabled = !!timer.is_running;
+        timerStop.disabled = !timer.is_running;
+        timerRecordBox.classList.toggle('hidden', !!timer.is_running || Number(timer.seconds || 0) <= 0 || !canRecord);
+        if (timerPoll) clearInterval(timerPoll);
+        timerPoll = timer.is_running ? setInterval(fetchTimer, 15000) : null;
+    }
+
+    function renderStep() {
+        const step = steps[index];
+        title.textContent = step.title;
+        text.textContent = step.text;
+        counter.textContent = `${index + 1} из ${steps.length}`;
+        minutes.textContent = step.minutes ? `${step.minutes} мин` : '';
+        minutes.classList.toggle('hidden', !step.minutes);
+        prev.disabled = index === 0;
+        next.textContent = index === steps.length - 1 ? 'Готово' : 'Дальше';
+        bar.style.width = `${((index + 1) / steps.length) * 100}%`;
+    }
+
+    if (startBtn && box && steps.length) {
+        startBtn.addEventListener('click', () => {
+            box.classList.remove('hidden');
+            index = 0;
+            renderStep();
+            renderTimer();
+            box.scrollIntoView({behavior: 'smooth', block: 'start'});
+        });
+        prev.addEventListener('click', () => {
+            if (index > 0) index -= 1;
+            renderStep();
+        });
+        next.addEventListener('click', () => {
+            if (index < steps.length - 1) {
+                index += 1;
+                renderStep();
+            } else {
+                box.classList.add('hidden');
+            }
+        });
+        if (!box.classList.contains('hidden')) {
+            renderStep();
+            renderTimer();
+        }
+    }
+
+    timerStart?.addEventListener('click', async () => {
+        try {
+            timer = await postTimer('start');
+            box.classList.remove('hidden');
+            renderStep();
+            renderTimer();
+        } catch (error) {
+            alert('Не удалось запустить таймер');
+        }
+    });
+
+    timerStop?.addEventListener('click', async () => {
+        try {
+            timer = await postTimer('stop');
+            renderTimer();
+        } catch (error) {
+            alert('Не удалось остановить таймер');
+        }
+    });
+
+    timerReset?.addEventListener('click', async () => {
+        if (!confirm('Сбросить таймер готовки?')) return;
+        try {
+            timer = await postTimer('reset');
+            renderTimer();
+        } catch (error) {
+            alert('Не удалось сбросить таймер');
+        }
+    });
+
+    timerRecord?.addEventListener('click', async () => {
+        try {
+            const result = await postTimer('record');
+            if (result && result.minutes) {
+                alert(`Записано: ${result.minutes} мин`);
+                window.location.reload();
+            }
+        } catch (error) {
+            alert('Не удалось записать время');
+        }
+    });
+})();
+</script>
+{% endblock %}

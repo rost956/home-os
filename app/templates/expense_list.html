@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}{{ expense_list.title }}{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div>
+        <h1>{{ expense_list.title }}</h1>
+        <div class="subline">@{{ expense_list.owner.username }} · <b>{{ expense_list.total }} ₽</b></div>
+    </div>
+    <a class="icon-btn" href="/expenses" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+<div class="action-grid">
+    {% if expense_list.owner_id == user.id %}
+    <details class="card action-panel">
+        <summary><span class="summary-label"><svg class="icon"><use href="#i-link"></use></svg> Доступ</span></summary>
+        <form method="post" action="/expenses/lists/{{ expense_list.id }}/share" class="inline-form compact-form">
+            <input name="username" placeholder="nickname или @nickname" required>
+            <select name="can_edit"><option value="1">Можно менять</option><option value="0">Только просмотр</option></select>
+            <button class="btn" type="submit" title="Открыть доступ" aria-label="Открыть доступ"><svg class="icon"><use href="#i-plus"></use></svg></button>
+        </form>
+        {% if expense_list.shares %}
+        <div class="share-list">
+            {% for share in expense_list.shares %}
+            <div class="share-chip">
+                <span>@{{ share.user.username }} · {{ 'редактор' if share.can_edit else 'просмотр' }}</span>
+                <form method="post" action="/expenses/lists/{{ expense_list.id }}/share/{{ share.id }}/delete" onsubmit="return confirm('Закрыть доступ для @{{ share.user.username }}?')">
+                    <button type="submit" title="Закрыть доступ" aria-label="Закрыть доступ"><svg class="icon"><use href="#i-x"></use></svg></button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </details>
+    {% endif %}
+
+    <details class="card action-panel" open>
+        <summary><span class="summary-label"><svg class="icon"><use href="#i-plus"></use></svg> Категория</span></summary>
+        <form method="post" action="/expenses/lists/{{ expense_list.id }}/categories" class="inline-form compact-form">
+            <input name="name" required placeholder="Еда, машина, дом" list="expenseCategoryOptions">
+            <datalist id="expenseCategoryOptions">
+                {% for option in category_options %}
+                <option value="{{ option }}"></option>
+                {% endfor %}
+            </datalist>
+            <button class="btn" type="submit" title="Добавить категорию" aria-label="Добавить категорию"><svg class="icon"><use href="#i-plus"></use></svg></button>
+        </form>
+    </details>
+
+    {% if expense_list.categories %}
+    <details class="card action-panel expense-add-panel" open>
+        <summary><span class="summary-label"><svg class="icon"><use href="#i-plus"></use></svg> Трата</span></summary>
+        <form method="post" action="/expenses/lists/{{ expense_list.id }}/items" class="expense-add-form with-date">
+            <select name="category_id" required aria-label="Категория">
+                {% for category in expense_list.categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}
+            </select>
+            <input name="title" required placeholder="Название" aria-label="Название траты">
+            <input name="amount" required inputmode="decimal" placeholder="Сумма" aria-label="Сумма">
+            <input name="expense_date" type="date" value="{{ today.isoformat() }}" aria-label="Дата траты">
+            <label class="check-row compact-check" title="Не учитывать трату в аналитике"><input type="checkbox" name="exclude_from_analytics" value="1"><span>Вне аналитики</span></label>
+            <label class="check-row compact-check" title="Трата останется в аналитике, но не повлияет на среднедневной расход и прогноз"><input type="checkbox" name="exclude_from_forecast" value="1"><span>Вне прогноза</span></label>
+            <button class="btn" type="submit" title="Добавить трату" aria-label="Добавить трату"><svg class="icon"><use href="#i-plus"></use></svg></button>
+        </form>
+    </details>
+    {% endif %}
+</div>
+
+<div class="grid">
+{% for row in category_rows %}
+    {% set category = row.category %}
+    <section class="card category-card">
+        <div class="card-head">
+            <div>
+                <h2><a class="category-title-link" href="/expenses/categories/{{ category.id }}" title="Открыть все траты категории">{{ category.name }}</a></h2>
+                <div class="category-meta-line">
+                    <span class="pill">{{ category.total }} ₽</span>
+                    <span class="subline">{{ row.item_count }} поз.</span>
+                </div>
+            </div>
+            <form method="post" action="/expenses/categories/{{ category.id }}/delete" onsubmit="return confirm('Удалить категорию вместе со всеми тратами?')">
+                <button class="mini-danger" type="submit" title="Удалить категорию" aria-label="Удалить категорию"><svg class="icon"><use href="#i-x"></use></svg></button>
+            </form>
+        </div>
+        <form method="post" action="/expenses/categories/{{ category.id }}/rename" class="rename-form">
+            <input name="name" value="{{ category.name }}" required>
+            <button class="icon-btn" type="submit" title="Переименовать" aria-label="Переименовать"><svg class="icon"><use href="#i-check"></use></svg></button>
+        </form>
+        <div class="list expense-items-list">
+        {% for item in row.recent_items %}
+            <div class="expense-item-card">
+                <div class="list-row expense-list-row">
+                    <div class="expense-item-main">
+                        <b>{{ item.title }}</b>
+                        <span class="subline">{{ item.created_at|msk_datetime('%d.%m.%Y') }}{% if not item.include_in_analytics %} · не в аналитике{% endif %}{% if not item.include_in_forecast %} · не в прогнозе{% endif %}</span>
+                    </div>
+                    <div class="row-actions expense-row-actions">
+                        <strong>{{ item.amount }} ₽</strong>
+                        <button class="icon-btn mini-edit" type="button" data-expense-edit-toggle title="Редактировать" aria-label="Редактировать"><svg class="icon"><use href="#i-edit"></use></svg></button>
+                        <form method="post" action="/expenses/items/{{ item.id }}/delete">
+                            <input type="hidden" name="return_to" value="/expenses/lists/{{ expense_list.id }}">
+                            <button class="mini-danger" type="submit" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button>
+                        </form>
+                    </div>
+                </div>
+                <form method="post" action="/expenses/items/{{ item.id }}/update" class="expense-edit-form" hidden>
+                    <input type="hidden" name="return_to" value="/expenses/lists/{{ expense_list.id }}">
+                    <label>Категория
+                        <select name="category_id" required>
+                            {% for option in expense_list.categories %}
+                            <option value="{{ option.id }}" {% if option.id == category.id %}selected{% endif %}>{{ option.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>Дата
+                        <input name="expense_date" type="date" value="{{ item.created_at|msk_datetime('%Y-%m-%d') }}" required>
+                    </label>
+                    <label>Название
+                        <input name="title" value="{{ item.title }}" required>
+                    </label>
+                    <label>Сумма
+                        <input name="amount" inputmode="decimal" value="{{ item.amount }}" required>
+                    </label>
+                    <label class="check-row compact-check"><input type="checkbox" name="exclude_from_analytics" value="1" {% if not item.include_in_analytics %}checked{% endif %}><span>Не учитывать в аналитике</span></label>
+                    <label class="check-row compact-check" title="Трата останется в аналитике, но не повлияет на среднедневной расход и прогноз"><input type="checkbox" name="exclude_from_forecast" value="1" {% if not item.include_in_forecast %}checked{% endif %}><span>Не учитывать в прогнозе</span></label>
+                    <button class="btn" type="submit">Сохранить</button>
+                </form>
+            </div>
+        {% else %}
+            <div class="empty small">Пусто</div>
+        {% endfor %}
+        {% if row.hidden_count > 0 %}
+            <a class="expense-show-all" href="/expenses/categories/{{ category.id }}">Показать ещё {{ row.hidden_count }}</a>
+        {% endif %}
+        </div>
+    </section>
+{% else %}
+    <div class="empty">Нет категорий</div>
+{% endfor %}
+</div>
+
+{% if expense_list.owner_id == user.id %}
+<form method="post" action="/expenses/lists/{{ expense_list.id }}/delete" onsubmit="return confirm('Удалить весь список трат?')">
+    <button class="btn danger" type="submit"><svg class="icon"><use href="#i-trash"></use></svg> Удалить список</button>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    document.querySelectorAll('[data-expense-edit-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const card = button.closest('.expense-item-card');
+            const form = card ? card.querySelector('.expense-edit-form') : null;
+            if (!form) return;
+            const willOpen = form.hidden;
+            document.querySelectorAll('.expense-edit-form').forEach((item) => {
+                if (item !== form) item.hidden = true;
+            });
+            document.querySelectorAll('[data-expense-edit-toggle]').forEach((item) => {
+                if (item !== button) item.classList.remove('active');
+            });
+            form.hidden = !willOpen;
+            button.classList.toggle('active', willOpen);
+        });
+    });
+})();
+</script>
+{% endblock %}

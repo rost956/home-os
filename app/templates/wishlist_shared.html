@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Хотелки @{{ owner.username }}{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>Хотелки @{{ owner.username }}</h1>
+    <a class="icon-btn" href="/wishlist" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+<div class="grid compact">
+{% for item in items %}
+    <article class="card wish-card {% if item.is_done %}done{% endif %}">
+        <div class="card-head">
+            <h2>{{ item.title }}</h2>
+            {% if item.price is not none %}<span class="pill">{{ item.price }} ₽</span>{% endif %}
+        </div>
+        {% if item.url %}<div>{{ item.url|linkify }}</div>{% endif %}
+        {% if item.note %}<p>{{ item.note|linkify }}</p>{% endif %}
+    </article>
+{% else %}
+    <div class="empty">Пусто</div>
+{% endfor %}
+</div>
+{% endblock %}

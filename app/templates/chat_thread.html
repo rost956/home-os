@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block title %}{{ thread.title }}{% endblock %}
+{% block body_class %}chat-screen{% endblock %}
+{% block content %}
+<div class="chat-layout">
+    <div class="chat-top">
+        <a class="icon-btn" href="/chats" title="Назад" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+        {% set target_presence = presence_info(target) %}
+        <div class="chat-title"><h1>{% if thread.is_pinned %}<svg class="icon pinned-mark" aria-label="Закреплено"><use href="#i-pin"></use></svg>{% endif %}{{ thread.title }}</h1><div class="subline">@{{ target.username }} · <span id="chatStatus" class="presence-inline {% if target_presence.is_online %}online{% endif %}" data-presence-text="{{ target_presence.text }}"><i></i>{{ target_presence.text }}</span></div></div>
+        <details class="chat-settings"><summary class="icon-btn" title="Настройки" aria-label="Настройки"><svg class="icon"><use href="#i-more"></use></svg></summary>
+            <div class="settings-menu card">
+                <form method="post" action="/chats/{{ thread.id }}/rename" class="form compact-form"><input name="title" value="{{ thread.title }}" required><button class="btn" type="submit">Сохранить</button></form>
+                <form method="post" action="/chats/{{ thread.id }}/pin"><button class="btn secondary full" type="submit">{% if thread.is_pinned %}Открепить{% else %}Закрепить{% endif %}</button></form>
+                <details><summary class="chip">Заметки</summary>
+                    <form method="post" action="/chats/{{ thread.id }}/notes" class="form compact-form"><textarea name="text" rows="2" placeholder="Общая заметка" required></textarea><button class="btn" type="submit">Добавить</button></form>
+                    <div class="list">{% for note in notes %}<div class="list-row"><div><b>@{{ note.author.username }}</b><span class="subline">{{ note.text|linkify }}</span></div><form method="post" action="/chats/{{ thread.id }}/notes/{{ note.id }}/delete"><button class="mini-danger" title="Удалить заметку" aria-label="Удалить заметку"><svg class="icon"><use href="#i-x"></use></svg></button></form></div>{% else %}<div class="empty small">Нет</div>{% endfor %}</div>
+                </details>
+                {% if thread.created_by_id == user.id %}<form method="post" action="/chats/{{ thread.id }}/delete" onsubmit="return confirm('Удалить чат у обоих пользователей?')"><button class="btn danger full" type="submit">Удалить чат</button></form>{% endif %}
+            </div>
+        </details>
+    </div>
+
+    <section id="chatBox" class="chat-feed" data-thread-id="{{ thread.id }}" data-user-id="{{ user.id }}" data-target-id="{{ target.id }}">
+    {% for message in messages %}
+        <div class="bubble {% if message.sender_id == user.id %}me{% else %}other{% endif %}" data-message-id="{{ message.id }}" data-message-text="{{ message.text }}">
+            <div class="bubble-meta">@{{ message.sender.username }} · {{ message.created_at|msk_datetime('%d.%m.%Y %H:%M') }} <button type="button" class="reply-btn" data-reply-id="{{ message.id }}" data-reply-text="{{ message.text|e }}" title="Ответить" aria-label="Ответить"><svg class="icon"><use href="#i-reset"></use></svg></button></div>
+            {% if message.reply_to %}<div class="reply-preview"><svg class="icon"><use href="#i-reset"></use></svg> @{{ message.reply_to.sender.username }}: {{ message.reply_to.text }}</div>{% endif %}
+            <div class="bubble-text">{{ message.text|linkify }}</div>
+            {% if message.attachment_path %}<a class="attachment-link" href="{{ message.attachment_path }}" target="_blank" rel="noopener"><svg class="icon"><use href="#i-paperclip"></use></svg> файл</a>{% endif %}
+        </div>
+    {% else %}<div id="emptyChat" class="empty small">Пусто</div>{% endfor %}
+    </section>
+
+    <form id="chatForm" method="post" action="/chats/{{ thread.id }}" class="chat-composer" enctype="multipart/form-data">
+        <input type="hidden" id="replyToId" name="reply_to_id">
+        <div id="replyBox" class="reply-box hidden"><span></span><button type="button" id="cancelReply" title="Отменить ответ" aria-label="Отменить ответ"><svg class="icon"><use href="#i-x"></use></svg></button></div>
+        <label class="attach-btn" title="Файл" aria-label="Прикрепить файл"><svg class="icon"><use href="#i-paperclip"></use></svg><input id="chatAttachment" name="attachment" type="file" hidden></label>
+        <textarea id="chatText" name="text" rows="1" placeholder="Сообщение"></textarea>
+        <button class="send-btn" type="submit" title="Отправить" aria-label="Отправить"><svg class="icon"><use href="#i-arrow-right"></use></svg></button>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const chatBox = document.getElementById('chatBox');
+    const form = document.getElementById('chatForm');
+    const textarea = document.getElementById('chatText');
+    const fileInput = document.getElementById('chatAttachment');
+    const status = document.getElementById('chatStatus');
+    const replyTo = document.getElementById('replyToId');
+    const replyBox = document.getElementById('replyBox');
+    const cancelReply = document.getElementById('cancelReply');
+    if (!chatBox || !form || !textarea) return;
+
+    const threadId = chatBox.dataset.threadId;
+    const userId = Number(chatBox.dataset.userId);
+    const targetId = Number(chatBox.dataset.targetId);
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+    let socket = null;
+    let reconnectTimer = null;
+    let reconnectDelay = 1000;
+    let disposed = false;
+    let lastPresenceText = status ? (status.dataset.presenceText || status.textContent || '') : '';
+    let lastPresenceOnline = status ? status.classList.contains('online') : false;
+    let targetTypingTimer = null;
+    let selfTypingTimer = null;
+    let selfTypingSent = false;
+
+    function isNearBottom() {
+        return chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight < 120;
+    }
+    function setAppHeight(keepBottom = false) {
+        const viewport = window.visualViewport;
+        const height = viewport ? viewport.height : window.innerHeight;
+        const offsetTop = viewport ? viewport.offsetTop : 0;
+        const shouldKeepBottom = keepBottom || isNearBottom();
+        document.documentElement.style.setProperty('--app-height', `${height}px`);
+        document.documentElement.style.setProperty('--vvh', `${height}px`);
+        document.documentElement.style.setProperty('--vv-top', `${offsetTop}px`);
+        if (shouldKeepBottom) requestAnimationFrame(scrollDown);
+    }
+    setAppHeight(true);
+    window.addEventListener('resize', () => setAppHeight());
+    window.addEventListener('orientationchange', () => setTimeout(() => setAppHeight(true), 250));
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => setAppHeight());
+        window.visualViewport.addEventListener('scroll', () => setAppHeight(false));
+    }
+
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+    }
+    function linkify(value) {
+        return escapeHtml(value).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    }
+    function scrollDown() { chatBox.scrollTop = chatBox.scrollHeight; }
+    function replyPreviewHtml(message) {
+        if (!message.reply_to_id || !message.reply_to_text) return '';
+        const username = message.reply_to_sender_username ? '@' + escapeHtml(message.reply_to_sender_username) + ': ' : '';
+        return `<div class="reply-preview"><svg class="icon"><use href="#i-reset"></use></svg> ${username}${escapeHtml(message.reply_to_text)}</div>`;
+    }
+    function appendMessage(message) {
+        const messageId = Number(message.id);
+        if (Number.isFinite(messageId) && chatBox.querySelector(`[data-message-id="${messageId}"]`)) return;
+        const emptyNow = document.getElementById('emptyChat');
+        if (emptyNow) emptyNow.remove();
+        const bubble = document.createElement('div');
+        bubble.className = `bubble ${Number(message.sender_id) === userId ? 'me' : 'other'}`;
+        bubble.dataset.messageId = Number.isFinite(messageId) ? String(messageId) : '';
+        bubble.dataset.messageText = message.text;
+        const attachment = message.attachment_path
+            ? `<a class="attachment-link" href="${escapeHtml(message.attachment_path)}" target="_blank" rel="noopener"><svg class="icon"><use href="#i-paperclip"></use></svg> файл</a>`
+            : '';
+        bubble.innerHTML = `<div class="bubble-meta">@${escapeHtml(message.sender_username)} · ${escapeHtml(message.created_at)} <button type="button" class="reply-btn" data-reply-id="${messageId}" data-reply-text="${escapeHtml(message.text)}" title="Ответить" aria-label="Ответить"><svg class="icon"><use href="#i-reset"></use></svg></button></div>${replyPreviewHtml(message)}<div class="bubble-text">${linkify(message.text)}</div>${attachment}`;
+        chatBox.appendChild(bubble);
+        scrollDown();
+    }
+    function fitTextarea() {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 130) + 'px';
+    }
+    function setStatusText(text, online) {
+        if (!status) return;
+        status.classList.toggle('online', Boolean(online));
+        status.classList.toggle('typing', false);
+        const dot = status.querySelector('i');
+        status.textContent = '';
+        if (dot) status.appendChild(dot);
+        status.appendChild(document.createTextNode(text));
+        status.dataset.presenceText = text;
+        lastPresenceText = text;
+        lastPresenceOnline = Boolean(online);
+    }
+    function setTyping(isTyping) {
+        if (!status) return;
+        if (isTyping) {
+            status.classList.add('typing');
+            status.classList.add('online');
+            const dot = status.querySelector('i');
+            status.textContent = '';
+            if (dot) status.appendChild(dot);
+            status.appendChild(document.createTextNode('печатает…'));
+            clearTimeout(targetTypingTimer);
+            targetTypingTimer = setTimeout(() => setStatusText(lastPresenceText || 'давно не был в сети', lastPresenceOnline), 3500);
+        } else {
+            clearTimeout(targetTypingTimer);
+            setStatusText(lastPresenceText || 'давно не был в сети', lastPresenceOnline);
+        }
+    }
+    async function pollPresence() {
+        try {
+            const response = await fetch(`/api/chats/${threadId}/presence`, {cache: 'no-store'});
+            if (!response.ok) return;
+            const data = await response.json();
+            if (Number(data.user_id) === targetId && status && !status.classList.contains('typing')) {
+                setStatusText(data.text || 'давно не был в сети', Boolean(data.is_online));
+            } else if (Number(data.user_id) === targetId) {
+                lastPresenceText = data.text || lastPresenceText;
+            }
+        } catch (e) {}
+    }
+    function sendSocket(payload) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+        try {
+            socket.send(JSON.stringify(payload));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+    function sendTypingStart() {
+        if (!textarea.value.trim()) return;
+        if (!selfTypingSent) {
+            sendSocket({type: 'typing', is_typing: true});
+            selfTypingSent = true;
+        }
+        clearTimeout(selfTypingTimer);
+        selfTypingTimer = setTimeout(() => {
+            sendSocket({type: 'typing', is_typing: false});
+            selfTypingSent = false;
+        }, 2500);
+    }
+
+    function handleSocketMessage(event) {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (error) {
+            return;
+        }
+        if (data.type === 'message') appendMessage(data);
+        if (data.type === 'presence' && Number(data.user_id) === targetId && status && !status.classList.contains('typing')) {
+            setStatusText(data.text || 'онлайн', Boolean(data.is_online));
+        } else if (data.type === 'presence' && Number(data.user_id) === targetId) {
+            lastPresenceText = data.text || lastPresenceText;
+        }
+        if (data.type === 'typing' && Number(data.user_id) === targetId) setTyping(Boolean(data.is_typing));
+    }
+    function latestMessageId() {
+        return Array.from(chatBox.querySelectorAll('[data-message-id]')).reduce(
+            (latest, node) => Math.max(latest, Number(node.dataset.messageId) || 0),
+            0
+        );
+    }
+    async function syncMessages() {
+        try {
+            let afterId = latestMessageId();
+            for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
+                const response = await fetch(`/api/chats/${threadId}/messages?after_id=${afterId}`, {cache: 'no-store'});
+                if (!response.ok) return;
+                const data = await response.json();
+                const messages = Array.isArray(data.messages) ? data.messages : [];
+                messages.forEach(appendMessage);
+                const nextId = latestMessageId();
+                if (!data.has_more || nextId <= afterId) return;
+                afterId = nextId;
+            }
+        } catch (error) {}
+    }
+    function scheduleReconnect() {
+        if (disposed || reconnectTimer) return;
+        const delay = reconnectDelay;
+        reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+        reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            connectSocket();
+        }, delay);
+    }
+    function connectSocket() {
+        if (disposed) return;
+        const nextSocket = new WebSocket(`${protocol}://${location.host}/ws/chats/${threadId}`);
+        socket = nextSocket;
+        nextSocket.addEventListener('open', () => {
+            if (socket !== nextSocket) return;
+            reconnectDelay = 1000;
+            sendSocket({type: 'ping'});
+            pollPresence();
+            syncMessages();
+        });
+        nextSocket.addEventListener('message', handleSocketMessage);
+        nextSocket.addEventListener('close', () => {
+            if (socket === nextSocket) socket = null;
+            selfTypingSent = false;
+            scheduleReconnect();
+        });
+        nextSocket.addEventListener('error', () => nextSocket.close());
+    }
+
+    form.addEventListener('submit', event => {
+        if (fileInput.files.length || !socket || socket.readyState !== WebSocket.OPEN) return;
+        event.preventDefault();
+        const text = textarea.value.trim();
+        if (!text) return;
+        sendSocket({type: 'typing', is_typing: false});
+        selfTypingSent = false;
+        if (!sendSocket({text, reply_to_id: replyTo.value || null})) {
+            HTMLFormElement.prototype.submit.call(form);
+            return;
+        }
+        textarea.value = '';
+        replyTo.value = '';
+        replyBox.classList.add('hidden');
+        fitTextarea();
+        textarea.focus();
+    });
+    chatBox.addEventListener('click', (event) => {
+        const btn = event.target.closest('.reply-btn');
+        if (!btn) return;
+        replyTo.value = btn.dataset.replyId;
+        replyBox.querySelector('span').textContent = 'Ответ: ' + (btn.dataset.replyText || '').slice(0, 120);
+        replyBox.classList.remove('hidden');
+        textarea.focus();
+    });
+    cancelReply.addEventListener('click', () => {
+        replyTo.value='';
+        replyBox.classList.add('hidden');
+    });
+    textarea.addEventListener('input', () => {
+        fitTextarea();
+        sendTypingStart();
+    });
+    textarea.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            event.preventDefault();
+            form.requestSubmit();
+        }
+    });
+    setInterval(() => sendSocket({type: 'ping'}), 25000);
+    setInterval(pollPresence, 15000);
+    setInterval(syncMessages, 10000);
+    window.addEventListener('pagehide', () => {
+        disposed = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        if (socket) socket.close();
+    });
+    connectSocket();
+    scrollDown();
+    fitTextarea();
+    pollPresence();
+})();
+</script>
+{% endblock %}

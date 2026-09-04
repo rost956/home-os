@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Сериалы и фильмы{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <h1>Сериалы и фильмы</h1>
+    <a class="icon-btn" href="/today" title="Домой"><svg class="icon"><use href="#i-home"></use></svg></a>
+</div>
+
+<div class="action-grid">
+    <details class="card action-panel" open>
+        <summary><svg class="icon"><use href="#i-plus"></use></svg> Добавить</summary>
+        <form method="post" action="/watch" class="form compact-form watch-form">
+            <div class="form-row two-cols">
+                <label>Название<input name="title" required placeholder="Например, Дюна"></label>
+                <label>Тип
+                    <select name="kind">
+                        {% for value, label in kind_labels.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+            <div class="form-row">
+                <label>Сезон<input name="season" inputmode="numeric" placeholder="необязательно"></label>
+                <label>Серия<input name="episode" inputmode="numeric" placeholder="необязательно"></label>
+                <label>Минута<input name="minute" inputmode="numeric" placeholder="необязательно"></label>
+            </div>
+            <div class="form-row two-cols">
+                <label>Статус
+                    <select name="status_value">
+                        {% for value, label in status_labels.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label>Ссылка<input name="watch_url" type="url" placeholder="https://..."></label>
+            </div>
+            <label>Заметка<textarea name="note" rows="2" placeholder="необязательно"></textarea></label>
+            <button class="btn" type="submit">Добавить</button>
+        </form>
+    </details>
+
+    <section class="card">
+        <form method="get" action="/watch" class="search auto-search">
+            <input name="q" value="{{ q }}" placeholder="Найти в списке">
+            <button class="btn search-submit" type="submit">Найти</button>
+        </form>
+        <div class="chips">
+            <a class="chip" href="/watch">все</a>
+            {% for value, label in status_labels.items() %}
+            <a class="chip" href="/watch?status_filter={{ value }}">{{ label }}</a>
+            {% endfor %}
+        </div>
+    </section>
+</div>
+
+<div class="grid two watch-grid">
+{% for item in items %}
+<article class="card watch-card">
+    <div class="card-head">
+        <div class="watch-title">
+            <h2>{{ item.title }}</h2>
+            <div class="meta">
+                <span>{{ item.kind|watch_kind }}</span>
+                <span>{{ item.status|watch_status }}</span>
+                {% if item.season is not none %}<span>сезон {{ item.season }}</span>{% endif %}
+                {% if item.episode is not none %}<span>серия {{ item.episode }}</span>{% endif %}
+                {% if item.minute is not none %}<span>{{ item.minute }} мин.</span>{% endif %}
+            </div>
+        </div>
+        {% set safe_watch_url = item.watch_url|http_url %}{% if safe_watch_url %}<a class="icon-btn filled" href="{{ safe_watch_url }}" target="_blank" rel="noopener noreferrer" title="Смотреть"><svg class="icon"><use href="#i-external"></use></svg></a>{% endif %}
+    </div>
+    {% if item.note %}<p>{{ item.note|linkify }}</p>{% endif %}
+    {% if item.kind == 'series' %}
+    <div class="actions watch-progress-actions">
+        <form method="post" action="/watch/{{ item.id }}/progress"><input type="hidden" name="episode_step" value="1"><button class="icon-btn" type="submit" title="Следующая серия"><svg class="icon"><use href="#i-play"></use></svg></button></form>
+        <form method="post" action="/watch/{{ item.id }}/progress"><input type="hidden" name="minute_step" value="5"><button class="btn secondary" type="submit">+5 мин</button></form>
+    </div>
+    {% endif %}
+    <details class="action-panel watch-edit-panel">
+        <summary>Редактировать</summary>
+        <form method="post" action="/watch/{{ item.id }}/update" class="form compact-form watch-form">
+            <input name="title" value="{{ item.title }}" required>
+            <div class="form-row two-cols">
+                <select name="kind">{% for value, label in kind_labels.items() %}<option value="{{ value }}" {% if item.kind == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+                <select name="status_value">{% for value, label in status_labels.items() %}<option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+            </div>
+            <div class="form-row">
+                <input name="season" value="{{ item.season if item.season is not none else '' }}" inputmode="numeric" placeholder="сезон">
+                <input name="episode" value="{{ item.episode if item.episode is not none else '' }}" inputmode="numeric" placeholder="серия">
+                <input name="minute" value="{{ item.minute if item.minute is not none else '' }}" inputmode="numeric" placeholder="минута">
+            </div>
+            <input name="watch_url" value="{{ item.watch_url or '' }}" type="url" placeholder="ссылка">
+            <textarea name="note" rows="2" placeholder="заметка">{{ item.note or '' }}</textarea>
+            <div class="actions">
+                <button class="btn" type="submit">Сохранить</button>
+            </div>
+        </form>
+        <form method="post" action="/watch/{{ item.id }}/delete" onsubmit="return confirm('Удалить запись?')">
+            <button class="btn danger full" type="submit">Удалить</button>
+        </form>
+    </details>
+</article>
+{% else %}
+<div class="empty">Список пока пуст</div>
+{% endfor %}
+</div>
+{% endblock %}

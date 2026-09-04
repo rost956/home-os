@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Покупки{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><h1>Покупки</h1></div>
+
+<div class="action-grid">
+    <form method="post" action="/shopping/lists" class="card form inline-form compact-form">
+        <input name="title" required placeholder="Новый список">
+        <button class="btn" type="submit" title="Создать список" aria-label="Создать список"><svg class="icon"><use href="#i-plus"></use></svg></button>
+    </form>
+    {% if all_lists|length > 1 %}
+    <details class="card action-panel merge-panel">
+        <summary><svg class="icon"><use href="#i-splits"></use></svg> Объединить</summary>
+        <form method="post" action="/shopping/lists/merge" class="form compact-form">
+            <label>
+                <span>Куда</span>
+                <select name="target_list_id" required>
+                    {% for list in all_lists %}<option value="{{ list.id }}">{{ list.title }}</option>{% endfor %}
+                </select>
+            </label>
+            <div class="merge-list">
+                <div class="subline">Что добавить</div>
+                {% for list in all_lists %}
+                <label class="check-line"><input type="checkbox" name="source_list_ids" value="{{ list.id }}"> <span>{{ list.title }}{% if list.owner_id != user.id %} · @{{ list.owner.username }}{% endif %}</span></label>
+                {% endfor %}
+            </div>
+            <label class="check-line"><input type="checkbox" name="delete_sources" value="1"> <span>Удалить мои исходные списки после объединения</span></label>
+            <button class="btn" type="submit">Объединить</button>
+        </form>
+    </details>
+    {% endif %}
+
+    {% if category_rules %}
+    <details class="card action-panel rules-panel">
+        <summary><span class="summary-label"><svg class="icon"><use href="#i-bars"></use></svg> Правила категорий</span></summary>
+        <div class="share-list">
+        {% for rule in category_rules %}
+            <div class="share-chip"><span>{{ rule.keyword }} → {{ rule.department }}</span><form method="post" action="/shopping/rules/{{ rule.id }}/delete"><button type="submit" title="Удалить правило" aria-label="Удалить правило"><svg class="icon"><use href="#i-x"></use></svg></button></form></div>
+        {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+</div>
+
+<div class="section-title">Мои</div>
+<div class="grid compact">
+{% for list in owned %}
+<article class="card hover-card mini-card"><div class="card-head"><h2>{{ list.title }}</h2><span class="pill">{{ list.items|selectattr('is_done')|list|length }}/{{ list.items|length }}</span></div><div class="subline">{{ list.shares|length }} доступ.</div><a class="stretch-link" href="/shopping/lists/{{ list.id }}"></a></article>
+{% else %}<div class="empty">Пусто</div>{% endfor %}
+</div>
+<div class="section-title">Мне открыли</div>
+<div class="grid compact">
+{% for list in shared %}
+<article class="card hover-card mini-card"><div class="card-head"><h2>{{ list.title }}</h2><span class="pill">{{ list.items|length }}</span></div><div class="subline">@{{ list.owner.username }}</div><a class="stretch-link" href="/shopping/lists/{{ list.id }}"></a></article>
+{% else %}<div class="empty">Пусто</div>{% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Лимиты и регулярные траты{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div>
+        <h1>Лимиты</h1>
+        <div class="subline">Финансовый период: {{ current_period_label }}</div>
+    </div>
+    <a class="icon-btn" href="/expenses" title="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+
+{% macro category_picker(prefix, default='') -%}
+<div class="category-picker" data-category-picker>
+    <input type="hidden" name="category_name" id="{{ prefix }}CategoryValue" value="{{ default }}" data-category-value>
+    <select id="{{ prefix }}CategorySelect" class="category-select" data-category-select aria-label="Категория">
+        <option value="" {% if not default %}selected{% endif %}>Выберите категорию</option>
+        {% for category in category_options %}
+        <option value="{{ category }}" {% if default == category %}selected{% endif %}>{{ category }}</option>
+        {% endfor %}
+        <option value="__custom__">Новая категория</option>
+    </select>
+    <input id="{{ prefix }}CategoryCustom" class="category-custom hidden" data-category-custom placeholder="Новая категория" value="{% if default and default not in category_options %}{{ default }}{% endif %}">
+</div>
+{%- endmacro %}
+
+<section class="card expense-period-settings">
+    <div class="card-head">
+        <div>
+            <h2>Начало финансового месяца</h2>
+            <div class="subline">Лимиты и аналитика считаются с выбранного дня месяца.</div>
+        </div>
+    </div>
+    <form method="post" action="/settings/expense-period" class="period-start-form">
+        <label>День старта
+            <input name="expense_period_start_day" type="number" min="1" max="31" value="{{ period_start_day }}" required>
+        </label>
+        <button class="btn secondary" type="submit">Сохранить</button>
+    </form>
+</section>
+
+<section class="dashboard-summary limit-summary-grid">
+    <div class="card dashboard-metric">
+        <span>Сумма лимитов</span>
+        <b>{{ limit_total|fmt_decimal }} ₽</b>
+    </div>
+    <div class="card dashboard-metric">
+        <span>Потрачено</span>
+        <b>{{ limit_spent|fmt_decimal }} ₽</b>
+    </div>
+    <div class="card dashboard-metric">
+        <span>{{ 'Перерасход' if limit_left < 0 else 'Осталось' }}</span>
+        <b>{{ limit_left|fmt_decimal }} ₽</b>
+    </div>
+    <div class="card dashboard-metric">
+        <span>Категорий</span>
+        <b>{{ limits|length }}</b>
+    </div>
+</section>
+
+{% if limit_total > 0 %}
+<section class="card limit-overview">
+    <div class="bar-title"><b>Общий лимит периода</b><span>{{ limit_spent|fmt_decimal }} / {{ limit_total|fmt_decimal }} ₽</span></div>
+    <div class="bar-track limit-track total-limit-track"><div style="width: {{ limit_percent }}%"></div></div>
+    <div class="subline">{{ 'Перерасход' if limit_left < 0 else 'Осталось' }}: {{ limit_left|fmt_decimal }} ₽</div>
+</section>
+{% endif %}
+
+<div class="grid two">
+<section class="card content-card">
+    <h2>Лимиты по категориям</h2>
+    <form method="post" action="/expenses/limits" class="limit-form compact-form">
+        {{ category_picker('limit') }}
+        <input name="monthly_limit" required inputmode="decimal" placeholder="Лимит ₽">
+        <button class="btn" type="submit" title="Добавить лимит" aria-label="Добавить лимит"><svg class="icon"><use href="#i-plus"></use></svg></button>
+    </form>
+    <div class="list limits-list">
+        {% for limit in limits %}
+        <div class="list-row limit-row">
+            <div class="limit-summary">
+                <b>{{ limit.category_name }}</b>
+                <span class="subline">{{ limit.monthly_limit }} ₽ / месяц</span>
+            </div>
+            <div class="row-actions">
+                <details class="inline-editor limit-editor">
+                    <summary class="mini-btn" title="Редактировать" aria-label="Редактировать"><svg class="icon"><use href="#i-edit"></use></svg></summary>
+                    <form method="post" action="/expenses/limits/{{ limit.id }}/update" class="limit-edit-form">
+                        {{ category_picker('limitEdit' ~ limit.id, limit.category_name) }}
+                        <input name="monthly_limit" required inputmode="decimal" value="{{ limit.monthly_limit }}" aria-label="Лимит ₽">
+                        <button class="mini-ok" type="submit" title="Сохранить" aria-label="Сохранить"><svg class="icon"><use href="#i-check"></use></svg></button>
+                    </form>
+                </details>
+                <form method="post" action="/expenses/limits/{{ limit.id }}/delete"><button class="mini-danger" type="submit" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button></form>
+            </div>
+        </div>
+        {% else %}<div class="empty small">Пусто</div>{% endfor %}
+    </div>
+</section>
+<section class="card content-card">
+    <h2>Повторяющиеся траты</h2>
+    <form method="post" action="/expenses/recurring" class="form compact-form recurring-form">
+        <select name="expense_list_id" required>{% for list in expense_lists %}<option value="{{ list.id }}">{{ list.title }}</option>{% endfor %}</select>
+        {{ category_picker('recurring', 'Регулярное') }}
+        <input name="title" placeholder="Название" required>
+        <input name="amount" placeholder="Сумма" inputmode="decimal" required>
+        <input name="day_of_month" placeholder="День месяца" inputmode="numeric" value="1">
+        <button class="btn" type="submit" {% if not expense_lists %}disabled{% endif %}>Добавить</button>
+    </form>
+    <form method="post" action="/expenses/recurring/apply"><button class="btn secondary full" type="submit">Начислить за этот месяц</button></form>
+    <div class="list">
+        {% for item in recurring %}
+        <div class="list-row">
+            <div><b>{{ item.title }}</b><span class="subline">{{ item.amount }} ₽ · {{ item.category_name }} · {{ item.day_of_month }} число</span></div>
+            <form method="post" action="/expenses/recurring/{{ item.id }}/delete"><button class="mini-danger" type="submit" title="Удалить" aria-label="Удалить"><svg class="icon"><use href="#i-x"></use></svg></button></form>
+        </div>
+        {% else %}<div class="empty small">Пусто</div>{% endfor %}
+    </div>
+</section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    function initPicker(root) {
+        const select = root.querySelector('[data-category-select]');
+        const custom = root.querySelector('[data-category-custom]');
+        const value = root.querySelector('[data-category-value]');
+        if (!select || !custom || !value) return;
+
+        const hasSelectedOption = Array.from(select.options).some(option => option.selected && option.value && option.value !== '__custom__');
+        if (custom.value && !hasSelectedOption) select.value = '__custom__';
+
+        function sync(focusCustom) {
+            if (select.value === '__custom__') {
+                custom.classList.remove('hidden');
+                custom.required = true;
+                value.value = custom.value.trim();
+                if (focusCustom) custom.focus();
+            } else {
+                custom.classList.add('hidden');
+                custom.required = false;
+                value.value = select.value;
+            }
+        }
+
+        select.addEventListener('change', () => sync(true));
+        custom.addEventListener('input', () => sync(false));
+        root.closest('form')?.addEventListener('submit', (event) => {
+            sync(false);
+            if (!value.value.trim()) {
+                event.preventDefault();
+                if (select.value === '__custom__') custom.focus();
+                else select.focus();
+            }
+        });
+        sync(false);
+    }
+
+    document.querySelectorAll('[data-category-picker]').forEach(initPicker);
+})();
+</script>
+{% endblock %}
