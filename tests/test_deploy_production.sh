@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_SCRIPT="$REPOSITORY_ROOT/scripts/deploy_production.sh"
+CADDYFILE="$REPOSITORY_ROOT/Caddyfile"
+DOCKERFILE="$REPOSITORY_ROOT/Dockerfile"
+COMPOSE_FILE="$REPOSITORY_ROOT/docker-compose.yml"
 WORK_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -27,6 +30,15 @@ assert_regular_file_with_content() {
 write_caddyfile() {
     printf '%s\n' "$2" > "$1/Caddyfile"
 }
+
+# Docker owns readiness for the single web container. Caddy must proxy it
+# directly instead of maintaining a competing active-health state.
+if grep -Eq '^[[:space:]]*health_(uri|interval|timeout)[[:space:]]' "$CADDYFILE"; then
+    fail "Caddyfile still has active upstream health checks"
+fi
+grep -Fq 'reverse_proxy web:8000' "$CADDYFILE" || fail "Caddyfile does not proxy the web service"
+grep -Fq 'HEALTHCHECK' "$DOCKERFILE" || fail "Docker HEALTHCHECK was removed"
+grep -Fq 'condition: service_healthy' "$COMPOSE_FILE" || fail "Caddy no longer waits for Docker web health"
 
 SOURCE_DIR="$WORK_DIR/source"
 TARGET_DIR="$WORK_DIR/target"
@@ -132,6 +144,8 @@ MOCK_LOG="$WORK_DIR/deploy-flow.log"
 MOCK_CURRENT_CADDY=""
 MOCK_CONFIG_FAILURES=0
 MOCK_ADMIN_FAILURES=0
+MOCK_HTTPS_STATUS=200
+MOCK_DIAGNOSTICS_FAIL=0
 HEALTH_ATTEMPTS=3
 HEALTH_RETRY_DELAY=0
 TARGET="$TARGET_DIR"
@@ -143,6 +157,8 @@ sleep() {
 
 curl() {
     printf 'curl %s\n' "$*" >> "$MOCK_LOG"
+    printf '%s' "$MOCK_HTTPS_STATUS"
+    [[ "$MOCK_HTTPS_STATUS" == "200" ]] || return 22
 }
 
 mock_compose() {
@@ -176,9 +192,21 @@ mock_compose() {
                             ;;
                         *"caddy reload"*)
                             ;;
+                        *"wget -S -O - http://web:8000/health"*)
+                            if [[ "$MOCK_DIAGNOSTICS_FAIL" -gt 0 ]]; then
+                                echo "Caddy-to-web diagnostic failed" >&2
+                                return 1
+                            fi
+                            ;;
                     esac
                     ;;
             esac
+            ;;
+        logs)
+            if [[ "$MOCK_DIAGNOSTICS_FAIL" -gt 0 ]]; then
+                echo "Caddy log diagnostic failed" >&2
+                return 1
+            fi
             ;;
         *)
             fail "Unexpected compose command: $*"
@@ -199,6 +227,7 @@ health_ok "[deploy]" "caddy-old"
 if grep -Fq 'caddy reload' "$MOCK_LOG"; then
     fail "Fresh Caddy container was reloaded unnecessarily"
 fi
+grep -Fq '/health' "$MOCK_LOG" || fail "Deployment no longer checks HTTPS /health"
 
 # A reused container must wait for the Caddy admin endpoint before reloading.
 : > "$MOCK_LOG"
@@ -223,6 +252,46 @@ grep -Fq '[deploy] caddy admin: FAILED after 3 attempts' "$READINESS_FAILURE_LOG
     || fail "Permanent readiness failure did not name the failed stage"
 grep -Fq 'Caddy admin endpoint is not ready yet' "$READINESS_FAILURE_LOG" \
     || fail "Permanent readiness failure hid the last Caddy error"
+
+# HTTPS 502/503 keeps the final end-to-end probe strict, records diagnostics
+# before rollback, and preserves the original deployment exit status.
+: > "$MOCK_LOG"
+MOCK_CURRENT_CADDY="caddy-https-failure"
+MOCK_CONFIG_FAILURES=0
+MOCK_ADMIN_FAILURES=0
+MOCK_HTTPS_STATUS=503
+MOCK_DIAGNOSTICS_FAIL=1
+HTTPS_FAILURE_LOG="$WORK_DIR/https-failure.log"
+if health_ok "[deploy]" "caddy-old" > "$HTTPS_FAILURE_LOG" 2>&1; then
+    fail "HTTPS 503 was accepted"
+fi
+[[ "$LAST_FAILED_CHECK" == "HTTPS health" ]] || fail "HTTPS failure did not keep its stage"
+[[ "$HTTPS_HEALTH_HTTP_STATUS" == "503" ]] || fail "HTTPS failure did not keep its status"
+rollback() {
+    echo '[rollback] simulated failure' >&2
+    return 1
+}
+HTTPS_ROLLBACK_LOG="$WORK_DIR/https-rollback.log"
+if (finish_failed_deploy 22) > "$HTTPS_ROLLBACK_LOG" 2>&1; then
+    fail "HTTPS deployment failure unexpectedly returned success"
+else
+    https_rollback_exit_status=$?
+fi
+[[ "$https_rollback_exit_status" -eq 22 ]] || fail "HTTPS failure exit status was not preserved"
+grep -Fq '[deploy] HTTPS health diagnostics for HTTP 503' "$HTTPS_ROLLBACK_LOG" \
+    || fail "HTTPS 503 diagnostics were not logged"
+grep -Fq '[deploy] caddy logs (last 100 lines):' "$HTTPS_ROLLBACK_LOG" \
+    || fail "Caddy logs were not requested before rollback"
+grep -Fq '[deploy] Caddy -> web /health:' "$HTTPS_ROLLBACK_LOG" \
+    || fail "Caddy-to-web health diagnostics were not requested"
+grep -Fq 'Caddy log diagnostic failed' "$HTTPS_ROLLBACK_LOG" \
+    || fail "Failed Caddy log diagnostics were not visible"
+grep -Fq 'Caddy-to-web diagnostic failed' "$HTTPS_ROLLBACK_LOG" \
+    || fail "Failed Caddy-to-web diagnostics were not visible"
+grep -Fq '[rollback] simulated failure' "$HTTPS_ROLLBACK_LOG" \
+    || fail "HTTPS failure did not invoke rollback"
+grep -Fq 'Rollback also failed; original deployment status was 22' "$HTTPS_ROLLBACK_LOG" \
+    || fail "HTTPS rollback failure masked the original status"
 
 # A rollback failure is explicitly logged but preserves the original deploy status.
 rollback() {

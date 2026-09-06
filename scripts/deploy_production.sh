@@ -108,6 +108,7 @@ wait_for_check() {
     for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
         if "$check_function" >"$output_file" 2>&1; then
             rm -f -- "$output_file"
+            LAST_FAILED_CHECK=""
             echo "$prefix $label: OK"
             return 0
         else
@@ -121,6 +122,7 @@ wait_for_check() {
     done
 
     echo "$prefix $label: FAILED after $HEALTH_ATTEMPTS attempts" >&2
+    LAST_FAILED_CHECK="$label"
     if [[ -s "$output_file" ]]; then
         cat "$output_file" >&2
     fi
@@ -155,7 +157,7 @@ caddy_reload_check() {
 }
 
 https_health_check() {
-    local site_address site_scheme site_host site_port
+    local site_address site_scheme site_host site_port http_status curl_status
 
     site_address="$(grep -E '^CADDY_SITE_ADDRESS=' "$TARGET/.env" | tail -n 1 | cut -d= -f2- || true)"
     site_address="${site_address%%,*}"
@@ -172,9 +174,18 @@ https_health_check() {
     fi
     site_host="${site_host%%/*}"
     site_host="${site_host%%:*}"
-    curl --fail --silent --show-error --insecure --max-time 5 \
+    if http_status="$(curl --fail --silent --show-error --insecure --max-time 5 --output /dev/null --write-out '%{http_code}' \
         --resolve "$site_host:$site_port:127.0.0.1" \
-        "$site_scheme://$site_host:$site_port/health"
+        "$site_scheme://$site_host:$site_port/health")"; then
+        curl_status=0
+    else
+        curl_status=$?
+    fi
+    HTTPS_HEALTH_HTTP_STATUS="$http_status"
+    if [[ "$curl_status" -ne 0 ]]; then
+        echo "HTTPS health returned HTTP ${http_status:-unknown}" >&2
+        return "$curl_status"
+    fi
 }
 
 health_ok() {
@@ -182,6 +193,8 @@ health_ok() {
     local previous_caddy_container="${2:-}"
     local current_caddy_container
 
+    LAST_FAILED_CHECK=""
+    HTTPS_HEALTH_HTTP_STATUS=""
     wait_for_check "$prefix" "web health" web_health_check || return 1
     wait_for_check "$prefix" "caddy running" caddy_running_check || return 1
     wait_for_check "$prefix" "caddy config" caddy_config_check || return 1
@@ -201,9 +214,22 @@ health_ok() {
     wait_for_check "$prefix" "HTTPS health" https_health_check
 }
 
+diagnose_https_health_failure() {
+    if [[ "${LAST_FAILED_CHECK:-}" != "HTTPS health" || ! "${HTTPS_HEALTH_HTTP_STATUS:-}" =~ ^50[23]$ ]]; then
+        return 0
+    fi
+
+    echo "[deploy] HTTPS health diagnostics for HTTP $HTTPS_HEALTH_HTTP_STATUS" >&2
+    echo "[deploy] caddy logs (last 100 lines):" >&2
+    "${LIVE_COMPOSE[@]}" logs --tail=100 caddy || true
+    echo "[deploy] Caddy -> web /health:" >&2
+    "${LIVE_COMPOSE[@]}" exec -T caddy wget -S -O - http://web:8000/health || true
+}
+
 finish_failed_deploy() {
     local deploy_status="$1"
 
+    diagnose_https_health_failure
     echo "Deployment failed with status $deploy_status; starting rollback" >&2
     if ! rollback; then
         echo "Rollback also failed; original deployment status was $deploy_status" >&2

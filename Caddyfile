@@ -12,9 +12,5 @@
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
         Strict-Transport-Security "max-age=15552000"
     }
-    reverse_proxy web:8000 {
-        health_uri /health
-        health_interval 30s
-        health_timeout 5s
-    }
+    reverse_proxy web:8000
 }
