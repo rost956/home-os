@@ -90,11 +90,100 @@ restore_caddyfile_from_snapshot() {
     return "$status"
 }
 
+python_artifacts_absent() {
+    local root="$1"
+    local found
+
+    [[ -d "$root" && ! -L "$root" ]] || return 0
+    if ! found="$(find "$root" \( -type d -name __pycache__ -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
+        -print -quit)"; then
+        return 1
+    fi
+    [[ -z "$found" ]]
+}
+
+privileged_clean_python_artifacts() {
+    local root="$1"
+
+    [[ "$root" == /* && "$root" != "/" && -d "$root" && ! -L "$root" ]] || {
+        echo "Unsafe Python cache cleanup target: $root" >&2
+        return 1
+    }
+    "${DOCKER[@]}" run --rm --network none --read-only --user 0:0 \
+        --mount "type=bind,source=$root,target=/managed-code" \
+        --entrypoint /bin/sh "$IMAGE_NAME" -eu -c '
+            find /managed-code -type d -name __pycache__ -prune -exec rm -rf -- {} +
+            find /managed-code -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
+        '
+}
+
+clean_python_artifacts() {
+    local root="$1"
+
+    [[ "$root" == /* && "$root" != "/" ]] || {
+        echo "Unsafe Python cache cleanup target: $root" >&2
+        return 1
+    }
+    [[ -d "$root" && ! -L "$root" ]] || return 0
+
+    find "$root" -type d -name __pycache__ -prune -exec rm -rf -- {} + || true
+    find "$root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete || true
+    if python_artifacts_absent "$root"; then
+        return 0
+    fi
+
+    echo "Removing protected Python bytecode under $root with scoped Docker root access"
+    privileged_clean_python_artifacts "$root" || return 1
+    python_artifacts_absent "$root" || {
+        echo "Python bytecode cleanup failed under $root" >&2
+        return 1
+    }
+}
+
+clean_managed_python_artifacts() {
+    local target="$1"
+    local item
+
+    [[ "$target" == /* && "$target" != "/" ]] || {
+        echo "Unsafe managed-code cleanup target: $target" >&2
+        return 1
+    }
+    for item in app scripts ops; do
+        clean_python_artifacts "$target/$item" || return 1
+    done
+}
+
+create_code_snapshot() {
+    local target="$1"
+    local snapshot="$2"
+    shift 2
+
+    clean_managed_python_artifacts "$target" || return 1
+    tar --exclude='__pycache__' --exclude='*/__pycache__' --exclude='*.py[cod]' \
+        -czf "$snapshot" -C "$target" "$@"
+}
+
+restore_code_snapshot() {
+    local snapshot="$1"
+    local target="$2"
+
+    clean_managed_python_artifacts "$target" || return 1
+    rm -rf -- "$target/app" "$target/scripts" "$target/ops" || return 1
+    rm -f -- "$target/Dockerfile" "$target/docker-compose.yml" "$target/requirements.txt" || return 1
+    tar --exclude='Caddyfile' --exclude='__pycache__' --exclude='*/__pycache__' --exclude='*.py[cod]' \
+        -xzf "$snapshot" -C "$target" || return 1
+    restore_caddyfile_from_snapshot "$snapshot" "$target/Caddyfile"
+}
+
 replace_live_code() {
     validate_source_caddyfile "$SOURCE/Caddyfile" || return 1
+    clean_managed_python_artifacts "$TARGET" || return 1
     rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops" || return 1
     rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt" || return 1
-    tar -C "$SOURCE" -cf - app scripts ops Dockerfile docker-compose.yml requirements.txt | tar -C "$TARGET" -xf - || return 1
+    tar --exclude='__pycache__' --exclude='*/__pycache__' --exclude='*.py[cod]' \
+        -C "$SOURCE" -cf - app scripts ops Dockerfile docker-compose.yml requirements.txt \
+        | tar --exclude='__pycache__' --exclude='*/__pycache__' --exclude='*.py[cod]' \
+            -C "$TARGET" -xf - || return 1
     install_source_caddyfile "$SOURCE/Caddyfile" "$TARGET/Caddyfile"
 }
 
@@ -353,7 +442,7 @@ if [[ -f "$TARGET/docker-compose.yml" ]]; then
         echo "Skipping invalid live Caddyfile in snapshot: $TARGET/Caddyfile" >&2
     fi
     if [[ "${#SNAPSHOT_PATHS[@]}" -gt 0 ]]; then
-        tar -czf "$SNAPSHOT" -C "$TARGET" "${SNAPSHOT_PATHS[@]}"
+        create_code_snapshot "$TARGET" "$SNAPSHOT" "${SNAPSHOT_PATHS[@]}"
     fi
 fi
 
@@ -361,10 +450,7 @@ rollback() {
     local rollback_status=0 rollback_caddy_container=""
     echo "[rollback] restoring previous code and image"
     if [[ -f "$SNAPSHOT" ]]; then
-        if ! rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops" \
-            || ! rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt" \
-            || ! tar -xzf "$SNAPSHOT" -C "$TARGET" --exclude=Caddyfile \
-            || ! restore_caddyfile_from_snapshot "$SNAPSHOT" "$TARGET/Caddyfile"; then
+        if ! restore_code_snapshot "$SNAPSHOT" "$TARGET"; then
             echo "Rollback code restore failed" >&2
             rollback_status=1
         fi

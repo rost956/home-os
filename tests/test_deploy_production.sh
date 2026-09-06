@@ -9,7 +9,12 @@ COMPOSE_FILE="$REPOSITORY_ROOT/docker-compose.yml"
 WORK_DIR="$(mktemp -d)"
 
 cleanup() {
-    rm -rf -- "$WORK_DIR"
+    chmod -R u+rwX "$WORK_DIR" 2>/dev/null || true
+    rm -rf -- "$WORK_DIR" 2>/dev/null || {
+        if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            sudo -n rm -rf -- "$WORK_DIR"
+        fi
+    }
 }
 trap cleanup EXIT
 
@@ -31,6 +36,51 @@ write_caddyfile() {
     printf '%s\n' "$2" > "$1/Caddyfile"
 }
 
+make_protected_python_cache() {
+    local directory="$1"
+    local filename="$2"
+
+    mkdir -p "$directory/__pycache__"
+    printf 'stale bytecode\n' > "$directory/__pycache__/$filename"
+    if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1 \
+        && sudo -n true >/dev/null 2>&1; then
+        sudo -n chown -R root:root "$directory/__pycache__"
+        sudo -n chmod 0555 "$directory/__pycache__"
+        sudo -n chmod 0444 "$directory/__pycache__/$filename"
+    else
+        chmod 0555 "$directory/__pycache__" 2>/dev/null || true
+        chmod 0444 "$directory/__pycache__/$filename" 2>/dev/null || true
+    fi
+}
+
+mock_cleanup_docker() {
+    local mount_spec="" source_path=""
+
+    [[ "$1" == "run" ]] || fail "Unexpected cleanup Docker command: $*"
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--mount" ]]; then
+            mount_spec="$2"
+            break
+        fi
+        shift
+    done
+    [[ -n "$mount_spec" ]] || fail "Cleanup Docker command has no scoped bind mount"
+    source_path="${mount_spec#type=bind,source=}"
+    source_path="${source_path%,target=/managed-code}"
+    [[ "$source_path" == "$TARGET_DIR/app" || "$source_path" == "$TARGET_DIR/scripts" \
+        || "$source_path" == "$TARGET_DIR/ops" ]] || fail "Cleanup escaped managed code: $source_path"
+
+    if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1 \
+        && sudo -n true >/dev/null 2>&1; then
+        sudo -n find "$source_path" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+        sudo -n find "$source_path" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    else
+        chmod -R u+rwX "$source_path" 2>/dev/null || true
+        find "$source_path" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+        find "$source_path" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    fi
+}
+
 # Docker owns readiness for the single web container. Caddy must proxy it
 # directly instead of maintaining a competing active-health state.
 if grep -Eq '^[[:space:]]*health_(uri|interval|timeout)[[:space:]]' "$CADDYFILE"; then
@@ -39,6 +89,14 @@ fi
 grep -Fq 'reverse_proxy web:8000' "$CADDYFILE" || fail "Caddyfile does not proxy the web service"
 grep -Fq 'HEALTHCHECK' "$DOCKERFILE" || fail "Docker HEALTHCHECK was removed"
 grep -Fq 'condition: service_healthy' "$COMPOSE_FILE" || fail "Caddy no longer waits for Docker web health"
+grep -Fxq '**/__pycache__/' "$REPOSITORY_ROOT/.dockerignore" \
+    || fail ".dockerignore does not exclude nested Python cache directories"
+grep -Fxq '*.py[cod]' "$REPOSITORY_ROOT/.dockerignore" \
+    || fail ".dockerignore does not exclude Python bytecode"
+grep -Fq '"--exclude=__pycache__"' "$REPOSITORY_ROOT/deploy.ps1" \
+    || fail "Manual release archive does not exclude Python cache directories"
+grep -Fq '"--exclude=*.py[cod]"' "$REPOSITORY_ROOT/deploy.ps1" \
+    || fail "Manual release archive does not exclude Python bytecode"
 
 SOURCE_DIR="$WORK_DIR/source"
 TARGET_DIR="$WORK_DIR/target"
@@ -60,6 +118,69 @@ for target_state in file absent directory; do
     replace_live_code
     assert_regular_file_with_content "$TARGET_DIR/Caddyfile" "new-caddyfile"
 done
+
+# A stale root-owned cache must not block code replacement. The release payload
+# also excludes source-tree bytecode, while .env and persistent data stay intact.
+DOCKER=(mock_cleanup_docker)
+IMAGE_NAME="recipe-budget-service:test"
+printf 'new application code\n' > "$SOURCE_DIR/app/main.py"
+printf 'new script code\n' > "$SOURCE_DIR/scripts/task.py"
+mkdir -p "$SOURCE_DIR/scripts/__pycache__"
+printf 'source cache\n' > "$SOURCE_DIR/scripts/__pycache__/task.cpython-313.pyc"
+printf 'source optimized cache\n' > "$SOURCE_DIR/app/main.pyo"
+printf 'old script code\n' > "$TARGET_DIR/scripts/old.py"
+make_protected_python_cache "$TARGET_DIR/scripts" "home_ai_benchmark_contract.cpython-313.pyc"
+printf 'production-secret\n' > "$TARGET_DIR/.env"
+mkdir -p "$TARGET_DIR/data"
+printf 'persistent-data\n' > "$TARGET_DIR/data/sentinel"
+SOURCE="$SOURCE_DIR"
+TARGET="$TARGET_DIR"
+replace_live_code
+[[ -f "$TARGET_DIR/scripts/task.py" && ! -e "$TARGET_DIR/scripts/old.py" ]] \
+    || fail "Code replacement did not complete after protected bytecode cleanup"
+python_artifacts_absent "$TARGET_DIR/app" || fail "Release copied app bytecode"
+python_artifacts_absent "$TARGET_DIR/scripts" || fail "Release copied script bytecode"
+[[ "$(<"$TARGET_DIR/.env")" == "production-secret" ]] || fail "Code replacement modified .env"
+[[ "$(<"$TARGET_DIR/data/sentinel")" == "persistent-data" ]] \
+    || fail "Code replacement modified persistent data"
+
+# New snapshots omit Python artifacts. Rollback also cleans a stale protected
+# cache and ignores bytecode from a legacy snapshot before restoring code.
+printf 'snapshot application code\n' > "$TARGET_DIR/app/main.py"
+make_protected_python_cache "$TARGET_DIR/app" "main.cpython-313.pyc"
+printf 'standalone optimized cache\n' > "$TARGET_DIR/scripts/stale.pyo"
+CODE_SNAPSHOT="$WORK_DIR/code-snapshot.tar.gz"
+create_code_snapshot "$TARGET_DIR" "$CODE_SNAPSHOT" \
+    app scripts ops Dockerfile docker-compose.yml requirements.txt Caddyfile
+SNAPSHOT_LISTING="$(tar -tzf "$CODE_SNAPSHOT")"
+if grep -Eq '(^|/)__pycache__(/|$)|\.py[cod]$' <<< "$SNAPSHOT_LISTING"; then
+    fail "Deployment snapshot contains Python runtime artifacts"
+fi
+
+LEGACY_SNAPSHOT_SOURCE="$WORK_DIR/legacy-snapshot"
+mkdir -p "$LEGACY_SNAPSHOT_SOURCE/app/__pycache__" "$LEGACY_SNAPSHOT_SOURCE/scripts"
+printf 'rollback application code\n' > "$LEGACY_SNAPSHOT_SOURCE/app/main.py"
+printf 'legacy cache\n' > "$LEGACY_SNAPSHOT_SOURCE/app/__pycache__/main.cpython-313.pyc"
+printf 'legacy optimized cache\n' > "$LEGACY_SNAPSHOT_SOURCE/scripts/legacy.pyo"
+printf 'FROM scratch\n' > "$LEGACY_SNAPSHOT_SOURCE/Dockerfile"
+printf 'services: {}\n' > "$LEGACY_SNAPSHOT_SOURCE/docker-compose.yml"
+printf 'requirements\n' > "$LEGACY_SNAPSHOT_SOURCE/requirements.txt"
+write_caddyfile "$LEGACY_SNAPSHOT_SOURCE" "rollback-caddyfile"
+LEGACY_SNAPSHOT="$WORK_DIR/legacy-code-snapshot.tar.gz"
+tar -czf "$LEGACY_SNAPSHOT" -C "$LEGACY_SNAPSHOT_SOURCE" \
+    app scripts Dockerfile docker-compose.yml requirements.txt Caddyfile
+
+printf 'failed deployment code\n' > "$TARGET_DIR/app/main.py"
+make_protected_python_cache "$TARGET_DIR/scripts" "rollback-stale.cpython-313.pyc"
+restore_code_snapshot "$LEGACY_SNAPSHOT" "$TARGET_DIR"
+[[ "$(<"$TARGET_DIR/app/main.py")" == "rollback application code" ]] \
+    || fail "Rollback did not restore application code"
+assert_regular_file_with_content "$TARGET_DIR/Caddyfile" "rollback-caddyfile"
+python_artifacts_absent "$TARGET_DIR/app" || fail "Rollback restored legacy app bytecode"
+python_artifacts_absent "$TARGET_DIR/scripts" || fail "Rollback restored legacy script bytecode"
+[[ "$(<"$TARGET_DIR/.env")" == "production-secret" ]] || fail "Rollback modified .env"
+[[ "$(<"$TARGET_DIR/data/sentinel")" == "persistent-data" ]] \
+    || fail "Rollback modified persistent data"
 
 # An invalid source must fail before the live Caddyfile is removed.
 BAD_SOURCE="$WORK_DIR/bad-source"

@@ -53,6 +53,9 @@ try {
     Step "Packing source without local data or secrets"
     Run-Cmd "tar.exe" @(
         "-czf", $Archive,
+        "--exclude=__pycache__",
+        "--exclude=*/__pycache__",
+        "--exclude=*.py[cod]",
         "-C", $LocalDir,
         "app", "scripts", "ops", "Dockerfile", "docker-compose.yml", "Caddyfile", "requirements.txt"
     )
