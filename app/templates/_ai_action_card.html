@@ -1,0 +1,34 @@
+<article class="card ai-action-card">
+    <div class="card-head">
+        <div>
+            <h2>{{ action_type_labels.get(action.action_type, 'Действие Home AI') }}</h2>
+            <div class="subline">Действует до {{ action.expires_at|msk_datetime }}</div>
+        </div>
+        <span class="ai-action-status">Ожидает</span>
+    </div>
+    <p class="ai-action-preview">{{ action.preview_text or 'Проверьте действие перед подтверждением.' }}</p>
+    <div class="actions card-actions">
+        <form method="post" action="/ai/actions/{{ action.public_id }}/cancel">
+            <button class="btn secondary" type="submit">Отменить</button>
+        </form>
+        <form method="post" action="/ai/actions/{{ action.public_id }}/confirm">
+            {% if action.action_type == 'expense.create' %}
+            {% set categories = expense_action_categories.get(action.public_id, ()) %}
+            {% if categories %}
+            <label class="ai-action-field">Категория
+                <select name="category_id">
+                    {% for category in categories %}
+                    <option value="{{ category.id }}" {% if category.id == action_payloads[action.public_id].category_id %}selected{% endif %}>{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="ai-remember-category">
+                <input type="checkbox" name="remember_category" value="1">
+                <span>Запомнить выбор</span>
+            </label>
+            {% endif %}
+            {% endif %}
+            <button class="btn" type="submit" {% if action.action_type not in confirmable_types %}disabled title="Обработчик этого действия пока не подключён"{% endif %}>Подтвердить</button>
+        </form>
+    </div>
+</article>

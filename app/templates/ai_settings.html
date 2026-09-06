@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Home AI{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div>
+        <h1>Home AI</h1>
+        <div class="subline">Локальный помощник и доступ к разделам</div>
+    </div>
+    <span class="ai-runtime-state {{ 'available' if backend_ai_enabled else 'disabled' }}">
+        {{ 'AI-сервер настроен' if backend_ai_enabled else 'AI-сервер выключен' }}
+    </span>
+</div>
+
+<section class="card ai-permissions-card">
+    <form method="post" action="/ai/settings" class="form">
+        <label class="ai-master-permission">
+            <input type="checkbox" name="enabled" value="1" {% if ai_settings and ai_settings.enabled %}checked{% endif %}>
+            <span>
+                <b>Использовать Home AI</b>
+                <small>Главный выключатель для этого аккаунта</small>
+            </span>
+        </label>
+
+        <div class="ai-permission-grid">
+            {% for domain, label, description in permission_options %}
+            {% set field_name = permission_fields[domain] %}
+            <label class="ai-permission-option">
+                <input type="checkbox" name="{{ field_name }}" value="1" {% if ai_settings and ai_settings[field_name] %}checked{% endif %}>
+                <span><b>{{ label }}</b><small>{{ description }}</small></span>
+            </label>
+            {% endfor %}
+        </div>
+        <div class="actions"><button class="btn" type="submit">Сохранить доступ</button></div>
+    </form>
+</section>
+
+{% if ai_settings and ai_settings.enabled and ai_settings.allow_finance %}
+<section class="card ai-expense-draft-card">
+    <div class="card-head">
+        <div>
+            <h2>Добавить трату</h2>
+            <div class="subline">Например: Лента 1840 вчера</div>
+        </div>
+    </div>
+    <form method="post" action="/ai/expenses/draft" class="form ai-expense-draft-form">
+        <label>Трата
+            <input name="text" maxlength="500" required placeholder="Магазин, сумма и дата">
+        </label>
+        <div class="form-row">
+            <label>Список трат
+                <select name="expense_list_id">
+                    <option value="">Выбрать автоматически</option>
+                    {% for expense_list in writable_expense_lists %}
+                    <option value="{{ expense_list.id }}">{{ expense_list.title }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Категория
+                <select name="category_id">
+                    <option value="">Подобрать автоматически</option>
+                    {% for category in expense_category_choices %}
+                    <option value="{{ category.id }}">{{ category.expense_list_title }} — {{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <div class="actions"><button class="btn" type="submit">Подготовить трату</button></div>
+    </form>
+</section>
+{% endif %}
+
+<div class="section-title">Ожидают подтверждения</div>
+<div class="ai-action-list">
+    {% for action in pending_actions %}
+        {% include "_ai_action_card.html" %}
+    {% else %}
+        <div class="empty">Нет действий, ожидающих подтверждения</div>
+    {% endfor %}
+</div>
+{% endblock %}

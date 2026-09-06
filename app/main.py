@@ -32,6 +32,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from .ai.router import router as ai_router
 from .auth import get_current_user, get_current_user_optional, hash_password, verify_password
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
@@ -371,6 +372,31 @@ def schema_change_required() -> bool:
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
+        "ai_user_settings": {
+            "user_id",
+            "enabled",
+            "allow_general",
+            "allow_finance",
+            "allow_recipes",
+            "allow_menu",
+            "allow_planner",
+            "allow_wishlist",
+            "allow_chat",
+            "allow_today",
+        },
+        "ai_actions": {
+            "public_id",
+            "owner_id",
+            "action_type",
+            "payload_version",
+            "proposed_payload_json",
+            "confirmed_payload_json",
+            "status",
+            "expires_at",
+            "claim_token",
+            "claimed_at",
+            "resolved_at",
+        },
     }
     for table_name, columns in required_columns.items():
         if table_name in existing_tables:
@@ -448,6 +474,12 @@ def ensure_runtime_schema() -> None:
         for column_name, column_sql in wishlist_defaults.items():
             if wishlist_columns and column_name not in wishlist_columns:
                 connection.exec_driver_sql(f"ALTER TABLE wishlist_items ADD COLUMN {column_name} {column_sql}")
+
+        ai_action_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(ai_actions)").fetchall()]
+        if ai_action_columns and "claim_token" not in ai_action_columns:
+            connection.exec_driver_sql("ALTER TABLE ai_actions ADD COLUMN claim_token VARCHAR(36)")
+        if ai_action_columns and "claimed_at" not in ai_action_columns:
+            connection.exec_driver_sql("ALTER TABLE ai_actions ADD COLUMN claimed_at DATETIME")
 
 
 def on_startup() -> None:
@@ -5535,3 +5567,4 @@ def import_data_json(
 
 
 app.include_router(system_router)
+app.include_router(ai_router)

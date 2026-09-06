@@ -1,7 +1,19 @@
+import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -32,6 +44,75 @@ class User(Base):
     cooking_timers: Mapped[list["RecipeCookingTimer"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     moments: Mapped[list["Moment"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     planner_items: Mapped[list["PlannerItem"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    ai_settings: Mapped["AIUserSettings | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    ai_actions: Mapped[list["AIAction"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+
+
+class AIUserSettings(Base):
+    __tablename__ = "ai_user_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_general: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_finance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_recipes: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_menu: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_planner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_wishlist: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_chat: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_today: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
+        nullable=False,
+    )
+
+    user: Mapped[User] = relationship(back_populates="ai_settings")
+
+
+class AIAction(Base):
+    __tablename__ = "ai_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'cancelled', 'expired', 'failed')",
+            name="ck_ai_action_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    public_id: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid.uuid4()), unique=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    action_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    payload_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    proposed_payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    confirmed_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preview_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    result_entity_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    result_entity_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
+        nullable=False,
+    )
+
+    owner: Mapped[User] = relationship(back_populates="ai_actions")
 
 
 class Recipe(Base):
@@ -213,6 +294,27 @@ class ExpenseItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
 
     category: Mapped[ExpenseCategory] = relationship(back_populates="items")
+
+
+class ExpenseMerchantRule(Base):
+    __tablename__ = "expense_merchant_rules"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "expense_list_id", "merchant_key", name="uq_expense_merchant_rule"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    expense_list_id: Mapped[int] = mapped_column(ForeignKey("expense_lists.id"), nullable=False, index=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("expense_categories.id"), nullable=False, index=True)
+    merchant_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    use_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
+        nullable=False,
+    )
 
 
 class IncomeItem(Base):
