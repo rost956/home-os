@@ -8,6 +8,7 @@ schema. The benchmark never executes the selected tool.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 ALLOWED_INTENTS = (
@@ -27,6 +28,103 @@ ALLOWED_TOOLS = (
 
 SYNTHETIC_RECIPE_IDS = frozenset({101, 102, 103})
 DIAGNOSTIC_SEED = 6500
+DIAGNOSTIC_MAX_TOKENS = 256
+
+
+@dataclass(frozen=True)
+class StructuredDiagnosticCase:
+    name: str
+    prompt: str
+    intent: str
+    tool: str
+    required_arguments: dict[str, Any]
+    allowed_ids: frozenset[int] = frozenset()
+    minimum_ids: int = 0
+
+    @property
+    def expected(self) -> dict[str, Any]:
+        expected: dict[str, Any] = {
+            "intent": self.intent,
+            "tool": self.tool,
+            "arguments": self.required_arguments,
+        }
+        if not self.allowed_ids:
+            expected["referenced_ids"] = []
+        return expected
+
+
+EXPENSE_DRAFT_CASE = StructuredDiagnosticCase(
+    "expense_parse_read_only",
+    "Лента 1840 вчера",
+    "expense_draft",
+    "expense.create_draft",
+    {"merchant": "Лента", "amount": 1840, "date_hint": "вчера"},
+)
+EXPENSE_DRAFT_TODAY_CASE = StructuredDiagnosticCase(
+    "expense_parse_today_read_only",
+    "Бензин 2600 сегодня",
+    "expense_draft",
+    "expense.create_draft",
+    {"merchant": "Бензин", "amount": 2600, "date_hint": "сегодня"},
+)
+FINANCE_SUMMARY_CASE = StructuredDiagnosticCase(
+    "finance_read_only",
+    "Сколько я потратил в этом месяце?",
+    "finance_question",
+    "finance.summary",
+    {"period": "current_month"},
+)
+FINANCE_COMPARISON_CASE = StructuredDiagnosticCase(
+    "finance_comparison_read_only",
+    "Почему расходы выросли?",
+    "finance_question",
+    "finance.comparison",
+    {"period": "current_month"},
+)
+RECIPE_RECOMMENDATION_CASE = StructuredDiagnosticCase(
+    "recipe_read_only",
+    "Что приготовить максимум за 40 минут?",
+    "recipe_query",
+    "recipes.recommend",
+    {"max_minutes": 40},
+    SYNTHETIC_RECIPE_IDS,
+    1,
+)
+LOW_COST_RECIPE_CASE = StructuredDiagnosticCase(
+    "low_cost_recipe_read_only",
+    "Выбери недорогой рецепт из наших",
+    "recipe_query",
+    "recipes.recommend",
+    {"budget": "low"},
+    SYNTHETIC_RECIPE_IDS,
+    1,
+)
+MENU_PROPOSAL_CASE = StructuredDiagnosticCase(
+    "menu_proposal_no_write",
+    "Составь меню на три дня без повторов",
+    "menu_proposal",
+    "menu.propose",
+    {"days": 3, "no_repeats": True},
+    SYNTHETIC_RECIPE_IDS,
+    3,
+)
+
+BENCHMARK_CASES = (
+    EXPENSE_DRAFT_CASE,
+    EXPENSE_DRAFT_TODAY_CASE,
+    FINANCE_SUMMARY_CASE,
+    FINANCE_COMPARISON_CASE,
+    RECIPE_RECOMMENDATION_CASE,
+    LOW_COST_RECIPE_CASE,
+    MENU_PROPOSAL_CASE,
+)
+
+SMOKE_ROUTING_CASES = (
+    EXPENSE_DRAFT_CASE,
+    FINANCE_SUMMARY_CASE,
+    RECIPE_RECOMMENDATION_CASE,
+    MENU_PROPOSAL_CASE,
+)
 
 ROUTING_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -154,3 +252,26 @@ def routing_response_schema(
 def routing_response_format(schema: dict[str, Any] = ROUTING_RESPONSE_SCHEMA) -> dict[str, Any]:
     """Return llama.cpp's schema-constrained response_format payload."""
     return {"type": "json_schema", "schema": schema}
+
+
+def structured_diagnostic_request(model: str, case: StructuredDiagnosticCase) -> dict[str, Any]:
+    """Build the canonical read-only routing request used by smoke and benchmark."""
+    schema = routing_response_schema(
+        allowed_ids=case.allowed_ids,
+        minimum_ids=case.minimum_ids,
+    )
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": ROUTING_SYSTEM_PROMPT},
+            {"role": "user", "content": case.prompt},
+        ],
+        "temperature": 0.0,
+        "seed": DIAGNOSTIC_SEED,
+        "cache_prompt": False,
+        "max_tokens": DIAGNOSTIC_MAX_TOKENS,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "chat_template_kwargs": {"enable_thinking": False},
+        "response_format": routing_response_format(schema),
+    }

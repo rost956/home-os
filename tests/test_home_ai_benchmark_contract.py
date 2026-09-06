@@ -9,11 +9,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import home_ai_runtime_smoke as runtime_smoke  # noqa: E402
 from home_ai_benchmark import CASES, _grade, _print_case_result, _prompt_case  # noqa: E402
 from home_ai_benchmark_contract import (  # noqa: E402
     ALLOWED_INTENTS,
     ALLOWED_TOOLS,
+    DIAGNOSTIC_MAX_TOKENS,
     DIAGNOSTIC_SEED,
+    MENU_PROPOSAL_CASE,
+    RECIPE_RECOMMENDATION_CASE,
     ROUTING_RESPONSE_SCHEMA,
     ROUTING_SYSTEM_PROMPT,
     SYNTHETIC_RECIPE_IDS,
@@ -27,6 +31,8 @@ from home_ai_runtime_smoke import (  # noqa: E402
     SmokeFailure,
     _assert_case,
     _chat_payload,
+    _debug_record,
+    _print_debug_record,
 )
 
 
@@ -148,7 +154,7 @@ def test_smoke_schema_cases_disable_thinking_and_use_schema_constraints():
         assert payload["response_format"]["type"] == "json_schema"
 
     expense_case = next(case for case in SMOKE_CASES if case.name == "expense_parse_read_only")
-    assert expense_case.system == ROUTING_SYSTEM_PROMPT
+    assert _chat_payload("test-model", expense_case)["messages"][0]["content"] == ROUTING_SYSTEM_PROMPT
     assert expense_case.expected == {
         "intent": "expense_draft",
         "tool": "expense.create_draft",
@@ -193,13 +199,14 @@ def test_selection_smoke_rejects_empty_required_referenced_ids(case_name: str):
 @pytest.mark.parametrize("case_name", ["recipe_read_only", "menu_proposal_no_write"])
 def test_selection_smoke_accepts_existing_referenced_id(case_name: str):
     case = next(case for case in SMOKE_CASES if case.name == case_name)
+    selected_ids = sorted(case.allowed_ids)[: case.minimum_ids]
 
-    parsed = _assert_case(case, _selection_smoke_response(case_name, [101]))
+    parsed = _assert_case(case, _selection_smoke_response(case_name, selected_ids))
 
     assert parsed is not None
-    assert parsed["referenced_ids"] == [101]
+    assert parsed["referenced_ids"] == selected_ids
     assert case.allowed_ids is SYNTHETIC_RECIPE_IDS
-    assert case.system == ROUTING_SYSTEM_PROMPT
+    assert case.diagnostic_case is not None
 
 
 @pytest.mark.parametrize("case_name", ["recipe_read_only", "menu_proposal_no_write"])
@@ -216,15 +223,15 @@ def test_shared_selection_contract_is_used_by_smoke_and_benchmark():
     assert "никогда не придумывай ID" in ROUTING_SYSTEM_PROMPT
     for index, case in enumerate(CASES, start=1):
         prompt_case = _prompt_case(index, case)
-        assert prompt_case.system == ROUTING_SYSTEM_PROMPT
+        assert prompt_case.diagnostic_case is case
         assert prompt_case.allowed_ids is case.allowed_ids
-        referenced_ids_schema = prompt_case.response_schema["properties"]["referenced_ids"]
+        payload = _chat_payload("test-model", prompt_case)
+        referenced_ids_schema = payload["response_format"]["schema"]["properties"]["referenced_ids"]
         if case.allowed_ids:
             assert referenced_ids_schema["minItems"] == case.minimum_ids
             assert referenced_ids_schema["items"]["enum"] == sorted(case.allowed_ids)
         else:
             assert referenced_ids_schema["maxItems"] == 0
-        payload = _chat_payload("test-model", prompt_case)
         assert payload["temperature"] == 0
         assert payload["seed"] == DIAGNOSTIC_SEED
         assert payload["cache_prompt"] is False
@@ -251,12 +258,84 @@ def test_smoke_failures_distinguish_routing_arguments_and_ids():
         _assert_case(recipe_case, json.dumps(wrong_arguments))
 
 
-def test_menu_smoke_prompt_still_requires_read_only_existing_recipe_choice():
-    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+@pytest.mark.parametrize("shared_case", [RECIPE_RECOMMENDATION_CASE, MENU_PROPOSAL_CASE])
+def test_smoke_and_benchmark_requests_are_identical_for_equivalent_cases(shared_case):
+    smoke_case = next(case for case in SMOKE_CASES if case.name == shared_case.name)
+    benchmark_case = _prompt_case(CASES.index(shared_case) + 1, shared_case)
 
-    parsed = _assert_case(menu_case, _selection_smoke_response(menu_case.name, [101]))
+    smoke_payload = _chat_payload("test-model", smoke_case)
+    benchmark_payload = _chat_payload("test-model", benchmark_case)
 
-    assert parsed is not None
-    assert "101 Овощной суп" in menu_case.system
-    assert "Выбери существующий рецепт" in menu_case.user
-    assert "не подтверждай, не применяй и не записывай" in menu_case.user
+    assert smoke_payload == benchmark_payload
+    for key in ("messages", "response_format", "temperature", "seed", "max_tokens"):
+        assert smoke_payload[key] == benchmark_payload[key]
+    assert smoke_payload["chat_template_kwargs"] == benchmark_payload["chat_template_kwargs"]
+    assert smoke_payload["max_tokens"] == DIAGNOSTIC_MAX_TOKENS
+
+
+def test_debug_record_has_sizes_hash_timings_response_and_no_api_key(capsys: pytest.CaptureFixture[str]):
+    menu_case = next(case for case in SMOKE_CASES if case.name == MENU_PROPOSAL_CASE.name)
+    payload = _chat_payload("test-model", menu_case)
+    payload["api_key"] = "must-not-leak"
+    metrics = {
+        "prompt_processing_seconds": 51.2,
+        "generation_seconds": 4.1,
+        "cached_prompt_tokens": 0,
+        "cache_status": "miss",
+    }
+    response = {
+        **MENU_PROPOSAL_CASE.expected,
+        "referenced_ids": sorted(MENU_PROPOSAL_CASE.allowed_ids),
+    }
+
+    record = _debug_record(menu_case.name, payload, metrics, response)
+    _print_debug_record(menu_case.name, payload, metrics, response)
+    output = capsys.readouterr().out
+
+    assert record["case"] == "menu_proposal_no_write"
+    assert record["prompt_character_count"] > 0
+    assert record["json_schema_character_count"] > 0
+    assert len(record["messages_schema_sha256"]) == 64
+    assert record["timings"] == metrics
+    assert record["actual_response"] == response
+    assert "must-not-leak" not in output
+    assert "api_key" not in output
+
+
+def test_stream_metrics_separate_prompt_generation_and_cache(monkeypatch: pytest.MonkeyPatch):
+    class FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def __iter__(self):
+            event = {
+                "choices": [{"delta": {"content": '{"status":"ok","count":2}'}}],
+                "usage": {"prompt_tokens": 900, "completion_tokens": 12},
+                "timings": {
+                    "cache_n": 0,
+                    "prompt_n": 900,
+                    "prompt_ms": 51200.0,
+                    "prompt_per_second": 17.578,
+                    "predicted_n": 12,
+                    "predicted_ms": 4100.0,
+                    "predicted_per_second": 2.927,
+                },
+            }
+            yield ("data: " + json.dumps(event) + "\n").encode()
+            yield b"data: [DONE]\n"
+
+    monkeypatch.setattr(runtime_smoke.urllib.request, "urlopen", lambda *_args, **_kwargs: FakeStream())
+    case = next(case for case in SMOKE_CASES if case.name == "structured_json")
+
+    content, metrics = runtime_smoke._stream_chat("http://test/v1", "test-model", None, 1.0, case)
+
+    assert json.loads(content) == {"status": "ok", "count": 2}
+    assert metrics["prompt_processing_seconds"] == 51.2
+    assert metrics["generation_seconds"] == 4.1
+    assert metrics["cached_prompt_tokens"] == 0
+    assert metrics["cache_status"] == "miss"
+    assert metrics["prompt_tokens_per_second"] == 17.578
+    assert metrics["tokens_per_second"] == 2.927

@@ -8,6 +8,7 @@ parsers and assertions without contacting a model or systemd.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -20,11 +21,12 @@ from pathlib import Path
 from typing import Any
 
 from home_ai_benchmark_contract import (
+    DIAGNOSTIC_MAX_TOKENS,
     DIAGNOSTIC_SEED,
-    ROUTING_SYSTEM_PROMPT,
-    SYNTHETIC_RECIPE_IDS,
+    SMOKE_ROUTING_CASES,
+    StructuredDiagnosticCase,
     routing_response_format,
-    routing_response_schema,
+    structured_diagnostic_request,
 )
 
 
@@ -41,6 +43,19 @@ class PromptCase:
     allowed_ids: frozenset[int] = frozenset()
     minimum_ids: int = 0
     response_schema: dict[str, Any] | None = None
+    diagnostic_case: StructuredDiagnosticCase | None = None
+
+    @classmethod
+    def from_diagnostic(cls, case: StructuredDiagnosticCase) -> PromptCase:
+        return cls(
+            name=case.name,
+            system="",
+            user="",
+            expected=case.expected,
+            allowed_ids=case.allowed_ids,
+            minimum_ids=case.minimum_ids,
+            diagnostic_case=case,
+        )
 
 
 STATUS_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -67,65 +82,7 @@ CASES = (
         expected={"status": "ok", "count": 2},
         response_schema=STATUS_RESPONSE_SCHEMA,
     ),
-    PromptCase(
-        name="expense_parse_read_only",
-        system=ROUTING_SYSTEM_PROMPT,
-        user="Лента 1840 вчера",
-        expected={
-            "intent": "expense_draft",
-            "tool": "expense.create_draft",
-            "arguments": {"merchant": "Лента", "amount": 1840, "date_hint": "вчера"},
-            "referenced_ids": [],
-        },
-        response_schema=routing_response_schema(),
-    ),
-    PromptCase(
-        name="finance_read_only",
-        system=ROUTING_SYSTEM_PROMPT,
-        user="Сколько я потратил в этом месяце?",
-        expected={
-            "intent": "finance_question",
-            "tool": "finance.summary",
-            "arguments": {"period": "current_month"},
-            "referenced_ids": [],
-        },
-        response_schema=routing_response_schema(),
-    ),
-    PromptCase(
-        name="recipe_read_only",
-        system=ROUTING_SYSTEM_PROMPT,
-        user="Выбери рецепт максимум за 40 минут",
-        expected={
-            "intent": "recipe_query",
-            "tool": "recipes.recommend",
-            "arguments": {"max_minutes": 40},
-        },
-        allowed_ids=SYNTHETIC_RECIPE_IDS,
-        minimum_ids=1,
-        response_schema=routing_response_schema(
-            allowed_ids=SYNTHETIC_RECIPE_IDS,
-            minimum_ids=1,
-        ),
-    ),
-    PromptCase(
-        name="menu_proposal_no_write",
-        system=ROUTING_SYSTEM_PROMPT,
-        user=(
-            "Составь меню на один день без повторов из доступных рецептов. "
-            "Выбери существующий рецепт, но не подтверждай, не применяй и не записывай меню."
-        ),
-        expected={
-            "intent": "menu_proposal",
-            "tool": "menu.propose",
-            "arguments": {"days": 1, "no_repeats": True},
-        },
-        allowed_ids=SYNTHETIC_RECIPE_IDS,
-        minimum_ids=1,
-        response_schema=routing_response_schema(
-            allowed_ids=SYNTHETIC_RECIPE_IDS,
-            minimum_ids=1,
-        ),
-    ),
+    *(PromptCase.from_diagnostic(case) for case in SMOKE_ROUTING_CASES),
 )
 
 
@@ -166,6 +123,9 @@ def _request_json(
 
 
 def _chat_payload(model: str, case: PromptCase) -> dict[str, Any]:
+    if case.diagnostic_case is not None:
+        return structured_diagnostic_request(model, case.diagnostic_case)
+
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -175,7 +135,7 @@ def _chat_payload(model: str, case: PromptCase) -> dict[str, Any]:
         "temperature": 0.0,
         "seed": DIAGNOSTIC_SEED,
         "cache_prompt": False,
-        "max_tokens": 256,
+        "max_tokens": DIAGNOSTIC_MAX_TOKENS,
         "stream": True,
         "stream_options": {"include_usage": True},
         "chat_template_kwargs": {"enable_thinking": False},
@@ -185,6 +145,54 @@ def _chat_payload(model: str, case: PromptCase) -> dict[str, Any]:
     elif case.expected is not None:
         payload["response_format"] = {"type": "json_object"}
     return payload
+
+
+def _debug_record(
+    case_name: str,
+    payload: dict[str, Any],
+    metrics: dict[str, Any],
+    response: Any,
+) -> dict[str, Any]:
+    messages = payload.get("messages", [])
+    schema = payload.get("response_format", {}).get("schema", {})
+    serialized_contract = json.dumps(
+        {"messages": messages, "schema": schema},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    options = {
+        "model": payload.get("model"),
+        "temperature": payload.get("temperature"),
+        "seed": payload.get("seed"),
+        "cache_prompt": payload.get("cache_prompt"),
+        "max_tokens": payload.get("max_tokens"),
+        "stream": payload.get("stream"),
+        "enable_thinking": payload.get("chat_template_kwargs", {}).get("enable_thinking"),
+        "response_format_type": payload.get("response_format", {}).get("type"),
+    }
+    return {
+        "case": case_name,
+        "request_options": options,
+        "prompt_character_count": sum(
+            len(message.get("content", "")) for message in messages if isinstance(message, dict)
+        ),
+        "json_schema_character_count": len(
+            json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        ),
+        "messages_schema_sha256": hashlib.sha256(serialized_contract.encode("utf-8")).hexdigest(),
+        "timings": metrics,
+        "actual_response": response,
+    }
+
+
+def _print_debug_record(
+    case_name: str,
+    payload: dict[str, Any],
+    metrics: dict[str, Any],
+    response: Any,
+) -> None:
+    print("DEBUG " + json.dumps(_debug_record(case_name, payload, metrics, response), ensure_ascii=False))
 
 
 def _stream_chat(
@@ -236,11 +244,25 @@ def _stream_chat(
     content = "".join(pieces).strip()
     if not content:
         raise SmokeFailure(f"chat case {case.name} returned empty content")
+    prompt_ms = timings.get("prompt_ms")
+    predicted_ms = timings.get("predicted_ms")
+    cached_prompt_tokens = timings.get("cache_n")
+    if cached_prompt_tokens is None:
+        cached_prompt_tokens = usage.get("prompt_tokens_details", {}).get("cached_tokens")
     metrics = {
         "first_token_seconds": first_token_seconds,
         "total_seconds": round(total_seconds, 3),
         "prompt_tokens": usage.get("prompt_tokens", timings.get("prompt_n")),
+        "cached_prompt_tokens": cached_prompt_tokens,
+        "cache_status": (
+            "hit" if isinstance(cached_prompt_tokens, int) and cached_prompt_tokens > 0 else
+            "miss" if cached_prompt_tokens == 0 else
+            "unknown"
+        ),
+        "prompt_processing_seconds": round(prompt_ms / 1000, 3) if isinstance(prompt_ms, int | float) else None,
+        "prompt_tokens_per_second": timings.get("prompt_per_second"),
         "generated_tokens": usage.get("completion_tokens", timings.get("predicted_n")),
+        "generation_seconds": round(predicted_ms / 1000, 3) if isinstance(predicted_ms, int | float) else None,
         "tokens_per_second": timings.get("predicted_per_second"),
     }
     return content, metrics
@@ -295,7 +317,7 @@ def _assert_case(case: PromptCase, content: str) -> dict[str, Any] | None:
             )
     if case.allowed_ids:
         recipe_ids = parsed.get("referenced_ids")
-        if not isinstance(recipe_ids, list) or len(recipe_ids) < case.minimum_ids:
+        if not isinstance(recipe_ids, list):
             raise SmokeFailure(
                 f"{case.name}: missing IDs; expected at least {case.minimum_ids} from "
                 f"{sorted(case.allowed_ids)}; actual={actual_json}"
@@ -305,6 +327,11 @@ def _assert_case(case: PromptCase, content: str) -> dict[str, Any] | None:
             raise SmokeFailure(
                 f"{case.name}: invented IDs; allowed={sorted(case.allowed_ids)}; "
                 f"invented={invented_ids!r}; actual={actual_json}"
+            )
+        if len(recipe_ids) < case.minimum_ids:
+            raise SmokeFailure(
+                f"{case.name}: missing IDs; expected at least {case.minimum_ids} from "
+                f"{sorted(case.allowed_ids)}; actual={actual_json}"
             )
         if len(recipe_ids) != len(set(recipe_ids)):
             raise SmokeFailure(f"{case.name}: duplicate IDs; actual={actual_json}")
@@ -391,6 +418,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--skip-systemd", action="store_true")
     parser.add_argument("--skip-container", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()
 
@@ -423,6 +451,12 @@ def main() -> int:
     }
     for case in CASES:
         content, metrics = _stream_chat(base_url, args.model, api_key, args.timeout, case)
+        try:
+            debug_response: Any = json.loads(content)
+        except json.JSONDecodeError:
+            debug_response = content
+        if args.debug:
+            _print_debug_record(case.name, _chat_payload(args.model, case), metrics, debug_response)
         parsed = _assert_case(case, content)
         case_report = {
             "name": case.name,

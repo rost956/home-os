@@ -253,6 +253,9 @@ read-only контракт, что benchmark: фиксированные `intent
 фиксированный RNG seed и отключённый prompt cache, чтобы повторные прогоны были
 сопоставимыми. Это детерминированный test profile; он намеренно не имитирует
 production sampling temperature и не меняет production-настройки Home AI.
+Флаг `--debug` печатает без API key параметры запроса, размеры prompt/schema,
+SHA-256 сериализованных messages/schema, ответ и доступные server timings:
+`prompt_ms`, `predicted_ms`, token rate и `cache_n` (cache hit/miss).
 
 ```bash
 cd /opt/recipe_budget_service

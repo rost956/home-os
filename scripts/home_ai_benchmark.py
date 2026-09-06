@@ -7,86 +7,27 @@ import argparse
 import json
 import statistics
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from home_ai_benchmark_contract import (
     ALLOWED_INTENTS,
     ALLOWED_TOOLS,
-    ROUTING_SYSTEM_PROMPT,
+    BENCHMARK_CASES,
     SYNTHETIC_RECIPE_IDS,
-    routing_response_schema,
+    StructuredDiagnosticCase,
 )
 from home_ai_runtime_smoke import (
     PromptCase,
     SmokeFailure,
+    _chat_payload,
     _memory_metrics,
+    _print_debug_record,
     _read_api_key,
     _stream_chat,
 )
 
-
-@dataclass(frozen=True)
-class BenchmarkCase:
-    prompt: str
-    intent: str
-    tool: str
-    required_arguments: dict[str, Any]
-    allowed_ids: frozenset[int] = frozenset()
-    minimum_ids: int = 0
-
-
-CASES = (
-    BenchmarkCase(
-        "Лента 1840 вчера",
-        "expense_draft",
-        "expense.create_draft",
-        {"merchant": "Лента", "amount": 1840, "date_hint": "вчера"},
-    ),
-    BenchmarkCase(
-        "Бензин 2600 сегодня",
-        "expense_draft",
-        "expense.create_draft",
-        {"merchant": "Бензин", "amount": 2600, "date_hint": "сегодня"},
-    ),
-    BenchmarkCase(
-        "Сколько я потратил в этом месяце?",
-        "finance_question",
-        "finance.summary",
-        {"period": "current_month"},
-    ),
-    BenchmarkCase(
-        "Почему расходы выросли?",
-        "finance_question",
-        "finance.comparison",
-        {"period": "current_month"},
-    ),
-    BenchmarkCase(
-        "Что приготовить максимум за 40 минут?",
-        "recipe_query",
-        "recipes.recommend",
-        {"max_minutes": 40},
-        SYNTHETIC_RECIPE_IDS,
-        1,
-    ),
-    BenchmarkCase(
-        "Выбери недорогой рецепт из наших",
-        "recipe_query",
-        "recipes.recommend",
-        {"budget": "low"},
-        SYNTHETIC_RECIPE_IDS,
-        1,
-    ),
-    BenchmarkCase(
-        "Составь меню на три дня без повторов",
-        "menu_proposal",
-        "menu.propose",
-        {"days": 3, "no_repeats": True},
-        SYNTHETIC_RECIPE_IDS,
-        3,
-    ),
-)
+CASES = BENCHMARK_CASES
 
 
 def _is_integer(value: Any) -> bool:
@@ -139,7 +80,7 @@ def _valid_contract_shape(payload: Any) -> bool:
     )
 
 
-def _grade(case: BenchmarkCase, content: str) -> tuple[dict[str, bool], dict[str, Any] | None]:
+def _grade(case: StructuredDiagnosticCase, content: str) -> tuple[dict[str, bool], dict[str, Any] | None]:
     scores = {
         "valid_structured_output": False,
         "correct_intent": False,
@@ -176,7 +117,7 @@ def _grade(case: BenchmarkCase, content: str) -> tuple[dict[str, bool], dict[str
 
 def _print_case_result(
     index: int,
-    case: BenchmarkCase,
+    case: StructuredDiagnosticCase,
     scores: dict[str, bool],
     payload: Any,
     raw_content: str,
@@ -268,19 +209,9 @@ def _mock_report() -> dict[str, Any]:
     return report
 
 
-def _prompt_case(index: int, case: BenchmarkCase) -> PromptCase:
-    return PromptCase(
-        name=f"benchmark_{index}",
-        system=ROUTING_SYSTEM_PROMPT,
-        user=case.prompt,
-        expected={},
-        allowed_ids=case.allowed_ids,
-        minimum_ids=case.minimum_ids,
-        response_schema=routing_response_schema(
-            allowed_ids=case.allowed_ids,
-            minimum_ids=case.minimum_ids,
-        ),
-    )
+def _prompt_case(index: int, case: StructuredDiagnosticCase) -> PromptCase:
+    del index
+    return PromptCase.from_diagnostic(case)
 
 
 def main() -> int:
@@ -294,6 +225,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("REPORT_A", "REPORT_B"))
     parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     if args.compare:
@@ -309,6 +241,7 @@ def main() -> int:
                 args.base_url.rstrip("/"), args.model, api_key, args.timeout, prompt_case
             )
             scores, parsed = _grade(case, content)
+            combined_metrics = {**metrics, **_memory_metrics(args.service)}
             report["cases"].append(
                 {
                     "prompt": case.prompt,
@@ -320,9 +253,16 @@ def main() -> int:
                     },
                     "response": parsed if parsed is not None else content,
                     "scores": scores,
-                    "metrics": {**metrics, **_memory_metrics(args.service)},
+                    "metrics": combined_metrics,
                 }
             )
+            if args.debug:
+                _print_debug_record(
+                    prompt_case.name,
+                    _chat_payload(args.model, prompt_case),
+                    combined_metrics,
+                    parsed if parsed is not None else content,
+                )
             _print_case_result(index, case, scores, parsed, content)
         report["summary"] = _aggregate(report)
 
