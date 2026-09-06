@@ -245,6 +245,11 @@ OS, открыть `/ai/settings`, проверить статус runtime и в
 first-token/total latency, token counts/tokens per second (если сервер прислал),
 RSS llama-server и свободная память системы.
 
+Для schema-задач smoke передаёт `thinking=false`, JSON Schema и тот же явный
+read-only контракт, что benchmark: фиксированные `intent`, `tool`, имена
+аргументов и enum-значения надо копировать буквально. Ошибка выводит фактически
+возвращённый JSON, чтобы отличить выбор неверного маршрута от нарушения схемы.
+
 ```bash
 cd /opt/recipe_budget_service
 sudo python3 scripts/home_ai_runtime_smoke.py \
@@ -262,8 +267,21 @@ smoke можно выполнить без `sudo`.
 ## 8. Benchmark 4B против 2B
 
 Benchmark использует одинаковые семь русских prompts и только синтетические ID.
-Он оценивает valid JSON, intent/tool, arguments, отсутствие выдуманных ID,
-latency и RAM. Он не выбирает победителя автоматически.
+Перед каждым запросом модель получает полный закрытый контракт: четыре допустимых
+`intent`, пять `tool`, точную JSON Schema, разрешённые аргументы и enum-значения,
+правила для короткой записи расхода и различие между `finance.summary` и
+`finance.comparison`. Имена этого диагностического контракта синтетические и не
+меняют production-промпты или инструменты Home AI. Benchmark ничего не записывает,
+не выполняет выбранный tool и не выбирает победителя автоматически.
+
+Результат оценивается строго и раздельно: `correct_intent`, `correct_tool`,
+`correct_arguments`, `valid_structured_output` и `no_invented_ids`. Если
+`correct_tool=false`, это routing failure. Если tool выбран верно, но intent или
+arguments не совпали буквально, это contract/schema-name failure. Нарушение
+JSON Schema отражается в `valid_structured_output=false`, а использование ID вне
+выданного синтетического набора — в `no_invented_ids=false`. Для любого провала
+скрипт печатает ожидаемые и фактические intent/tool/arguments; строгую проверку
+не следует смягчать для улучшения результата.
 
 Сначала запустить 4B:
 

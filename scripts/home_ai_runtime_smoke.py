@@ -19,6 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from home_ai_benchmark_contract import (
+    ROUTING_RESPONSE_SCHEMA,
+    ROUTING_SYSTEM_PROMPT,
+    routing_response_format,
+)
+
 
 class SmokeFailure(RuntimeError):
     pass
@@ -31,6 +37,19 @@ class PromptCase:
     user: str
     expected: dict[str, Any] | None = None
     allowed_ids: frozenset[int] = frozenset()
+    minimum_ids: int = 0
+    response_schema: dict[str, Any] | None = None
+
+
+STATUS_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "count"],
+    "properties": {
+        "status": {"type": "string", "enum": ["ok"]},
+        "count": {"type": "integer", "enum": [2]},
+    },
+}
 
 
 CASES = (
@@ -44,51 +63,57 @@ CASES = (
         system='Верни только JSON: {"status":"ok","count":2}.',
         user="Сформируй тестовый структурированный ответ.",
         expected={"status": "ok", "count": 2},
+        response_schema=STATUS_RESPONSE_SCHEMA,
     ),
     PromptCase(
         name="expense_parse_read_only",
-        system=(
-            "Разбери черновик расхода без записи данных. Верни только JSON с полями "
-            "intent, merchant, amount, date_hint, write_performed."
-        ),
+        system=ROUTING_SYSTEM_PROMPT,
         user="Лента 1840 вчера",
         expected={
             "intent": "expense_draft",
-            "merchant": "Лента",
-            "amount": 1840,
-            "date_hint": "вчера",
-            "write_performed": False,
+            "tool": "expense.create_draft",
+            "arguments": {"merchant": "Лента", "amount": 1840, "date_hint": "вчера"},
+            "referenced_ids": [],
         },
+        response_schema=ROUTING_RESPONSE_SCHEMA,
     ),
     PromptCase(
         name="finance_read_only",
-        system=(
-            "Классифицируй вопрос Home OS без доступа к данным. Верни только JSON с полями "
-            "intent и write_performed."
-        ),
+        system=ROUTING_SYSTEM_PROMPT,
         user="Сколько я потратил в этом месяце?",
-        expected={"intent": "finance_summary", "write_performed": False},
+        expected={
+            "intent": "finance_question",
+            "tool": "finance.summary",
+            "arguments": {"period": "current_month"},
+            "referenced_ids": [],
+        },
+        response_schema=ROUTING_RESPONSE_SCHEMA,
     ),
     PromptCase(
         name="recipe_read_only",
-        system=(
-            "Доступные рецепты: [{\"id\":101,\"title\":\"Овощной суп\",\"minutes\":35},"
-            "{\"id\":102,\"title\":\"Каша\",\"minutes\":15}]. Верни только JSON с полями "
-            "intent, recipe_ids, write_performed. Используй только данные ID."
-        ),
-        user="Выбери недорогой рецепт максимум за 40 минут",
-        expected={"intent": "recipe_query", "write_performed": False},
-        allowed_ids=frozenset({101, 102}),
+        system=ROUTING_SYSTEM_PROMPT,
+        user="Выбери рецепт максимум за 40 минут",
+        expected={
+            "intent": "recipe_query",
+            "tool": "recipes.recommend",
+            "arguments": {"max_minutes": 40},
+        },
+        allowed_ids=frozenset({101, 102, 103}),
+        minimum_ids=1,
+        response_schema=ROUTING_RESPONSE_SCHEMA,
     ),
     PromptCase(
         name="menu_proposal_no_write",
-        system=(
-            "Доступные рецепты имеют ID 101 и 102. Предложи один рецепт на ужин без записи данных. "
-            "Верни только JSON с полями intent, recipe_ids, write_performed. Используй только данные ID."
-        ),
-        user="Предложи меню на завтра без подтверждения",
-        expected={"intent": "menu_proposal", "write_performed": False},
-        allowed_ids=frozenset({101, 102}),
+        system=ROUTING_SYSTEM_PROMPT,
+        user="Предложи меню на один день без повторов, без подтверждения и записи",
+        expected={
+            "intent": "menu_proposal",
+            "tool": "menu.propose",
+            "arguments": {"days": 1, "no_repeats": True},
+        },
+        allowed_ids=frozenset({101, 102, 103}),
+        minimum_ids=1,
+        response_schema=ROUTING_RESPONSE_SCHEMA,
     ),
 )
 
@@ -129,13 +154,7 @@ def _request_json(
     return result
 
 
-def _stream_chat(
-    base_url: str,
-    model: str,
-    api_key: str | None,
-    timeout: float,
-    case: PromptCase,
-) -> tuple[str, dict[str, Any]]:
+def _chat_payload(model: str, case: PromptCase) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -148,8 +167,25 @@ def _stream_chat(
         "stream_options": {"include_usage": True},
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    if case.expected is not None:
+    if case.response_schema is not None:
+        payload["response_format"] = (
+            routing_response_format()
+            if case.response_schema is ROUTING_RESPONSE_SCHEMA
+            else {"type": "json_schema", "schema": case.response_schema}
+        )
+    elif case.expected is not None:
         payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _stream_chat(
+    base_url: str,
+    model: str,
+    api_key: str | None,
+    timeout: float,
+    case: PromptCase,
+) -> tuple[str, dict[str, Any]]:
+    payload = _chat_payload(model, case)
 
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
@@ -209,18 +245,36 @@ def _assert_case(case: PromptCase, content: str) -> dict[str, Any] | None:
     except json.JSONDecodeError as exc:
         raise SmokeFailure(f"{case.name} did not return valid JSON: {content[:200]}") from exc
     if not isinstance(parsed, dict):
-        raise SmokeFailure(f"{case.name} returned JSON that is not an object")
+        raise SmokeFailure(f"{case.name} returned JSON that is not an object: actual={content}")
+    expected_keys = set(case.expected)
+    if case.allowed_ids:
+        expected_keys.add("referenced_ids")
+    if set(parsed) != expected_keys:
+        raise SmokeFailure(
+            f"{case.name}: response keys differ; "
+            f"expected={json.dumps(case.expected, ensure_ascii=False, sort_keys=True)}; "
+            f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
+        )
     for key, expected_value in case.expected.items():
         if parsed.get(key) != expected_value:
             raise SmokeFailure(
-                f"{case.name}: expected {key}={expected_value!r}, got {parsed.get(key)!r}"
+                f"{case.name}: contract mismatch; "
+                f"expected={json.dumps(case.expected, ensure_ascii=False, sort_keys=True)}; "
+                f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
             )
     if case.allowed_ids:
-        recipe_ids = parsed.get("recipe_ids")
-        if not isinstance(recipe_ids, list) or not recipe_ids:
-            raise SmokeFailure(f"{case.name}: recipe_ids must be a non-empty list")
-        if any(not isinstance(item, int) or item not in case.allowed_ids for item in recipe_ids):
-            raise SmokeFailure(f"{case.name}: model invented an ID: {recipe_ids}")
+        recipe_ids = parsed.get("referenced_ids")
+        if (
+            not isinstance(recipe_ids, list)
+            or len(recipe_ids) < case.minimum_ids
+            or len(recipe_ids) != len(set(recipe_ids))
+            or any(not isinstance(item, int) or item not in case.allowed_ids for item in recipe_ids)
+        ):
+            raise SmokeFailure(
+                f"{case.name}: invalid referenced_ids; expected subset of {sorted(case.allowed_ids)} "
+                f"with at least {case.minimum_ids} item(s); "
+                f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
+            )
     return parsed
 
 
@@ -287,7 +341,7 @@ def _mock_run() -> int:
             continue
         payload = dict(case.expected)
         if case.allowed_ids:
-            payload["recipe_ids"] = [min(case.allowed_ids)]
+            payload["referenced_ids"] = sorted(case.allowed_ids)[: case.minimum_ids]
         _assert_case(case, json.dumps(payload, ensure_ascii=False))
     print(f"mock smoke passed: {len(CASES)} cases; no network or model used")
     return 0

@@ -23,6 +23,7 @@ scripts/run_llama_server.sh
 scripts/wait_llama_server.sh
 scripts/home_ai_runtime_smoke.py
 scripts/home_ai_benchmark.py
+scripts/home_ai_benchmark_contract.py
 
 README.md
 deploy.ps1
