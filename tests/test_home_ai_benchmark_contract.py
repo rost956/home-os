@@ -163,3 +163,41 @@ def test_smoke_failure_includes_actual_json():
     assert "actual=" in message
     assert "finance.summary" in message
     assert "expense.create_draft" in message
+
+
+def _menu_smoke_response(referenced_ids: list[int]) -> str:
+    return json.dumps(
+        {
+            "intent": "menu_proposal",
+            "tool": "menu.propose",
+            "arguments": {"days": 1, "no_repeats": True},
+            "referenced_ids": referenced_ids,
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_menu_smoke_rejects_empty_referenced_ids():
+    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+
+    with pytest.raises(SmokeFailure, match="invalid referenced_ids"):
+        _assert_case(menu_case, _menu_smoke_response([]))
+
+
+def test_menu_smoke_accepts_existing_referenced_id():
+    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+
+    parsed = _assert_case(menu_case, _menu_smoke_response([101]))
+
+    assert parsed is not None
+    assert parsed["referenced_ids"] == [101]
+    assert "Пустой список referenced_ids для menu.propose НЕДОПУСТИМ" in menu_case.system
+    assert "101 Овощной суп" in menu_case.system
+    assert "Выбери существующий рецепт" in menu_case.user
+
+
+def test_menu_smoke_rejects_invented_referenced_id():
+    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+
+    with pytest.raises(SmokeFailure, match="invalid referenced_ids"):
+        _assert_case(menu_case, _menu_smoke_response([999]))

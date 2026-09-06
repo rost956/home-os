@@ -22,6 +22,7 @@ from typing import Any
 from home_ai_benchmark_contract import (
     ROUTING_RESPONSE_SCHEMA,
     ROUTING_SYSTEM_PROMPT,
+    SYNTHETIC_RECIPE_IDS,
     routing_response_format,
 )
 
@@ -105,13 +106,16 @@ CASES = (
     PromptCase(
         name="menu_proposal_no_write",
         system=ROUTING_SYSTEM_PROMPT,
-        user="Предложи меню на один день без повторов, без подтверждения и записи",
+        user=(
+            "Составь меню на один день без повторов из доступных рецептов. "
+            "Выбери существующий рецепт, но не подтверждай, не применяй и не записывай меню."
+        ),
         expected={
             "intent": "menu_proposal",
             "tool": "menu.propose",
             "arguments": {"days": 1, "no_repeats": True},
         },
-        allowed_ids=frozenset({101, 102, 103}),
+        allowed_ids=SYNTHETIC_RECIPE_IDS,
         minimum_ids=1,
         response_schema=ROUTING_RESPONSE_SCHEMA,
     ),
