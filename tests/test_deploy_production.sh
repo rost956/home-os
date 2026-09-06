@@ -126,4 +126,119 @@ PIPE_SNAPSHOT="$WORK_DIR/pipe-safe.tar.gz"
 )
 snapshot_has_regular_caddyfile "$PIPE_SNAPSHOT"
 
+# Deployment readiness uses retries. These mocks exercise the shell flow without
+# talking to Docker or a production target.
+MOCK_LOG="$WORK_DIR/deploy-flow.log"
+MOCK_CURRENT_CADDY=""
+MOCK_CONFIG_FAILURES=0
+MOCK_ADMIN_FAILURES=0
+HEALTH_ATTEMPTS=3
+HEALTH_RETRY_DELAY=0
+TARGET="$TARGET_DIR"
+printf 'CADDY_SITE_ADDRESS=home.example.test\n' > "$TARGET/.env"
+
+sleep() {
+    :
+}
+
+curl() {
+    printf 'curl %s\n' "$*" >> "$MOCK_LOG"
+}
+
+mock_compose() {
+    printf 'compose %s\n' "$*" >> "$MOCK_LOG"
+    case "$1" in
+        ps)
+            printf '%s\n' "$MOCK_CURRENT_CADDY"
+            ;;
+        exec)
+            shift
+            [[ "$1" == "-T" ]] && shift
+            case "$1" in
+                web)
+                    ;;
+                caddy)
+                    shift
+                    case "$*" in
+                        *"caddy validate"*)
+                            if [[ "$MOCK_CONFIG_FAILURES" -gt 0 ]]; then
+                                MOCK_CONFIG_FAILURES=$((MOCK_CONFIG_FAILURES - 1))
+                                echo "Caddy config is not ready yet" >&2
+                                return 1
+                            fi
+                            ;;
+                        *"wget -q -O /dev/null http://127.0.0.1:2019/config/"*)
+                            if [[ "$MOCK_ADMIN_FAILURES" -gt 0 ]]; then
+                                MOCK_ADMIN_FAILURES=$((MOCK_ADMIN_FAILURES - 1))
+                                echo "Caddy admin endpoint is not ready yet" >&2
+                                return 1
+                            fi
+                            ;;
+                        *"caddy reload"*)
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+        *)
+            fail "Unexpected compose command: $*"
+            ;;
+    esac
+}
+
+LIVE_COMPOSE=(mock_compose)
+
+# A fresh Caddy container may not be ready on the first health attempt. The
+# deploy flow waits for it and never reloads a newly created container.
+: > "$MOCK_LOG"
+MOCK_CURRENT_CADDY="caddy-new"
+MOCK_CONFIG_FAILURES=1
+MOCK_ADMIN_FAILURES=0
+health_ok "[deploy]" "caddy-old"
+[[ "$(grep -Fc 'caddy validate' "$MOCK_LOG")" -eq 2 ]] || fail "Caddy readiness was not retried"
+if grep -Fq 'caddy reload' "$MOCK_LOG"; then
+    fail "Fresh Caddy container was reloaded unnecessarily"
+fi
+
+# A reused container must wait for the Caddy admin endpoint before reloading.
+: > "$MOCK_LOG"
+MOCK_CURRENT_CADDY="caddy-reused"
+MOCK_CONFIG_FAILURES=0
+MOCK_ADMIN_FAILURES=1
+health_ok "[deploy]" "caddy-reused"
+[[ "$(grep -Fc 'wget -q -O /dev/null http://127.0.0.1:2019/config/' "$MOCK_LOG")" -eq 2 ]] \
+    || fail "Caddy admin readiness was not retried"
+[[ "$(grep -Fc 'caddy reload' "$MOCK_LOG")" -eq 1 ]] || fail "Reused Caddy container was not reloaded once"
+
+# Permanent readiness failure reports the failed stage and its last real error.
+: > "$MOCK_LOG"
+MOCK_CURRENT_CADDY="caddy-stuck"
+MOCK_CONFIG_FAILURES=0
+MOCK_ADMIN_FAILURES=3
+READINESS_FAILURE_LOG="$WORK_DIR/readiness-failure.log"
+if health_ok "[deploy]" "caddy-stuck" > "$READINESS_FAILURE_LOG" 2>&1; then
+    fail "Permanent Caddy admin failure was accepted"
+fi
+grep -Fq '[deploy] caddy admin: FAILED after 3 attempts' "$READINESS_FAILURE_LOG" \
+    || fail "Permanent readiness failure did not name the failed stage"
+grep -Fq 'Caddy admin endpoint is not ready yet' "$READINESS_FAILURE_LOG" \
+    || fail "Permanent readiness failure hid the last Caddy error"
+
+# A rollback failure is explicitly logged but preserves the original deploy status.
+rollback() {
+    echo '[rollback] simulated failure' >&2
+    return 1
+}
+ROLLBACK_FAILURE_LOG="$WORK_DIR/rollback-failure.log"
+if (finish_failed_deploy 73) > "$ROLLBACK_FAILURE_LOG" 2>&1; then
+    fail "Failed deployment unexpectedly returned success"
+else
+    rollback_exit_status=$?
+fi
+[[ "$rollback_exit_status" -eq 73 ]] || fail "Original deployment status was not preserved"
+grep -Fq 'Deployment failed with status 73; starting rollback' "$ROLLBACK_FAILURE_LOG" \
+    || fail "Original deployment failure was not logged"
+grep -Fq 'Rollback also failed; original deployment status was 73' "$ROLLBACK_FAILURE_LOG" \
+    || fail "Rollback failure masked the original deployment status"
+
 echo "deploy_production.sh regression tests passed"

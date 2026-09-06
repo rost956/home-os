@@ -98,6 +98,119 @@ replace_live_code() {
     install_source_caddyfile "$SOURCE/Caddyfile" "$TARGET/Caddyfile"
 }
 
+wait_for_check() {
+    local prefix="$1"
+    local label="$2"
+    local check_function="$3"
+    local attempt status output_file
+
+    output_file="$(mktemp "${TMPDIR:-/tmp}/home-os-deploy-check.XXXXXX")" || return 1
+    for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
+        if "$check_function" >"$output_file" 2>&1; then
+            rm -f -- "$output_file"
+            echo "$prefix $label: OK"
+            return 0
+        else
+            status=$?
+        fi
+
+        if [[ "$attempt" -lt "$HEALTH_ATTEMPTS" ]]; then
+            echo "$prefix $label: waiting (attempt $attempt/$HEALTH_ATTEMPTS)" >&2
+            sleep "${HEALTH_RETRY_DELAY:-2}"
+        fi
+    done
+
+    echo "$prefix $label: FAILED after $HEALTH_ATTEMPTS attempts" >&2
+    if [[ -s "$output_file" ]]; then
+        cat "$output_file" >&2
+    fi
+    rm -f -- "$output_file"
+    return "$status"
+}
+
+web_health_check() {
+    "${LIVE_COMPOSE[@]}" exec -T web python -c \
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+}
+
+caddy_running_check() {
+    local caddy_container
+    caddy_container="$("${LIVE_COMPOSE[@]}" ps --status running -q caddy)"
+    [[ -n "$caddy_container" ]] || {
+        echo "Caddy container is not running" >&2
+        return 1
+    }
+}
+
+caddy_config_check() {
+    "${LIVE_COMPOSE[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+caddy_admin_check() {
+    "${LIVE_COMPOSE[@]}" exec -T caddy wget -q -O /dev/null http://127.0.0.1:2019/config/
+}
+
+caddy_reload_check() {
+    "${LIVE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+
+https_health_check() {
+    local site_address site_scheme site_host site_port
+
+    site_address="$(grep -E '^CADDY_SITE_ADDRESS=' "$TARGET/.env" | tail -n 1 | cut -d= -f2- || true)"
+    site_address="${site_address%%,*}"
+    site_address="${site_address//[[:space:]]/}"
+    [[ -n "$site_address" ]] || site_address="localhost"
+    if [[ "$site_address" == http://* ]]; then
+        site_scheme="http"
+        site_host="${site_address#http://}"
+        site_port=80
+    else
+        site_scheme="https"
+        site_host="${site_address#https://}"
+        site_port=443
+    fi
+    site_host="${site_host%%/*}"
+    site_host="${site_host%%:*}"
+    curl --fail --silent --show-error --insecure --max-time 5 \
+        --resolve "$site_host:$site_port:127.0.0.1" \
+        "$site_scheme://$site_host:$site_port/health"
+}
+
+health_ok() {
+    local prefix="${1:-[deploy]}"
+    local previous_caddy_container="${2:-}"
+    local current_caddy_container
+
+    wait_for_check "$prefix" "web health" web_health_check || return 1
+    wait_for_check "$prefix" "caddy running" caddy_running_check || return 1
+    wait_for_check "$prefix" "caddy config" caddy_config_check || return 1
+
+    if ! current_caddy_container="$("${LIVE_COMPOSE[@]}" ps -q caddy)"; then
+        echo "$prefix caddy running: FAILED while identifying the container" >&2
+        return 1
+    fi
+    if [[ -n "$previous_caddy_container" && "$current_caddy_container" == "$previous_caddy_container" ]]; then
+        echo "$prefix caddy container reused; reloading its updated bind-mounted config"
+        wait_for_check "$prefix" "caddy admin" caddy_admin_check || return 1
+        wait_for_check "$prefix" "caddy reload" caddy_reload_check || return 1
+    else
+        echo "$prefix caddy container recreated; startup config is active"
+    fi
+
+    wait_for_check "$prefix" "HTTPS health" https_health_check
+}
+
+finish_failed_deploy() {
+    local deploy_status="$1"
+
+    echo "Deployment failed with status $deploy_status; starting rollback" >&2
+    if ! rollback; then
+        echo "Rollback also failed; original deployment status was $deploy_status" >&2
+    fi
+    return "$deploy_status"
+}
+
 if [[ "${DEPLOY_PRODUCTION_LIBRARY_ONLY:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -171,7 +284,7 @@ SNAPSHOT="$TARGET/.deploy/code-$STAMP.tar.gz"
 HAD_OLD_IMAGE=0
 
 echo "Deploying revision $REVISION at $STAMP"
-"${DOCKER[@]}" version >/dev/null
+"${DOCKER[@]}" version
 
 if [[ -f "$TARGET/data/app.db" ]]; then
     python3 "$SOURCE/scripts/sqlite_backup.py" backup \
@@ -184,8 +297,10 @@ else
 fi
 
 OLD_CONTAINER=""
+OLD_CADDY_CONTAINER=""
 if [[ -f "$TARGET/docker-compose.yml" ]]; then
     OLD_CONTAINER="$("${LIVE_COMPOSE[@]}" ps -q web 2>/dev/null || true)"
+    OLD_CADDY_CONTAINER="$("${LIVE_COMPOSE[@]}" ps -q caddy 2>/dev/null || true)"
 fi
 if [[ -n "$OLD_CONTAINER" ]]; then
     OLD_IMAGE_ID="$("${DOCKER[@]}" inspect --format '{{.Image}}' "$OLD_CONTAINER")"
@@ -216,44 +331,9 @@ if [[ -f "$TARGET/docker-compose.yml" ]]; then
     fi
 fi
 
-health_ok() {
-    local attempt
-    for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
-        if "${LIVE_COMPOSE[@]}" exec -T web python -c \
-            "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()" \
-            >/dev/null 2>&1 \
-            && [[ -n "$("${LIVE_COMPOSE[@]}" ps --status running -q caddy 2>/dev/null)" ]] \
-            && "${LIVE_COMPOSE[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
-                >/dev/null 2>&1; then
-            SITE_ADDRESS="$(grep -E '^CADDY_SITE_ADDRESS=' "$TARGET/.env" | tail -n 1 | cut -d= -f2- || true)"
-            SITE_ADDRESS="${SITE_ADDRESS%%,*}"
-            SITE_ADDRESS="${SITE_ADDRESS//[[:space:]]/}"
-            [[ -n "$SITE_ADDRESS" ]] || SITE_ADDRESS="localhost"
-            if [[ "$SITE_ADDRESS" == http://* ]]; then
-                SITE_SCHEME="http"
-                SITE_HOST="${SITE_ADDRESS#http://}"
-                SITE_PORT=80
-            else
-                SITE_SCHEME="https"
-                SITE_HOST="${SITE_ADDRESS#https://}"
-                SITE_PORT=443
-            fi
-            SITE_HOST="${SITE_HOST%%/*}"
-            SITE_HOST="${SITE_HOST%%:*}"
-            if curl --fail --silent --show-error --insecure --max-time 5 \
-                --resolve "$SITE_HOST:$SITE_PORT:127.0.0.1" \
-                "$SITE_SCHEME://$SITE_HOST:$SITE_PORT/health" >/dev/null 2>&1; then
-                return 0
-            fi
-        fi
-        sleep 2
-    done
-    return 1
-}
-
 rollback() {
-    local rollback_status=0
-    echo "Deployment failed; restoring previous code and image"
+    local rollback_status=0 rollback_caddy_container=""
+    echo "[rollback] restoring previous code and image"
     if [[ -f "$SNAPSHOT" ]]; then
         if ! rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops" \
             || ! rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt" \
@@ -267,21 +347,23 @@ rollback() {
     fi
     if [[ "$HAD_OLD_IMAGE" == "1" ]]; then
         if ! "${DOCKER[@]}" image tag "$ROLLBACK_IMAGE" "$IMAGE_NAME"; then
-            echo "Rollback image restore failed" >&2
+            echo "[rollback] image restore: FAILED" >&2
             rollback_status=1
+        else
+            echo "[rollback] image restore: OK"
+        fi
+        if ! rollback_caddy_container="$("${LIVE_COMPOSE[@]}" ps -q caddy)"; then
+            echo "[rollback] could not identify the current Caddy container; checking startup after compose up" >&2
+            rollback_caddy_container=""
         fi
         if ! "${LIVE_COMPOSE[@]}" up -d --no-build --remove-orphans; then
-            echo "Rollback container start failed" >&2
+            echo "[rollback] compose up: FAILED" >&2
             rollback_status=1
-        fi
-        if ! "${LIVE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
-            >/dev/null 2>&1; then
-            echo "Rollback Caddy reload failed" >&2
-            rollback_status=1
-        fi
-        if ! health_ok; then
-            echo "Rollback healthcheck failed" >&2
-            rollback_status=1
+        else
+            echo "[rollback] compose up: OK"
+            if ! health_ok "[rollback]" "$rollback_caddy_container"; then
+                echo "[rollback] health verification: FAILED (the rollback image may predate /health)" >&2
+            fi
         fi
     fi
     "${LIVE_COMPOSE[@]}" ps || true
@@ -293,10 +375,7 @@ handle_deploy_error() {
     local deploy_status="$1"
     trap - ERR
     if [[ "$ROLLBACK_NEEDED" == "1" ]]; then
-        echo "Deployment failed with status $deploy_status; starting rollback" >&2
-        if ! rollback; then
-            echo "Rollback also failed; original deployment status was $deploy_status" >&2
-        fi
+        finish_failed_deploy "$deploy_status" || true
     fi
     exit "$deploy_status"
 }
@@ -305,27 +384,23 @@ ROLLBACK_NEEDED=1
 trap 'handle_deploy_error "$?"' ERR
 replace_live_code
 set +e
+echo "[deploy] compose up: starting"
 "${LIVE_COMPOSE[@]}" up -d --no-build --remove-orphans
 DEPLOY_STATUS=$?
 if [[ "$DEPLOY_STATUS" -eq 0 ]]; then
-    "${LIVE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
-        >/dev/null 2>&1
+    echo "[deploy] compose up: OK"
+    health_ok "[deploy]" "$OLD_CADDY_CONTAINER"
     DEPLOY_STATUS=$?
-fi
-if [[ "$DEPLOY_STATUS" -eq 0 ]]; then
-    health_ok
-    DEPLOY_STATUS=$?
+else
+    echo "[deploy] compose up: FAILED" >&2
 fi
 set -e
 
 if [[ "$DEPLOY_STATUS" -ne 0 ]]; then
-    echo "Deployment failed with status $DEPLOY_STATUS; starting rollback" >&2
-    if ! rollback; then
-        echo "Rollback also failed; original deployment status was $DEPLOY_STATUS" >&2
-    fi
+    finish_failed_deploy "$DEPLOY_STATUS" || true
     ROLLBACK_NEEDED=0
     trap - ERR
-    exit 1
+    exit "$DEPLOY_STATUS"
 fi
 
 ROLLBACK_NEEDED=0
