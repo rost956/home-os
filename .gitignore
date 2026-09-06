@@ -15,6 +15,9 @@ data/
 *.sqlite3
 *.pem
 *.key
+*.gguf
+home-ai-benchmark-*.json
+home-ai-smoke-*.json
 
 .pytest_cache/
 .ruff_cache/

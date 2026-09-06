@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import calendar
 import ipaddress
 import json
 import logging
@@ -67,6 +66,16 @@ from .models import (
 from .routers.system import router as system_router
 from .services.backups import create_backup_zip, sqlite_database_path
 from .services.exports import build_expenses_csv, build_expenses_xlsx
+from .services.finance import (
+    accessible_expense_lists,
+    build_finance_snapshot,
+    clamp_month_day,
+    expense_period_bounds,
+    expense_period_start_day,
+    format_period_range,
+    shifted_month,
+    summarize_cashflow,
+)
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -1502,173 +1511,6 @@ def month_bounds(day: date) -> tuple[date, date]:
     return start, next_month - timedelta(days=1)
 
 
-def clamp_month_day(year: int, month: int, day: int) -> date:
-    safe_day = max(1, min(31, int(day or 1)))
-    last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(safe_day, last_day))
-
-
-def add_months(day: date, months: int) -> date:
-    month_index = (day.month - 1) + months
-    year = day.year + month_index // 12
-    month = month_index % 12 + 1
-    return clamp_month_day(year, month, day.day)
-
-
-def shifted_month(year: int, month: int, months: int) -> tuple[int, int]:
-    month_index = (month - 1) + months
-    return year + month_index // 12, month_index % 12 + 1
-
-
-def expense_period_start_day(user: User | None) -> int:
-    value = getattr(user, "expense_period_start_day", 1) or 1
-    return max(1, min(31, int(value)))
-
-
-def expense_period_bounds(day: date, start_day: int) -> tuple[date, date]:
-    current_start = clamp_month_day(day.year, day.month, start_day)
-    if day < current_start:
-        year, month = shifted_month(day.year, day.month, -1)
-        current_start = clamp_month_day(year, month, start_day)
-    next_year, next_month = shifted_month(current_start.year, current_start.month, 1)
-    next_start = clamp_month_day(next_year, next_month, start_day)
-    return current_start, next_start - timedelta(days=1)
-
-
-def previous_expense_period_bounds(period_start: date, start_day: int) -> tuple[date, date]:
-    year, month = shifted_month(period_start.year, period_start.month, -1)
-    previous_start = clamp_month_day(year, month, start_day)
-    return previous_start, period_start - timedelta(days=1)
-
-
-def format_period_range(period_start: date, period_end: date) -> str:
-    if period_start.year == period_end.year:
-        return f"{period_start.strftime('%d.%m')}–{period_end.strftime('%d.%m.%Y')}"
-    return f"{period_start.strftime('%d.%m.%Y')}–{period_end.strftime('%d.%m.%Y')}"
-
-
-def expense_forecast_from_lists(
-    expense_lists: list[ExpenseList],
-    period_start: date,
-    period_end: date,
-    recurring: list[RecurringExpense] | None = None,
-) -> dict[str, Any]:
-    """Forecast future days from category weekday patterns and scheduled payments."""
-    today = msk_today()
-    daily: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    category_daily: dict[str, dict[date, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0.00")))
-    for expense_list in expense_lists:
-        for category in expense_list.categories:
-            for item in category.items:
-                if not item.include_in_analytics or not item.include_in_forecast:
-                    continue
-                item_day = msk_date(item.created_at)
-                if item_day < today - timedelta(days=364):
-                    continue
-                daily[item_day] += item.amount
-                category_daily[category.name][item_day] += item.amount
-
-    recurring = recurring or []
-    recurring_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    future_start = max(today + timedelta(days=1), period_start)
-    for recurring_item in recurring:
-        cursor = date(future_start.year, future_start.month, 1)
-        while cursor <= period_end:
-            due_date = clamp_month_day(cursor.year, cursor.month, recurring_item.day_of_month)
-            if future_start <= due_date <= period_end:
-                recurring_by_day[due_date] += recurring_item.amount
-            next_year, next_month = shifted_month(cursor.year, cursor.month, 1)
-            cursor = date(next_year, next_month, 1)
-
-    if daily:
-        first_day = min(daily)
-        history_days = (today - first_day).days + 1
-    else:
-        first_day = today
-        history_days = 0
-
-    def robust_weekday_rate(values: list[Decimal]) -> Decimal:
-        if not values:
-            return Decimal("0.00")
-        positive = sorted(value for value in values if value > 0)
-        cap = positive[min(len(positive) - 1, max(0, int(len(positive) * .9) - 1))] if positive else Decimal("0.00")
-        weighted_total = Decimal("0.00")
-        weights = Decimal("0.00")
-        for index, value in enumerate(values):
-            weight = Decimal("1") + Decimal("2") * Decimal(index + 1) / Decimal(len(values))
-            weighted_total += min(value, cap) * weight
-            weights += weight
-        return (weighted_total / weights).quantize(Decimal("0.01")) if weights else Decimal("0.00")
-
-    weekday_rates: dict[str, dict[int, Decimal]] = {}
-    if history_days:
-        for category_name, amounts in category_daily.items():
-            category_first_day = min(amounts)
-            category_history_days = (today - category_first_day).days + 1
-            category_dates = [category_first_day + timedelta(days=offset) for offset in range(category_history_days)]
-            weekday_rates[category_name] = {
-                weekday: robust_weekday_rate([amounts[day] for day in category_dates if day.weekday() == weekday])
-                for weekday in range(7)
-            }
-
-    period_days = max(1, (period_end - period_start).days + 1)
-    recurring_daily_share = sum((item.amount for item in recurring), Decimal("0.00")) / Decimal(period_days)
-    daily_forecast: dict[date, Decimal] = {}
-    for offset in range(max(0, (period_end - future_start).days + 1)):
-        forecast_day = future_start + timedelta(days=offset)
-        baseline = sum((rates[forecast_day.weekday()] for rates in weekday_rates.values()), Decimal("0.00"))
-        baseline = max(Decimal("0.00"), baseline - recurring_daily_share)
-        daily_forecast[forecast_day] = (baseline + recurring_by_day[forecast_day]).quantize(Decimal("0.01"))
-
-    actual = sum((daily[day] for day in daily if period_start <= day <= min(today, period_end)), Decimal("0.00"))
-    forecast = (actual + sum(daily_forecast.values(), Decimal("0.00"))).quantize(Decimal("0.01"))
-    daily_rate = (sum(daily_forecast.values(), Decimal("0.00")) / Decimal(len(daily_forecast))).quantize(Decimal("0.01")) if daily_forecast else Decimal("0.00")
-    confidence = "низкая" if history_days < 21 else "средняя" if history_days < 75 else "высокая"
-    return {
-        "daily_rate": daily_rate,
-        "forecast": forecast,
-        "confidence": confidence,
-        "days": history_days,
-        "daily_forecast": daily_forecast,
-        "recurring_by_day": recurring_by_day,
-        "method": "категории, дни недели и регулярные платежи",
-    }
-
-
-def active_recurring_for_lists(db: Session, user: User, expense_lists: list[ExpenseList]) -> list[RecurringExpense]:
-    list_ids = [expense_list.id for expense_list in expense_lists]
-    if not list_ids:
-        return []
-    return db.scalars(
-        select(RecurringExpense).where(
-            RecurringExpense.owner_id == user.id,
-            RecurringExpense.is_active.is_(True),
-            RecurringExpense.expense_list_id.in_(list_ids),
-        )
-    ).all()
-
-
-def accessible_expense_lists(db: Session, user: User) -> list[ExpenseList]:
-    owned = db.scalars(
-        select(ExpenseList)
-        .options(
-            selectinload(ExpenseList.owner),
-            selectinload(ExpenseList.categories).selectinload(ExpenseCategory.items),
-            selectinload(ExpenseList.shares),
-        )
-        .where(ExpenseList.owner_id == user.id)
-        .order_by(ExpenseList.title)
-    ).all()
-    shared = db.scalars(
-        select(ExpenseList)
-        .join(ExpenseListShare)
-        .options(selectinload(ExpenseList.owner), selectinload(ExpenseList.categories).selectinload(ExpenseCategory.items))
-        .where(ExpenseListShare.user_id == user.id)
-        .order_by(ExpenseList.title)
-    ).all()
-    return list(owned) + list(shared)
-
-
 def expense_category_options(db: Session, user: User) -> list[str]:
     names: set[str] = set()
     for expense_list in accessible_expense_lists(db, user):
@@ -2712,38 +2554,23 @@ def finance_page(
     if date_from > date_to:
         date_from, date_to = date_to, date_from
     incomes = db.scalars(select(IncomeItem).where(IncomeItem.owner_id == user.id)).all()
-    by_day_income: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    for item in incomes:
-        item_day = msk_date(item.received_at)
-        if date_from <= item_day <= min(date_to, today):
-            by_day_income[item_day] += item.amount
-    income_total = sum(by_day_income.values(), Decimal("0.00"))
     lists = accessible_expense_lists(db, user)
-    expense_total = Decimal("0.00")
-    by_day_expense: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    for expense_list in lists:
-        for category in expense_list.categories:
-            for item in category.items:
-                if item.include_in_analytics and date_from <= msk_date(item.created_at) <= date_to:
-                    expense_total += item.amount
-                    by_day_expense[msk_date(item.created_at)] += item.amount
-    balance = income_total - expense_total
-    savings_rate = (balance / income_total * Decimal("100")).quantize(Decimal("0.1")) if income_total else None
-    forecast_info = expense_forecast_from_lists(
+    cashflow = summarize_cashflow(
         lists,
-        period_start,
-        period_end,
-        active_recurring_for_lists(db, user, lists),
+        incomes,
+        date_from=date_from,
+        date_to=date_to,
+        today=today,
     )
-    period_income = sum((item.amount for item in incomes if period_start <= msk_date(item.received_at) <= period_end), Decimal("0.00"))
-    forecast_balance = period_income - forecast_info["forecast"]
+    snapshot = build_finance_snapshot(db, user, today=today)
+    forecast_info = snapshot.forecast.as_legacy_dict()
     chart_days: list[dict[str, Any]] = []
     chart_max = Decimal("0.00")
     cumulative_balance = Decimal("0.00")
     current_day = date_from
     while current_day <= date_to:
-        income = by_day_income[current_day]
-        expense = by_day_expense[current_day]
+        income = cashflow.income_by_day.get(current_day, Decimal("0.00"))
+        expense = cashflow.expense_by_day.get(current_day, Decimal("0.00"))
         forecast_expense = forecast_info["daily_forecast"].get(current_day, Decimal("0.00"))
         cumulative_balance += income - expense - forecast_expense
         chart_max = max(chart_max, income, expense, forecast_expense)
@@ -2753,7 +2580,7 @@ def finance_page(
         day["income_height"] = float(day["income"] / chart_max * 100) if chart_max else 0
         day["expense_height"] = float(day["expense"] / chart_max * 100) if chart_max else 0
         day["forecast_height"] = float(day["forecast_expense"] / chart_max * 100) if chart_max else 0
-    return render(request, "finance.html", {"user": user, "from_date": date_from.isoformat(), "to_date": date_to.isoformat(), "income_total": income_total, "expense_total": expense_total, "balance": balance, "savings_rate": savings_rate, "forecast_info": forecast_info, "forecast_balance": forecast_balance, "period_label": format_period_range(period_start, period_end), "cashflow_chart": chart_days, "chart_has_forecast": any(day["is_forecast"] for day in chart_days)})
+    return render(request, "finance.html", {"user": user, "from_date": date_from.isoformat(), "to_date": date_to.isoformat(), "income_total": cashflow.income_total, "expense_total": cashflow.expense_total, "balance": cashflow.balance, "savings_rate": cashflow.savings_rate, "forecast_info": forecast_info, "period_income": snapshot.period_income_total, "forecast_balance": snapshot.forecast_balance, "period_label": format_period_range(period_start, period_end), "cashflow_chart": chart_days, "chart_has_forecast": any(day["is_forecast"] for day in chart_days)})
 
 
 @app.get("/expenses")
@@ -2902,41 +2729,28 @@ def expenses_analytics_page(
     top_items.sort(key=lambda item: item["amount"], reverse=True)
 
     current_month_start, current_month_end = current_period_start, current_period_end
-    previous_month_start, previous_month_end = previous_expense_period_bounds(current_month_start, period_start_day)
-    current_month_total = Decimal("0.00")
-    previous_month_total = Decimal("0.00")
-    current_month_by_category: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
     period_lists = accessible_lists if selected_list_id else list(owned) + list(shared)
-    for expense_list in period_lists:
-        for category in expense_list.categories:
-            for item in category.items:
-                if not item.include_in_analytics:
-                    continue
-                item_date = msk_date(item.created_at)
-                if current_month_start <= item_date <= current_month_end:
-                    current_month_total += item.amount
-                    current_month_by_category[category.name.strip().casefold()] += item.amount
-                elif previous_month_start <= item_date <= previous_month_end:
-                    previous_month_total += item.amount
-    month_diff = current_month_total - previous_month_total
-    forecast_info = expense_forecast_from_lists(
-        period_lists,
-        current_month_start,
-        current_month_end,
-        active_recurring_for_lists(db, user, period_lists),
+    snapshot = build_finance_snapshot(
+        db,
+        user,
+        today=today,
+        expense_list_ids={item.id for item in period_lists} if selected_list_id else None,
     )
+    current_month_total = snapshot.period_expense_total
+    previous_month_total = snapshot.previous_period_expense_total
+    month_diff = snapshot.period_difference
+    forecast_info = snapshot.forecast.as_legacy_dict()
     forecast = forecast_info["forecast"]
-    limits = db.scalars(select(ExpenseLimit).where(ExpenseLimit.owner_id == user.id).order_by(ExpenseLimit.category_name)).all()
-    limit_rows = []
-    limit_total = sum((limit.monthly_limit for limit in limits), Decimal("0.00"))
-    limit_spent = Decimal("0.00")
-    for limit in limits:
-        spent = current_month_by_category.get(limit.category_name.strip().casefold(), Decimal("0.00"))
-        limit_spent += spent
-        percent = int((spent / limit.monthly_limit) * 100) if limit.monthly_limit else 0
-        limit_rows.append({"category": limit.category_name, "limit": limit.monthly_limit, "spent": spent, "left": limit.monthly_limit - spent, "percent": min(percent, 160)})
-    limit_left = limit_total - limit_spent
-    limit_percent = int((limit_spent / limit_total) * 100) if limit_total else 0
+    limit_rows = [
+        {
+            "category": item.category,
+            "limit": item.limit,
+            "spent": item.spent,
+            "left": item.left,
+            "percent": item.percent,
+        }
+        for item in snapshot.budget.categories
+    ]
 
     return render(
         request,
@@ -2959,10 +2773,10 @@ def expenses_analytics_page(
             "forecast": forecast,
             "forecast_info": forecast_info,
             "limit_rows": limit_rows,
-            "limit_total": limit_total,
-            "limit_spent": limit_spent,
-            "limit_left": limit_left,
-            "limit_percent": min(limit_percent, 160),
+            "limit_total": snapshot.budget.limit_total,
+            "limit_spent": snapshot.budget.spent,
+            "limit_left": snapshot.budget.left,
+            "limit_percent": snapshot.budget.percent,
             "period_start_day": period_start_day,
             "current_period_start": current_month_start,
             "current_period_end": current_month_end,

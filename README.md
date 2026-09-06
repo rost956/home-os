@@ -94,6 +94,10 @@ docker compose ps
 docker compose exec -T web python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"
 ```
 
+Локальный Home AI по умолчанию выключен. Production-инструкция для отдельного
+host `llama-server` на Raspberry Pi 5, закрытой Docker-сети и ручного benchmark:
+[`docs/home_ai/RASPBERRY_PI_RUNTIME.md`](docs/home_ai/RASPBERRY_PI_RUNTIME.md).
+
 Web-контейнер работает без root, с read-only root filesystem. На старой установке один раз перед первым обновлением исправьте владельца persistent data под UID/GID из `.env`:
 
 ```bash

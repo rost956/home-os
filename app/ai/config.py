@@ -46,6 +46,7 @@ class AISettings:
     context_budget: int
     max_concurrency: int
     temperature: float
+    enable_thinking: bool
 
 
 def load_ai_settings() -> AISettings:
@@ -70,6 +71,7 @@ def load_ai_settings() -> AISettings:
         context_budget=env_int("AI_CONTEXT_BUDGET", 6000, 256, 16000),
         max_concurrency=env_int("AI_MAX_CONCURRENCY", 1, 1, 4),
         temperature=_env_float("AI_TEMPERATURE", 0.2, 0.0, 2.0),
+        enable_thinking=env_bool("AI_ENABLE_THINKING", False),
     )
 
 

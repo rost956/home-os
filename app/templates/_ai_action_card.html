@@ -7,6 +7,27 @@
         <span class="ai-action-status">Ожидает</span>
     </div>
     <p class="ai-action-preview">{{ action.preview_text or 'Проверьте действие перед подтверждением.' }}</p>
+    {% if action.action_type == 'menu.apply' and action_payloads.get(action.public_id) %}
+    {% set menu_payload = action_payloads[action.public_id] %}
+    <div class="ai-menu-preview">
+        <b>Запланированные блюда</b>
+        <ul>
+            {% for entry in menu_payload.entries %}
+            <li>{{ entry.plan_date.strftime('%d.%m.%Y') }} · {{ entry.meal_name }} · {{ entry.display_title }}{% if entry.rationale %} — {{ entry.rationale }}{% endif %}</li>
+            {% endfor %}
+        </ul>
+        {% set conflicts = menu_action_conflicts.get(action.public_id, ()) %}
+        {% if conflicts %}
+        <div class="form-error">В эти слоты уже добавлены блюда. Они останутся в меню; подтверждение добавит предложенные блюда рядом.
+            <ul>
+                {% for conflict in conflicts %}
+                <li>{{ conflict.plan_date.strftime('%d.%m.%Y') }} · {{ conflict.meal_name }} · {{ conflict.recipe_title }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
     <div class="actions card-actions">
         <form method="post" action="/ai/actions/{{ action.public_id }}/cancel">
             <button class="btn secondary" type="submit">Отменить</button>

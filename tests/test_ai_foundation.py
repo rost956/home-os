@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -25,6 +26,7 @@ def enabled_settings(**overrides: object) -> AISettings:
         "context_budget": 2000,
         "max_concurrency": 1,
         "temperature": 0.2,
+        "enable_thinking": False,
     }
     values.update(overrides)
     return AISettings(**values)
@@ -58,6 +60,8 @@ def test_enabled_ai_requires_url_and_model(monkeypatch):
 def test_llama_client_parses_completion_and_structured_json():
     def handler(http_request: httpx.Request) -> httpx.Response:
         assert http_request.url == httpx.URL("http://llama.local:8081/v1/chat/completions")
+        assert http_request.read()
+        assert json.loads(http_request.content)["chat_template_kwargs"] == {"enable_thinking": False}
         return httpx.Response(
             200,
             json={"model": "qwen-small", "choices": [{"message": {"content": '{"message":"Готово"}'}, "finish_reason": "stop"}]},

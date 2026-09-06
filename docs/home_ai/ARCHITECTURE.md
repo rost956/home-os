@@ -3,10 +3,10 @@
 ## 1. Текущее устройство Home OS
 
 - FastAPI/Jinja-приложение, синхронный SQLAlchemy и SQLite. Сессия пользователя хранит `user_id`.
-- `app/main.py` содержит большинство роутов, проверок доступа, расчётов и `commit()`; `app/services/` пока используется только для backup/export.
+- `app/main.py` содержит большинство роутов, проверок доступа и `commit()`; переиспользуемые expense-команды и deterministic finance snapshots вынесены в `app/services/` рядом с backup/export.
 - Конфигурация загружается один раз из env в `app/config.py`. В production работает один web-контейнер за Caddy; данные находятся в `./data`, web filesystem read-only.
 - Схема создаётся через `Base.metadata.create_all()`, простые обновления существующей SQLite выполняет `ensure_runtime_schema()`. Alembic отсутствует.
-- Финансовый период и прогноз уже рассчитываются детерминированно (`expense_period_bounds`, `expense_forecast_from_lists`). Расходы могут исключаться из аналитики или прогноза.
+- Финансовый период, агрегаты и прогноз рассчитываются детерминированно в `app/services/finance.py`. Расходы могут исключаться из аналитики или прогноза.
 - Доступ к расходам и покупкам бывает owner/shared с `can_edit`; доходы, планировщик и меню персональные; wishlist может быть расшарен. Чат всегда между двумя участниками. Рецепты фактически читаются всеми авторизованными пользователями, изменение разрешено владельцу.
 - Локальная календарная зона сейчас фиксирована в `app/timezone.py` как `Europe/Moscow`.
 
@@ -62,15 +62,17 @@ LLM-клиент не получает `Session`, command service или action-
 ## 3. Локальный inference
 
 - Backend: `llama-server`, OpenAI-compatible `POST /v1/chat/completions`.
-- Env: `AI_ENABLED` (по умолчанию false), `AI_BASE_URL`, `AI_MODEL`, `AI_CONNECT_TIMEOUT_SECONDS`, `AI_READ_TIMEOUT_SECONDS`, `AI_MAX_TOKENS`, `AI_CONTEXT_BUDGET`, `AI_MAX_CONCURRENCY` (production default 1), при необходимости `AI_API_KEY` для локального proxy.
+- Env: `AI_ENABLED` (по умолчанию false), `AI_BASE_URL`, `AI_MODEL`, `AI_CONNECT_TIMEOUT_SECONDS`, `AI_READ_TIMEOUT_SECONDS`, `AI_MAX_TOKENS`, `AI_CONTEXT_BUDGET`, `AI_MAX_CONCURRENCY` (production default 1), `AI_ENABLE_THINKING` (по умолчанию false для коротких schema-задач), при необходимости `AI_API_KEY` для локального proxy.
 - `LlamaCppClient` асинхронный на `httpx.AsyncClient`; `httpx` станет явной runtime-зависимостью. Ответ всегда повторно валидируется Pydantic, даже если llama.cpp поддерживает `response_format/json_schema`.
 - Ошибки connection/timeout, HTTP, пустой или невалидный JSON переводятся в типизированные ошибки. Они не падают наружу как 500 и не влияют на обычные страницы.
 - Основной `/health` остаётся проверкой Home OS и БД. Отдельный авторизованный `/api/ai/health` сообщает `disabled/available/unavailable` и не участвует в healthcheck web-контейнера.
 - Один process-local semaphore ограничивает inference. Текущий production использует один worker; при увеличении worker count понадобится общий limiter либо отдельная AI-очередь.
 - Prompts имеют лимиты по символам/элементам, tool results пагинируются, история сокращается, тяжёлые запросы не запускаются параллельно. Простые расходы и даты обходят LLM.
-- GGUF и runtime llama.cpp не входят в Git, CI и Docker build Home OS. На первом шаге llama-server управляется отдельно, а Home OS знает только URL. Для production предпочтителен systemd/отдельный контейнер на том же Raspberry Pi; доступ ограничивается host/docker network и firewall. Добавлять llama.cpp в compose можно лишь после отдельной проверки ARM64 и памяти.
+- GGUF и runtime llama.cpp не входят в Git, CI и Docker build Home OS. В PHASE 6.5 выбран отдельный host systemd service на Raspberry Pi: непривилегированный `home-ai` запускает закреплённый source build `llama.cpp`, модель лежит в `/opt/home-ai/models`, а настройки — в `/etc/home-ai`. Home OS знает только OpenAI-compatible URL и alias модели.
+- Linux `web` получает `host.docker.internal` через Compose `host-gateway`; `llama-server` слушает только фактический host gateway address, не `localhost`, `0.0.0.0` или LAN/public address. Host firewall разрешает порт 8081 только loopback и compose subnet/interface, `/v1` дополнительно защищён локальным API key. Caddy route и Docker port publishing отсутствуют.
+- Pi 5 8 GB profile ограничен одним slot, context 4096, batch 256/ubatch 128, `MemoryHigh=5G` и `MemoryMax=6G`. Все параметры остаются изменяемыми через `/etc/home-ai/llama-server.env`, но wrapper запрещает wildcard bind, несколько slots, context больше 8192 и чрезмерный batch. Ошибка AI остаётся нефатальной для Home OS и обычного `/health`.
 
-Предполагаемая небольшая Qwen GGUF не зашивается в код. Замена модели не меняет tool/action contracts.
+Первый кандидат для измерения на Pi — Qwen3.5-4B Q4_K_M, fallback — Qwen3.5-2B Q4_K_M. Репозиторий хранит только закреплённые source URL/SHA-256 и manual download helper, но не GGUF. Победитель не выбирается без одинакового smoke/benchmark на реальном Pi; замена модели не меняет tool/action contracts.
 
 ## 4. Схемы данных и транзакции
 
@@ -126,11 +128,18 @@ Payload проходит action-specific Pydantic-схему и имеет ве�
 - Finance tools используют доступные списки и действующие флаги `include_in_analytics/include_in_forecast`; доходы только владельца.
 - Все денежные значения возвращаются backend как `Decimal`/готовые агрегаты. Ответ о покупке показывает исходные суммы и сценарий, но не даёт гарантий.
 
+В PHASE 4A добавлен общий `FinanceSnapshot`. Он собирается только backend-сервисом и содержит фактические доходы/расходы, баланс, категории и причины изменения, предыдущий полный и сопоставимый периоды, крупнейшие расходы, лимиты, регулярные платежи и существующий прогноз. Расходы читаются из собственных и явно расшаренных списков пользователя; доходы, лимиты и регулярные платежи остаются owner-only. Границы периода задаются пользовательским `expense_period_start_day`, календарные даты интерпретируются через `Europe/Moscow`. Snapshot не делает записей и не вызывает LLM; PHASE 4B читает его структурированный результат.
+
+В PHASE 4B добавлен отдельный finance-only flow `POST /api/ai/finance/questions`. Частые формулировки маршрутизируются локально, неоднозначные — одним коротким schema-validated вызовом модели. Затем выполняется ровно один инструмент из server-owned allowlist: summary, comparison, category breakdown, largest expenses, budget status или forecast. Инструменты не принимают `user_id`, получают пользователя из backend-сессии и возвращают Pydantic-схемы поверх `FinanceSnapshot`. В модель передаются только ограниченные агрегаты (не более пяти отдельных крупнейших расходов), после чего второй вызов лишь объясняет готовый результат. General orchestrator, write-tools и прямой SQL в этом контуре отсутствуют.
+
 ### Recipes и menu
 
-- Сначала SQL-фильтры по времени/стоимости/ингредиентам, затем ранжирование небольшого набора.
-- Результат содержит реальные Recipe IDs. Доступ повторяет явно зафиксированную продуктовую политику существующего UI; несогласованности owner/global read необходимо закрыть тестами до AI tools.
-- Menu proposal ссылается только на существующие Recipe IDs и учитывает недавние MenuItem. Применение недели является одним versioned pending action и выполняется транзакционно.
+- В PHASE 5 добавлен отдельный owner-only read contour `POST /api/ai/recipes/questions`: это намеренно приватнее устаревшего UI read-path. SQL-фильтры по названию, ингредиентам, времени, стоимости, порциям и тегам выполняются до модели; shortlist ограничен восемью реальными `Recipe.id`.
+- Разрешены только `search_recipes`, `get_recipe_details`, `get_recent_menu_context` и `recommend_recipes`. Tool не принимает `user_id`, не делает записи и не создаёт recipes/menu actions. Детали чужого или отсутствующего ID возвращаются как `found=false` без утечки данных; recipe IDs из LLM explanation валидируются как подмножество фактического tool result.
+- История cooking timer используется как единственное свидетельство приготовления. `MenuItem` возвращается отдельно как контекст запланированного меню и не выдаётся за факт готовки.
+- В PHASE 6 menu proposal получает только owner-scoped shortlist до восьми реальных Recipe ID после детерминированных time/cost/servings/tag/ingredient filters. Недавние `MenuItem` исключаются лишь при явном запросе без повторов; отсутствие истории не интерпретируется как факт готовки.
+- Модель может подготовить только структурированные `{plan_date, meal_name, recipe_id, display_title, rationale}` в пределах запрошенного периода. Backend валидирует ID как подмножество shortlist, даты и уникальность date/meal slots; многодневный запрос должен содержать все дни периода. Ни один `MenuItem` не создаётся до pending `menu.apply` action и явного confirm.
+- Перед confirm menu handler повторно проверяет owner-only рецепты и набор занятых slots. Известные конфликты показываются в карточке; существующие `MenuItem` никогда не удаляются или не перезаписываются, а подтверждение добавляет новое блюдо рядом. Изменившийся после draft набор конфликтов безопасно отклоняет action. Handler и status transition остаются одной транзакцией, повторный confirm идемпотентен.
 
 ### Planner, wishlist, Today
 
@@ -182,7 +191,12 @@ Payload проходит action-specific Pydantic-схему и имеет ве�
    - 9B: permission-bound retrieval tool и injection tests.
 10. **General chat**: bounded domain router/orchestrator, personal conversation UI.
 11. **Today/in-page UX**: on-demand summary и контекстные точки входа.
-12. **Hardening**: end-to-end fake tests, security/performance review, Pi llama-server runbook, failure drills.
+12. **Hardening**: end-to-end fake tests, security/performance review, повторная production Pi-проверка и failure drills.
+
+Инфраструктурная **PHASE 6.5** выполнена между Menu и Planner и не меняет этот
+порядок доменных фаз: host runtime/systemd, model download helper, закрытый
+host-gateway доступ, smoke/benchmark и Pi runbook готовы; production установка и
+выбор 4B/2B остаются явными ручными операциями.
 
 Дробление фаз 2, 4 и 9 уменьшает размер изменений и отдельно проверяет наиболее рискованные persistence, finance и privacy boundaries.
 

@@ -14,6 +14,15 @@ data
 *.db
 *.sqlite
 *.sqlite3
+*.gguf
+home-ai-benchmark-*.json
+home-ai-smoke-*.json
+scripts/install_llama_cpp.sh
+scripts/download_home_ai_model.sh
+scripts/run_llama_server.sh
+scripts/wait_llama_server.sh
+scripts/home_ai_runtime_smoke.py
+scripts/home_ai_benchmark.py
 
 README.md
 deploy.ps1

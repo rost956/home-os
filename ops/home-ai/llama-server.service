@@ -1,0 +1,53 @@
+[Unit]
+Description=Home AI llama.cpp server
+Documentation=https://github.com/ggml-org/llama.cpp/tree/master/tools/server
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=home-ai
+Group=home-ai
+EnvironmentFile=/etc/home-ai/llama-server.env
+ExecStartPre=/opt/home-ai/bin/run_llama_server.sh --check
+ExecStart=/opt/home-ai/bin/run_llama_server.sh
+ExecStartPost=/opt/home-ai/bin/wait_llama_server.sh
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=10min
+TimeoutStopSec=45s
+KillSignal=SIGINT
+
+# Leave at least about 2 GB for Home OS, SQLite, Caddy, and Linux.
+MemoryHigh=5G
+MemoryMax=6G
+TasksMax=128
+LimitNOFILE=4096
+Nice=5
+OOMScoreAdjust=200
+
+# CPU-only service hardening. The model/runtime are read-only at runtime and
+# llama-server has no access to Home OS data.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

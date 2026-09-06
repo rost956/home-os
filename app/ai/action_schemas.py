@@ -30,10 +30,24 @@ class MenuActionEntry(ActionPayload):
     meal_name: str = Field(min_length=1, max_length=80)
     recipe_id: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=250)
+    display_title: str | None = Field(default=None, min_length=1, max_length=150)
+    rationale: str | None = Field(default=None, max_length=300)
 
 
 class ApplyMenuActionPayload(ActionPayload):
     entries: list[MenuActionEntry] = Field(min_length=1, max_length=28)
+    conflict_item_ids: list[int] = Field(default_factory=list, max_length=28)
+
+    @model_validator(mode="after")
+    def unique_slots_and_conflicts(self) -> "ApplyMenuActionPayload":
+        slots = {(entry.plan_date, entry.meal_name.casefold()) for entry in self.entries}
+        if len(slots) != len(self.entries):
+            raise ValueError("menu entries must use unique date and meal slots")
+        if any(item_id <= 0 for item_id in self.conflict_item_ids):
+            raise ValueError("conflict item ids must be positive")
+        if len(set(self.conflict_item_ids)) != len(self.conflict_item_ids):
+            raise ValueError("conflict item ids must be unique")
+        return self
 
 
 class CreatePlannerActionPayload(ActionPayload):

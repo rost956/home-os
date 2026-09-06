@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models import User
+from app.services.menu import apply_menu_action
 
-from .action_schemas import ActionPayload, CreateExpenseActionPayload
+from .action_schemas import ActionPayload, ApplyMenuActionPayload, CreateExpenseActionPayload
 from .expenses import confirm_expense_action
 from .types import AIActionType
 
@@ -48,7 +49,19 @@ def _create_expense_handler(db: Session, actor: User, payload: ActionPayload) ->
     return ActionExecutionResult(entity_type="expense_item", entity_id=confirm_expense_action(db, actor, payload))
 
 
-DEFAULT_ACTION_REGISTRY = ActionHandlerRegistry({AIActionType.CREATE_EXPENSE: _create_expense_handler})
+def _apply_menu_handler(db: Session, actor: User, payload: ActionPayload) -> ActionExecutionResult:
+    if not isinstance(payload, ApplyMenuActionPayload):
+        raise TypeError("Menu handler received an invalid payload")
+    created_ids = apply_menu_action(db, actor, payload)
+    return ActionExecutionResult(entity_type="menu_items", entity_id=created_ids[0])
+
+
+DEFAULT_ACTION_REGISTRY = ActionHandlerRegistry(
+    {
+        AIActionType.CREATE_EXPENSE: _create_expense_handler,
+        AIActionType.APPLY_MENU: _apply_menu_handler,
+    }
+)
 
 
 def get_action_registry() -> ActionHandlerRegistry:

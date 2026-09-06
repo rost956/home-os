@@ -61,6 +61,7 @@ class LlamaCppClient:
             "max_tokens": min(request.max_tokens, self.settings.max_tokens),
             "temperature": request.temperature,
             "stream": False,
+            "chat_template_kwargs": {"enable_thinking": self.settings.enable_thinking},
         }
         if request.output_mode == "json":
             payload["response_format"] = {"type": "json_object"}

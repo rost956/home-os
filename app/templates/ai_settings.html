@@ -69,6 +69,23 @@
 </section>
 {% endif %}
 
+{% if ai_settings and ai_settings.enabled and ai_settings.allow_menu %}
+<section class="card ai-expense-draft-card">
+    <div class="card-head">
+        <div>
+            <h2>Составить меню</h2>
+            <div class="subline">Например: меню на следующую неделю без рыбы</div>
+        </div>
+    </div>
+    <form method="post" action="/ai/menu/proposals" class="form ai-expense-draft-form">
+        <label>Пожелания
+            <input name="question" maxlength="500" required placeholder="Недорого, до часа, на 4 порции">
+        </label>
+        <div class="actions"><button class="btn" type="submit">Подготовить меню</button></div>
+    </form>
+</section>
+{% endif %}
+
 <div class="section-title">Ожидают подтверждения</div>
 <div class="ai-action-list">
     {% for action in pending_actions %}

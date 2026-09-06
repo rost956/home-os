@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from pydantic import ValidationError
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -17,8 +18,10 @@ from app.services.expenses import (
     writable_expense_category_choices,
     writable_expense_lists,
 )
+from app.services.menu import menu_conflicts
 from app.web import templates
 
+from .action_schemas import ApplyMenuActionPayload
 from .actions import (
     AIActionExecutionError,
     AIActionHandlerUnavailableError,
@@ -35,7 +38,15 @@ from .actions import (
 from .client import AIClient
 from .config import AISettings, get_ai_settings
 from .dependencies import get_ai_client
-from .errors import AIError
+from .errors import (
+    AIDisabledError,
+    AIError,
+    AIProtocolError,
+    AIRequestTooLargeError,
+    AIResponseValidationError,
+    AITimeoutError,
+    AIUnavailableError,
+)
 from .expenses import (
     ExpenseDraftAmbiguityError,
     ExpenseDraftError,
@@ -51,13 +62,21 @@ from .expenses import (
     resolve_expense_list,
     select_category_with_llm,
 )
+from .finance import FinanceQuestionRequest, FinanceQuestionResponse, answer_finance_question
 from .handlers import ActionHandlerRegistry, get_action_registry
+from .menu import (
+    MenuProposalError,
+    MenuProposalRequest,
+    MenuProposalResponse,
+    create_menu_proposal,
+)
 from .permissions import (
     DOMAIN_PERMISSION_FIELDS,
     get_ai_user_settings,
     get_or_create_ai_user_settings,
     is_ai_domain_allowed,
 )
+from .recipes import RecipeQuestionRequest, RecipeQuestionResponse, answer_recipe_question
 from .schemas import AIHealthResponse
 from .types import AIActionStatus, AIActionType, AIDomain
 
@@ -116,14 +135,21 @@ def _render_ai_settings(
         db.commit()
     action_categories = {}
     action_payloads = {}
+    menu_action_conflicts = {}
     for action in pending_actions:
-        if action.action_type != AIActionType.CREATE_EXPENSE.value:
-            continue
-        action_categories[action.public_id] = expense_action_category_choices(db, user, action)
-        try:
-            action_payloads[action.public_id] = expense_payload_from_action(action)
-        except ExpenseDraftError:
-            continue
+        if action.action_type == AIActionType.CREATE_EXPENSE.value:
+            action_categories[action.public_id] = expense_action_category_choices(db, user, action)
+            try:
+                action_payloads[action.public_id] = expense_payload_from_action(action)
+            except ExpenseDraftError:
+                continue
+        elif action.action_type == AIActionType.APPLY_MENU.value:
+            try:
+                menu_payload = ApplyMenuActionPayload.model_validate_json(action.proposed_payload_json)
+                action_payloads[action.public_id] = menu_payload
+                menu_action_conflicts[action.public_id] = menu_conflicts(db, user, menu_payload)
+            except (ValidationError, ValueError):
+                continue
     return templates.TemplateResponse(
         request,
         "ai_settings.html",
@@ -141,6 +167,7 @@ def _render_ai_settings(
             "expense_category_choices": writable_expense_category_choices(db, user),
             "expense_action_categories": action_categories,
             "action_payloads": action_payloads,
+            "menu_action_conflicts": menu_action_conflicts,
         },
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT if error else status.HTTP_200_OK,
     )
@@ -157,6 +184,130 @@ async def ai_health(
         state=availability.state,
         model=settings.model if availability.state != "disabled" else None,
     )
+
+
+@router.post("/api/ai/finance/questions", response_model=FinanceQuestionResponse)
+async def ai_finance_question(
+    payload: FinanceQuestionRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    client: AIClient = Depends(get_ai_client),
+) -> FinanceQuestionResponse:
+    if not is_ai_domain_allowed(get_ai_user_settings(db, user.id), AIDomain.FINANCE):
+        raise HTTPException(status_code=403, detail="AI permission is disabled for finance")
+    try:
+        return await answer_finance_question(db, user, client, payload.question)
+    except AITimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Local AI backend timed out") from exc
+    except (AIDisabledError, AIUnavailableError) as exc:
+        raise HTTPException(status_code=503, detail="Local AI backend is unavailable") from exc
+    except (AIProtocolError, AIResponseValidationError, AIRequestTooLargeError) as exc:
+        raise HTTPException(status_code=502, detail="Local AI backend returned an invalid finance response") from exc
+    except SQLAlchemyError as exc:
+        logger.exception("Could not build AI finance answer owner_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Could not build finance summary") from exc
+
+
+@router.post("/api/ai/recipes/questions", response_model=RecipeQuestionResponse)
+async def ai_recipe_question(
+    payload: RecipeQuestionRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    client: AIClient = Depends(get_ai_client),
+) -> RecipeQuestionResponse:
+    if not is_ai_domain_allowed(get_ai_user_settings(db, user.id), AIDomain.RECIPES):
+        raise HTTPException(status_code=403, detail="AI permission is disabled for recipes")
+    try:
+        return await answer_recipe_question(db, user, client, payload.question)
+    except AITimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Local AI backend timed out") from exc
+    except (AIDisabledError, AIUnavailableError) as exc:
+        raise HTTPException(status_code=503, detail="Local AI backend is unavailable") from exc
+    except (AIProtocolError, AIResponseValidationError, AIRequestTooLargeError) as exc:
+        raise HTTPException(status_code=502, detail="Local AI backend returned an invalid recipe response") from exc
+    except SQLAlchemyError as exc:
+        logger.exception("Could not build AI recipe answer owner_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Could not build recipe result") from exc
+
+
+@router.post("/api/ai/menu/proposals", response_model=MenuProposalResponse)
+async def ai_menu_proposal(
+    payload: MenuProposalRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    client: AIClient = Depends(get_ai_client),
+) -> MenuProposalResponse:
+    if not is_ai_domain_allowed(get_ai_user_settings(db, user.id), AIDomain.MENU):
+        raise HTTPException(status_code=403, detail="AI permission is disabled for menu")
+    try:
+        proposal = await create_menu_proposal(db, user, client, payload.question)
+        db.commit()
+        return proposal
+    except MenuProposalError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AITimeoutError as exc:
+        db.rollback()
+        raise HTTPException(status_code=504, detail="Local AI backend timed out") from exc
+    except (AIDisabledError, AIUnavailableError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Local AI backend is unavailable") from exc
+    except (AIProtocolError, AIResponseValidationError, AIRequestTooLargeError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail="Local AI backend returned an invalid menu proposal") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Could not create AI menu proposal owner_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Could not create menu proposal") from exc
+
+
+@router.post("/ai/menu/proposals")
+async def ai_menu_proposal_form(
+    request: Request,
+    question: str = Form(..., min_length=3, max_length=500),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    runtime_settings: AISettings = Depends(get_ai_settings),
+    registry: ActionHandlerRegistry = Depends(get_action_registry),
+    client: AIClient = Depends(get_ai_client),
+):
+    if not is_ai_domain_allowed(get_ai_user_settings(db, user.id), AIDomain.MENU):
+        raise HTTPException(status_code=403, detail="AI permission is disabled for menu")
+    try:
+        action = await create_menu_proposal(db, user, client, question)
+        db.commit()
+    except MenuProposalError as exc:
+        db.rollback()
+        return _render_ai_settings(
+            request,
+            user=user,
+            db=db,
+            runtime_settings=runtime_settings,
+            registry=registry,
+            error=str(exc),
+        )
+    except (AITimeoutError, AIDisabledError, AIUnavailableError, AIProtocolError, AIResponseValidationError, AIRequestTooLargeError):
+        db.rollback()
+        return _render_ai_settings(
+            request,
+            user=user,
+            db=db,
+            runtime_settings=runtime_settings,
+            registry=registry,
+            error="Не удалось подготовить меню. Попробуйте ещё раз.",
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not create AI menu proposal owner_id=%s", user.id)
+        return _render_ai_settings(
+            request,
+            user=user,
+            db=db,
+            runtime_settings=runtime_settings,
+            registry=registry,
+            error="Не удалось подготовить меню. Попробуйте ещё раз.",
+        )
+    return _redirect_settings(f"Меню подготовлено: {action.action_id}")
 
 
 @router.get("/ai/settings")

@@ -2,7 +2,7 @@
 
 ## Текущая фаза
 
-**PHASE 3 — завершена 2026-09-06.** Реализованы natural-language drafts расходов, merchant/category rules, fast path и подтверждаемое создание расхода. PHASE 4A не начиналась.
+**PHASE 6.5 — завершена 2026-09-06 как инфраструктурная фаза.** Подготовлен отдельный host `llama-server` для Raspberry Pi 5: воспроизводимая source build установка, systemd/env templates, безопасная загрузка GGUF, закрытый доступ из Docker, manual smoke/benchmark и production runbook. На production Pi ничего автоматически не устанавливалось и модель не скачивалась. Следующая доменная фаза — только PHASE 7 (Planner).
 
 Исходная точка: `main` / `a791e8b` (`Prepare Home OS for production`). Рабочее дерево до фазы было чистым.
 
@@ -23,13 +23,29 @@
 - Confirmation получает action только в owner scope, атомарно захватывает pending-запись через `claim_token` и выполняет handler вместе с terminal transition в одной транзакции; cancel использует условный update и не может перезаписать уже захваченное действие.
 - Повторное подтверждение уже выполненного action не вызывает handler второй раз; cancel также идемпотентен.
 - Ошибка handler откатывает доменные изменения, после чего action отдельной транзакцией получает `failed` и безопасный error code.
-- Production handler registry пока пуст: LLM и preview flow не могут напрямую создать расход, меню или planner item до соответствующей доменной фазы.
+- Production handler registry содержит только server-owned handlers для `expense.create` и `menu.apply`; LLM не получает доступ к ним, к `Session` или к прямой записи в БД.
 - Runtime migration добавляет `claim_token`/`claimed_at` в ранее созданную `ai_actions`, сохраняя существующие записи.
 - Добавлена таблица `expense_merchant_rules`: правило всегда scoped по владельцу, списку трат и реально существующей категории; новые категории Home AI не создаёт.
 - Добавлен узкий expense command service без собственного `commit()`: он проверяет owner/edit-share доступ и категорию выбранного списка как при draft, так и при confirm.
 - Простые строки расходов разбираются локально: одна сумма, merchant, `сегодня`/`вчера` в `Europe/Moscow`; известные merchant rules и однозначные продуктовые/топливные hints обходят LLM.
 - Неоднозначный fallback получает только ограниченный список категорий выбранного writable list. Низкая confidence, ambiguity или чужой category ID не создают pending action.
 - `expense.create` стал единственным production handler: он создаёт `ExpenseItem` только после confirm, а исправленная пользователем категория может создать или обновить правило лишь с явным «Запомнить выбор».
+- Добавлен read-only `FinanceSnapshot`: доходы, расходы, баланс, накопления, категории, крупнейшие расходы, лимиты, регулярные платежи, прогноз и сравнение с предыдущим сопоставимым периодом рассчитываются Python-кодом без LLM.
+- Сохранена финансовая модель доступа: собственные и расшаренные списки участвуют в расходах, а доходы, лимиты и регулярные платежи выбираются только для текущего пользователя. Опциональный фильтр списка применяется после server-side проверки доступных списков.
+- Обычные страницы `/finance` и `/expenses/analytics` используют тот же service layer; существующие формулы периода, прогноза и отображаемые template contracts сохранены.
+- Добавлены шесть Pydantic-валидированных read-only finance tools: summary, period comparison, category breakdown, largest expenses, budget status и forecast. Все числовые значения берутся из `FinanceSnapshot`; инструменты не принимают `user_id` и не выполняют записи.
+- Частые финансовые вопросы выбирают один tool локально; неоднозначный вопрос использует короткий finance-only LLM selector. Модель затем получает только ограниченный результат выбранного tool и формирует краткое объяснение без пересчёта сумм.
+- Endpoint `POST /api/ai/finance/questions` требует активного master toggle и finance permission. Timeout, disabled/unavailable backend, invalid JSON, неизвестные/write tools и невалидные arguments возвращают безопасные HTTP-ошибки без изменения БД.
+- Endpoint `POST /api/ai/recipes/questions` требует recipes permission и использует только owner-scoped `Recipe` records. SQL-фильтры выполняются до модели, shortlist ограничен восемью фактическими Recipe ID; `get_recipe_details` не раскрывает чужой или отсутствующий ID, а IDs из ответа модели валидируются по tool result. Menu context явно отмечен как planned menu, а cooking history берётся только из остановленных cooking timers.
+- Добавлен `POST /api/ai/menu/proposals` и одноимённая форма Home AI. Backend сначала применяет фильтры рецептов и исключает реально запланированные недавние `MenuItem`; LLM получает не более восьми owner-scoped кандидатов и может вернуть только их ID и даты запрошенного периода.
+- Предложение сохраняется только как versioned pending `menu.apply` action: до confirm `MenuItem` не создаётся. На подтверждении handler ещё раз проверяет владельца рецептов и точный набор конфликтов, добавляет новые элементы транзакционно, не удаляет и не перезаписывает существующее меню. Повторный confirm идемпотентен.
+- Карточка pending action показывает блюда, даты, приём пищи и текущие коллизии. Конфликтные записи не скрываются: подтверждение явно добавляет новое блюдо рядом, а изменение состава конфликтов после draft безопасно завершает action без записи.
+- PHASE 6.5 закрепила `llama.cpp v0.4.0` source build под ARM64 и отдельного непривилегированного пользователя `home-ai`; installer сохраняет модели и существующий runtime env, не трогает Home OS data и не запускает сервис без явного действия оператора.
+- Добавлены systemd unit и validated launcher: runtime/model/working directory задаются через `/etc/home-ai/llama-server.env`, API key хранится отдельным файлом, Web UI/slots отключены, включён `Restart=on-failure`, journal logging, один inference slot и лимиты 5/6 GiB.
+- Compose `web` получает Linux `host-gateway`, но llama-server не публикуется портом Docker или через Caddy. Runbook требует bind только к фактическому gateway address и firewall allow только для compose subnet/interface.
+- Существующий AI client получил один общий переключатель `AI_ENABLE_THINKING` (production default false) и передаёт его через поддерживаемый llama.cpp `chat_template_kwargs`, чтобы Qwen3.5 не расходовала короткий Pi context на reasoning перед schema-ответом.
+- Model helper использует `.partial`, предварительную проверку места, Content-Length, SHA-256 и atomic no-clobber rename. Зафиксированы кандидаты Qwen3.5-4B Q4_K_M (первый) и Qwen3.5-2B Q4_K_M (fallback), без GGUF/mmproj в Git или CI.
+- Manual smoke проверяет systemd, health, models/chat, container reachability, русский ответ, structured JSON и безопасные expense/finance/recipe/menu сценарии с latency/token/RSS/RAM metrics. Отдельный benchmark прогоняет семь одинаковых prompts для 2B/4B и не объявляет победителя без реального запуска на Pi.
 
 ## Изменённые файлы
 
@@ -48,15 +64,39 @@
 - `app/ai/handlers.py`
 - `app/ai/permissions.py`
 - `app/ai/expenses.py`
+- `app/ai/finance.py`
+- `app/ai/menu.py`
+- `app/ai/recipes.py`
+- `app/ai/tools/__init__.py`
+- `app/ai/tools/finance.py`
+- `app/ai/tools/recipes.py`
 - `app/templates/ai_settings.html`
 - `app/templates/_ai_action_card.html`
+- `app/templates/ai_settings.html`
 - `app/templates/base.html`
 - `app/static/style.css`
 - `app/services/expenses.py`
+- `app/services/finance.py`
+- `app/services/menu.py`
 - `tests/test_ai_foundation.py`
 - `tests/test_ai_actions.py`
 - `tests/test_ai_confirmation.py`
 - `tests/test_ai_expenses.py`
+- `tests/test_finance_snapshot.py`
+- `tests/test_ai_finance.py`
+- `tests/test_ai_recipes.py`
+- `tests/test_ai_menu.py`
+- `ops/home-ai/llama-server.service`
+- `ops/home-ai/llama-server.env.example`
+- `scripts/install_llama_cpp.sh`
+- `scripts/download_home_ai_model.sh`
+- `scripts/run_llama_server.sh`
+- `scripts/wait_llama_server.sh`
+- `scripts/home_ai_runtime_smoke.py`
+- `scripts/home_ai_benchmark.py`
+- `docs/home_ai/RASPBERRY_PI_RUNTIME.md`
+- `tests/test_home_ai_runtime_assets.py`
+- `.gitignore`, `.dockerignore`, `README.md`
 - `app/models.py`
 - `app/main.py`, `requirements.txt`, `requirements-dev.txt`, `docker-compose.yml`, `.env.example`
 
@@ -74,7 +114,21 @@
 - PHASE 3 targeted lint: `ruff check app/ai app/services/expenses.py app/models.py tests/test_ai_foundation.py tests/test_ai_actions.py tests/test_ai_confirmation.py tests/test_ai_expenses.py` — успешно.
 - PHASE 3 targeted tests: `pytest tests/test_ai_foundation.py tests/test_ai_actions.py tests/test_ai_confirmation.py tests/test_ai_expenses.py -q` — `33 passed`.
 - Покрыты `Лента 1840 вчера`, `Бензин 2600 сегодня`, `Пятёрочка 734`, `5800 xteink`, fast path без LLM, low confidence, ограничение LLM только категориями владельца, сохранённое правило, создание и обновление merchant rule, ручная корректировка категории, idempotent confirm и запрет чужой категории.
+- PHASE 4A targeted lint: `ruff check app/services/finance.py app/main.py tests/test_finance_snapshot.py tests/test_expenses.py tests/test_ai_expenses.py` — успешно.
+- PHASE 4A targeted tests: `pytest tests/test_finance_snapshot.py tests/test_expenses.py tests/test_ai_expenses.py -q` — `19 passed`.
+- Числовыми проверками покрыты пустой период, только доходы, только расходы, нулевые категории, пользовательский период и переход года, текущий неполный/предыдущий сопоставимый период, лимиты, регулярные платежи, прогноз без истории, исключённые из аналитики расходы и изоляция owner/shared данных. Дополнительно обе существующие финансовые страницы проверяются через HTTP с ожидаемыми суммами.
+- PHASE 4B targeted lint: `ruff check app/ai app/services/finance.py tests/test_ai_finance.py tests/test_finance_snapshot.py` — успешно.
+- PHASE 4B targeted tests: `pytest tests/test_ai_foundation.py tests/test_ai_actions.py tests/test_ai_confirmation.py tests/test_ai_expenses.py tests/test_ai_finance.py tests/test_finance_snapshot.py -q` — `60 passed`.
+- Покрыты выбор каждого finance tool, конкретный месяц, пустой snapshot, сравнение периодов, категории, крупнейшие расходы, недоступный forecast, почти исчерпанный и превышенный лимит, finance permission, два владельца, отсутствие утечки и записей, invalid JSON, неизвестный/write tool, подмена `user_id`, timeout, unavailable и disabled backend.
+- PHASE 5 targeted lint: `ruff check app/ai/recipes.py app/ai/tools/recipes.py app/ai/router.py tests/test_ai_recipes.py` — успешно.
+- PHASE 5 targeted tests: `pytest tests/test_ai_recipes.py -q` — `19 passed`.
+- Покрыты title/ingredient/time/cost/servings/tags filters, пустой результат, owner isolation, отсутствующий/чужой Recipe ID, ограниченный shortlist, recent menu context, cooking timer history, invalid JSON, неизвестный/write tool, подмена `user_id`, timeout, unavailable, disabled backend и отсутствие записей.
+- PHASE 6 targeted lint: `ruff check app/ai/menu.py app/ai/router.py app/services/menu.py tests/test_ai_menu.py` — успешно.
+- PHASE 6 targeted tests: `pytest tests/test_ai_menu.py tests/test_ai_confirmation.py -q` — `27 passed`.
+- Покрыты меню на один день и неделю, полный период, только существующие/короткие owner-scoped Recipe ID, исключение последних двух недель, time/cost/servings/ingredient filters, пустой shortlist без вызова модели, конфликт существующего MenuItem, форма и preview card, permission, чужие/несуществующие IDs, invalid JSON, timeout, unavailable/disabled backend, cancel, confirm, double confirm и отсутствие записи до confirm.
 - Реальные LLM/GGUF не запускались и в автоматические тесты входить не будут.
+- PHASE 6.5 targeted tests: `pytest tests/test_home_ai_runtime_assets.py -q` — `7 passed`; проверены env/systemd/Compose templates, отсутствие GGUF, pinned source policy и mock modes smoke/benchmark без сети или модели.
+- Финальная локальная проверка: `ruff check .` — успешно; `pytest -q` — `132 passed, 1 skipped` (Windows symlink restriction); `bash -n` четырёх новых shell scripts, `docker compose config --quiet` и `git diff --check` — успешно. Реальный inference остаётся только ручной Pi-проверкой.
 
 ## Известные риски и вопросы
 
@@ -82,15 +136,15 @@
 - Фактическая политика чтения рецептов шире owner-only, а меню персонально. Перед recipe tools требуется закрепить ожидаемое поведение тестами.
 - Chat AI требует нового согласия обоих участников; текущая проверка участия в чате сама по себе недостаточна.
 - Текущий timezone — `Europe/Moscow`, не per-user. V1 использует его как источник истины.
-- `llama-server` на Raspberry Pi и конкретный Qwen GGUF ещё не выбраны/не проверены. Модель не должна попадать в Git или CI.
-- Production CD run `33914549000` завершился failure после запуска контейнеров и попытки rollback (`tar: stdout: write error`). Это существующая операционная проблема вне PHASE 0; перед будущим AI production deploy её нужно устранить и проверить состояние сервера.
-- Production зарегистрировал только `expense.create`; menu и planner handlers по-прежнему отсутствуют до своих доменных фаз.
+- Runtime architecture и два кандидата подготовлены, но `llama-server`/GGUF ещё не запускались на production Raspberry Pi. Финальный выбор 4B против 2B делается только по manual benchmark; модель не должна попадать в Git или CI.
+- Ошибка production rollback с директорией `Caddyfile` и `tar: stdout: write error` исправлена в `73ddebf`; исправление ещё должно пройти обычный production deployment после merge.
+- Production зарегистрировал `expense.create` и `menu.apply`; planner handler отсутствует до PHASE 7.
 - Атомарный claim покрыт интеграционными последовательными запросами; отдельный конкурентный stress test на production SQLite остаётся частью финального hardening.
 
 ## Точная следующая фаза
 
-**PHASE 4A — Deterministic finance snapshots, и только она:**
+**PHASE 7 — Planner, и только она:**
 
-1. Вынести и покрыть targeted-тестами deterministic snapshots расходов, доходов, лимитов и прогноза без LLM.
-2. Зафиксировать owner/shared access semantics финансовых данных в service contracts.
-3. Не добавлять finance read tools, чат, prompts или новые write flows: это остаётся PHASE 4B.
+1. Добавить owner-scoped read contour планировщика и natural-language pending action.
+2. Использовать существующий confirmation flow и `Europe/Moscow` для даты/времени.
+3. Не начинать wishlist или общий multi-domain orchestrator.

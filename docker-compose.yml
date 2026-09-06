@@ -30,11 +30,16 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_CONNECT_TIMEOUT_SECONDS: ${AI_CONNECT_TIMEOUT_SECONDS:-5}
-      AI_READ_TIMEOUT_SECONDS: ${AI_READ_TIMEOUT_SECONDS:-60}
+      AI_READ_TIMEOUT_SECONDS: ${AI_READ_TIMEOUT_SECONDS:-120}
       AI_MAX_TOKENS: ${AI_MAX_TOKENS:-512}
       AI_CONTEXT_BUDGET: ${AI_CONTEXT_BUDGET:-6000}
       AI_MAX_CONCURRENCY: ${AI_MAX_CONCURRENCY:-1}
       AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
+      AI_ENABLE_THINKING: ${AI_ENABLE_THINKING:-false}
+    extra_hosts:
+      # Linux Docker: this name resolves to the host gateway. llama-server is
+      # managed by systemd on the host and is never published by Compose/Caddy.
+      - "host.docker.internal:host-gateway"
     expose:
       - "8000"
     volumes:
