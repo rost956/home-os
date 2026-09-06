@@ -15,10 +15,12 @@ class ActionPayload(BaseModel):
 
 class CreateExpenseActionPayload(ActionPayload):
     expense_list_id: int = Field(gt=0)
-    category_id: int = Field(gt=0)
+    category_id: int | None = Field(default=None, gt=0)
     title: str = Field(min_length=1, max_length=150)
     amount: Decimal = Field(gt=0, le=Decimal("99999999.99"), max_digits=10, decimal_places=2)
     expense_date: date
+    date_was_defaulted: bool = False
+    category_confident: bool = True
     include_in_analytics: bool = True
     include_in_forecast: bool = True
     merchant_key: str | None = Field(default=None, max_length=120)

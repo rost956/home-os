@@ -76,6 +76,20 @@ def test_llama_client_parses_completion_and_structured_json():
     assert parsed.message == "Готово"
 
 
+def test_llama_client_allows_a_schema_request_to_disable_thinking():
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        assert json.loads(http_request.content)["chat_template_kwargs"] == {"enable_thinking": False}
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"message":"Готово"}'}, "finish_reason": "stop"}]},
+        )
+
+    client = LlamaCppClient(enabled_settings(enable_thinking=True), transport=httpx.MockTransport(handler))
+    schema_request = request().model_copy(update={"enable_thinking": False})
+
+    assert asyncio.run(client.complete_json(schema_request, AIJsonMessage)).message == "Готово"
+
+
 def test_llama_client_maps_timeout_unavailable_and_invalid_json():
     def timeout_handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("slow")

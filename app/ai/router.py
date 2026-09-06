@@ -50,17 +50,12 @@ from .errors import (
 from .expenses import (
     ExpenseDraftAmbiguityError,
     ExpenseDraftError,
-    ExpenseDraftLowConfidenceError,
     ExpenseTextParseError,
     build_expense_draft_payload,
     corrected_expense_payload,
     expense_action_category_choices,
     expense_payload_from_action,
-    find_merchant_rule_category,
-    heuristic_category_id,
-    parse_expense_text,
-    resolve_expense_list,
-    select_category_with_llm,
+    prepare_expense_draft,
 )
 from .finance import FinanceQuestionRequest, FinanceQuestionResponse, answer_finance_question
 from .handlers import ActionHandlerRegistry, get_action_registry
@@ -374,50 +369,45 @@ async def ai_expense_draft(
     if not is_ai_domain_allowed(get_ai_user_settings(db, user.id), AIDomain.FINANCE):
         raise HTTPException(status_code=403, detail="AI permission is disabled for expenses")
     try:
-        parsed = parse_expense_text(text)
-        selected_list_id = resolve_expense_list(
+        prepared = await prepare_expense_draft(
             db,
             user,
+            client,
+            text=text,
             expense_list_id=expense_list_id,
             category_id=category_id,
         )
-        categories = [
-            item
-            for item in writable_expense_category_choices(db, user)
-            if item.expense_list_id == selected_list_id
-        ]
-        if category_id is not None:
-            if not any(item.id == category_id for item in categories):
-                raise ExpenseDraftAmbiguityError("Choose a category from the selected expense list")
-            selected_category_id = category_id
-        else:
-            selected_category_id = find_merchant_rule_category(
-                db,
-                user,
-                expense_list_id=selected_list_id,
-                merchant_key=parsed.merchant_key,
-            ) or heuristic_category_id(parsed, categories)
-            if selected_category_id is None:
-                selected_category_id = await select_category_with_llm(client, text=text, categories=categories)
-            if selected_category_id is None:
-                raise ExpenseDraftLowConfidenceError("Не удалось уверенно выбрать категорию. Выберите её вручную.")
         payload = build_expense_draft_payload(
-            parsed,
-            expense_list_id=selected_list_id,
-            category_id=selected_category_id,
+            prepared.parsed,
+            expense_list_id=prepared.expense_list_id,
+            category_id=prepared.category_id,
+            category_confident=prepared.category_confident,
+            merchant_key=prepared.merchant_key,
         )
+        category_note = (
+            "Категория определена; проверьте её перед подтверждением."
+            if payload.category_id is not None
+            else "Категория не определена — выберите её перед подтверждением."
+        )
+        date_note = " (по умолчанию сегодня)" if payload.date_was_defaulted else ""
         action = create_pending_action(
             db,
             owner_id=user.id,
             action_type=AIActionType.CREATE_EXPENSE,
             proposed_payload=payload,
             preview_text=(
-                f"{payload.title} — {payload.amount} ₽, {payload.expense_date.isoformat()}. "
-                "Проверьте категорию перед подтверждением."
+                f"{payload.title} — {payload.amount} ₽, {payload.expense_date.isoformat()}{date_note}. {category_note}"
             ),
         )
+        logger.info(
+            "Prepared expense draft owner_id=%s deterministic_only=%s llm_prompt_chars=%s category_resolved=%s",
+            user.id,
+            not prepared.llm_required,
+            prepared.llm_prompt_chars,
+            payload.category_id is not None,
+        )
         db.commit()
-    except (ExpenseTextParseError, ExpenseDraftAmbiguityError, ExpenseDraftLowConfidenceError, ExpenseCommandError) as exc:
+    except (ExpenseTextParseError, ExpenseDraftAmbiguityError, ExpenseCommandError) as exc:
         db.rollback()
         return _render_ai_settings(
             request,
@@ -466,7 +456,10 @@ def ai_action_confirm(
         raise HTTPException(status_code=409, detail="AI action has expired")
     try:
         confirmed_payload = None
-        if action.action_type == AIActionType.CREATE_EXPENSE.value:
+        if (
+            action.action_type == AIActionType.CREATE_EXPENSE.value
+            and action.status != AIActionStatus.CONFIRMED.value
+        ):
             confirmed_payload = corrected_expense_payload(
                 action,
                 category_id=category_id,

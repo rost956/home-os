@@ -7,6 +7,15 @@
         <span class="ai-action-status">Ожидает</span>
     </div>
     <p class="ai-action-preview">{{ action.preview_text or 'Проверьте действие перед подтверждением.' }}</p>
+    {% if action.action_type == 'expense.create' and action_payloads.get(action.public_id) %}
+    {% set expense_payload = action_payloads[action.public_id] %}
+    <dl class="ai-expense-preview">
+        <div><dt>Сумма</dt><dd>{{ expense_payload.amount }} ₽</dd></div>
+        <div><dt>Дата</dt><dd>{{ expense_payload.expense_date.strftime('%d.%m.%Y') }}{% if expense_payload.date_was_defaulted %} (сегодня по умолчанию){% endif %}</dd></div>
+        <div><dt>Описание</dt><dd>{{ expense_payload.title }}</dd></div>
+        <div><dt>Категория</dt><dd>{% if expense_payload.category_id %}{% for category in expense_action_categories.get(action.public_id, ()) %}{% if category.id == expense_payload.category_id %}{{ category.name }}{% endif %}{% endfor %} — проверьте ниже{% else %}Не определена — выберите ниже{% endif %}</dd></div>
+    </dl>
+    {% endif %}
     {% if action.action_type == 'menu.apply' and action_payloads.get(action.public_id) %}
     {% set menu_payload = action_payloads[action.public_id] %}
     <div class="ai-menu-preview">
@@ -37,7 +46,8 @@
             {% set categories = expense_action_categories.get(action.public_id, ()) %}
             {% if categories %}
             <label class="ai-action-field">Категория
-                <select name="category_id">
+                <select name="category_id" {% if not action_payloads[action.public_id].category_id %}required{% endif %}>
+                    {% if not action_payloads[action.public_id].category_id %}<option value="" selected disabled>Выберите категорию</option>{% endif %}
                     {% for category in categories %}
                     <option value="{{ category.id }}" {% if category.id == action_payloads[action.public_id].category_id %}selected{% endif %}>{{ category.name }}</option>
                     {% endfor %}

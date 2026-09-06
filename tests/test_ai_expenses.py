@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 
 from app.ai.client import FakeAIClient
 from app.ai.dependencies import get_ai_client
@@ -70,24 +71,32 @@ def test_known_merchants_use_fast_path_without_llm(client, db, make_user, login)
     assert db.query(ExpenseItem).count() == 0
 
 
-def test_unknown_merchant_with_low_confidence_creates_no_action_or_category(client, db, make_user, login):
+def test_unknown_merchant_with_low_confidence_creates_unresolved_pending_action(client, db, make_user, login):
     owner = make_user("unknown-owner")
     expense_setup(db, owner)
     enable_finance(db, owner)
     fake_client = FakeAIClient(
-        responses=[AICompletionResponse(content='{"category_id": 1, "confidence": 0.2, "ambiguous": true}')]
+        responses=[
+            AICompletionResponse(
+                content=(
+                    '{"title":"xteink","merchant":"xteink","category_id":1,'
+                    '"category_confidence":0.2,"ambiguous":true}'
+                )
+            )
+        ]
     )
     app.dependency_overrides[get_ai_client] = lambda: fake_client
     try:
         login(owner.username)
-        response = client.post("/ai/expenses/draft", data={"text": "5800 xteink"})
+        response = client.post("/ai/expenses/draft", data={"text": "5800 xteink"}, follow_redirects=False)
     finally:
         app.dependency_overrides.pop(get_ai_client, None)
 
-    assert response.status_code == 422
-    assert "Выберите её вручную" in response.text
+    assert response.status_code == 303
     assert len(fake_client.requests) == 1
-    assert db.query(AIAction).count() == 0
+    assert json.loads(latest_action(db).proposed_payload_json)["category_id"] is None
+    assert db.query(AIAction).count() == 1
+    assert db.query(ExpenseItem).count() == 0
     assert db.query(ExpenseCategory).count() == 2
 
 
@@ -126,19 +135,29 @@ def test_llm_cannot_propose_a_category_outside_the_users_list(client, db, make_u
     fake_client = FakeAIClient(
         responses=[
             AICompletionResponse(
-                content=json.dumps({"category_id": foreign_category.id, "confidence": 0.99, "ambiguous": False})
+                content=json.dumps(
+                    {
+                        "title": "xteink",
+                        "merchant": "xteink",
+                        "category_id": foreign_category.id,
+                        "category_confidence": 0.99,
+                        "ambiguous": False,
+                    }
+                )
             )
         ]
     )
     app.dependency_overrides[get_ai_client] = lambda: fake_client
     try:
         login(owner.username)
-        response = client.post("/ai/expenses/draft", data={"text": "5800 xteink"})
+        response = client.post("/ai/expenses/draft", data={"text": "5800 xteink"}, follow_redirects=False)
     finally:
         app.dependency_overrides.pop(get_ai_client, None)
 
-    assert response.status_code == 422
-    assert db.query(AIAction).count() == 0
+    assert response.status_code == 303
+    assert json.loads(latest_action(db).proposed_payload_json)["category_id"] is None
+    assert db.query(AIAction).count() == 1
+    assert db.query(ExpenseItem).count() == 0
 
 
 def test_corrected_category_updates_existing_merchant_rule(client, db, make_user, login):
@@ -238,3 +257,174 @@ def test_foreign_category_cannot_be_used_for_draft_or_confirm(client, db, make_u
     assert db.query(ExpenseItem).count() == 0
     db.expire_all()
     assert db.get(AIAction, action.id).status == "pending"
+
+
+def test_real_world_failing_phrase_is_deterministic_and_creates_only_pending_action(
+    client, db, make_user, login, monkeypatch
+):
+    owner = make_user("natural-failing-owner")
+    expense_list, _food, transport = expense_setup(db, owner)
+    enable_finance(db, owner)
+    fake_client = FakeAIClient()
+    app.dependency_overrides[get_ai_client] = lambda: fake_client
+    monkeypatch.setattr("app.ai.expenses.today_msk", lambda: date(2026, 9, 7))
+    try:
+        login(owner.username)
+        response = client.post(
+            "/ai/expenses/draft",
+            data={"text": "Бензин тест 2100 позавчера"},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    payload = json.loads(latest_action(db).proposed_payload_json)
+    assert response.status_code == 303
+    assert fake_client.requests == []
+    assert payload["expense_list_id"] == expense_list.id
+    assert payload["category_id"] == transport.id
+    assert payload["amount"] == "2100"
+    assert payload["expense_date"] == "2026-09-05"
+    assert payload["title"] == "Бензин тест"
+    assert db.query(ExpenseItem).count() == 0
+
+
+def test_llm_receives_fixed_facts_and_can_only_prepare_an_allowed_category(client, db, make_user, login, monkeypatch):
+    owner = make_user("natural-llm-owner")
+    _expense_list, food, _transport = expense_setup(db, owner)
+    enable_finance(db, owner)
+    fake_client = FakeAIClient(
+        responses=[
+            AICompletionResponse(
+                content=json.dumps(
+                    {
+                        "title": "Цветы в Север",
+                        "merchant": "Север",
+                        "category_id": food.id,
+                        "category_confidence": 0.91,
+                        "ambiguous": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ]
+    )
+    app.dependency_overrides[get_ai_client] = lambda: fake_client
+    monkeypatch.setattr("app.ai.expenses.today_msk", lambda: date(2026, 9, 7))
+    try:
+        login(owner.username)
+        response = client.post(
+            "/ai/expenses/draft",
+            data={"text": "в Север взял цветы за 1750 вчера вечером"},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    payload = json.loads(latest_action(db).proposed_payload_json)
+    prompt = "\n".join(message.content for message in fake_client.requests[0].messages)
+    assert response.status_code == 303
+    assert payload["amount"] == "1750"
+    assert payload["expense_date"] == "2026-09-06"
+    assert payload["category_id"] == food.id
+    assert payload["merchant_key"] == "север"
+    assert '"amount":"1750"' in prompt
+    assert '"expense_date":"2026-09-06"' in prompt
+    assert "fixed server facts" in prompt
+    assert len(prompt) < 2_000
+    assert db.query(ExpenseItem).count() == 0
+
+
+def test_unresolved_category_requires_manual_choice_before_confirm(client, db, make_user, login):
+    owner = make_user("natural-unresolved-owner")
+    _expense_list, food, _transport = expense_setup(db, owner)
+    enable_finance(db, owner)
+    fake_client = FakeAIClient(
+        responses=[
+            AICompletionResponse(
+                content=(
+                    '{"title":"непонятная покупка","merchant":null,"category_id":null,'
+                    '"category_confidence":0.1,"ambiguous":true}'
+                )
+            )
+        ]
+    )
+    app.dependency_overrides[get_ai_client] = lambda: fake_client
+    try:
+        login(owner.username)
+        draft_response = client.post(
+            "/ai/expenses/draft",
+            data={"text": "непонятная покупка 777"},
+            follow_redirects=False,
+        )
+        action = latest_action(db)
+        draft_page = client.get("/ai/settings")
+        rejected_confirm = client.post(f"/ai/actions/{action.public_id}/confirm", follow_redirects=False)
+        db.expire_all()
+        pending_status = db.get(AIAction, action.id).status
+        accepted_confirm = client.post(
+            f"/ai/actions/{action.public_id}/confirm",
+            data={"category_id": str(food.id)},
+            follow_redirects=False,
+        )
+        repeated_confirm = client.post(f"/ai/actions/{action.public_id}/confirm", follow_redirects=False)
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    assert draft_response.status_code == 303
+    assert "Не определена — выберите ниже" in draft_page.text
+    assert "сегодня по умолчанию" in draft_page.text
+    assert 'name="category_id" required' in draft_page.text
+    assert "Опишите трату обычными словами" in draft_page.text
+    assert rejected_confirm.status_code == 409
+    assert pending_status == "pending"
+    assert accepted_confirm.status_code == 303
+    assert repeated_confirm.status_code == 303
+    assert db.query(ExpenseItem).one().amount == Decimal("777")
+    assert db.query(ExpenseItem).count() == 1
+
+
+def test_multiple_expenses_are_not_merged_or_persisted(client, db, make_user, login):
+    owner = make_user("natural-multiple-owner")
+    expense_setup(db, owner)
+    enable_finance(db, owner)
+    login(owner.username)
+
+    response = client.post("/ai/expenses/draft", data={"text": "кофе 250 и такси 617"})
+
+    assert response.status_code == 422
+    assert "Введите каждый расход отдельно" in response.text
+    assert db.query(AIAction).count() == 0
+    assert db.query(ExpenseItem).count() == 0
+
+
+def test_saved_merchant_rule_matches_inside_natural_phrase_without_llm(client, db, make_user, login):
+    owner = make_user("natural-rule-owner")
+    expense_list, _food, transport = expense_setup(db, owner)
+    db.add(
+        ExpenseMerchantRule(
+            owner_id=owner.id,
+            expense_list_id=expense_list.id,
+            category_id=transport.id,
+            merchant_key="север сервис",
+        )
+    )
+    db.commit()
+    enable_finance(db, owner)
+    fake_client = FakeAIClient()
+    app.dependency_overrides[get_ai_client] = lambda: fake_client
+    try:
+        login(owner.username)
+        response = client.post(
+            "/ai/expenses/draft",
+            data={"text": "вчера в Север Сервис починили кран за 3600"},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    payload = json.loads(latest_action(db).proposed_payload_json)
+    assert response.status_code == 303
+    assert fake_client.requests == []
+    assert payload["category_id"] == transport.id
+    assert payload["merchant_key"] == "север сервис"

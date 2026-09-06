@@ -24,6 +24,7 @@ class AICompletionRequest(BaseModel):
     max_tokens: int = Field(default=512, ge=16, le=2048)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     output_mode: Literal["text", "json"] = "text"
+    enable_thinking: bool | None = None
 
 
 class AICompletionResponse(BaseModel):
@@ -57,13 +58,15 @@ class AIHealthResponse(BaseModel):
     model: str | None = Field(default=None, max_length=200)
 
 
-class ExpenseCategorySelection(BaseModel):
-    """Bounded LLM output for a category proposal; never a write command."""
+class ExpenseSemanticSelection(BaseModel):
+    """Bounded semantic interpretation of one pre-parsed expense; never a write command."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    title: str | None = Field(default=None, min_length=1, max_length=150)
+    merchant: str | None = Field(default=None, min_length=1, max_length=120)
     category_id: int | None = Field(default=None, gt=0)
-    confidence: float = Field(ge=0.0, le=1.0)
+    category_confidence: float = Field(ge=0.0, le=1.0)
     ambiguous: bool = False
 
 

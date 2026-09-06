@@ -110,7 +110,9 @@ Payload проходит action-specific Pydantic-схему и имеет ве�
 
 Правило применяется только к доступному на запись списку и существующей в нём категории. Исправленная категория записывается как правило только при явной опции «Запомнить выбор». Удалённая/недоступная категория делает правило невалидным; автоматического создания категории нет.
 
-В PHASE 3 добавлен узкий `app/services/expenses.py`: он повторно проверяет owner/edit-share доступ к списку и принадлежность категории списку, создаёт `ExpenseItem` через `flush()` и не делает `commit()`. AI-парсер детерминированно извлекает одну сумму, merchant и `сегодня`/`вчера` в `Europe/Moscow`; известное правило merchant→category и небольшой набор однозначных merchant hints обходятся без inference. Только если fast path не выбрал категорию, LLM получает текст и ограниченный server-built список `{id, name}` категорий выбранного writable list. Ответ с чужим ID, `ambiguous=true` или confidence ниже 0.85 не создаёт action. Даже удачный fallback создаёт исключительно `AIAction(pending)`, а реальная трата появляется только через server-owned `expense.create` handler после confirm.
+В PHASE 3 добавлен узкий `app/services/expenses.py`: он повторно проверяет owner/edit-share доступ к списку и принадлежность категории списку, создаёт `ExpenseItem` через `flush()` и не делает `commit()`. PHASE 6.6 заменила positional parser на гибридный production path. Backend независимо от порядка слов извлекает ровно одну сумму (включая пробелы, десятичную часть и русские обозначения рублей), `сегодня`/`вчера`/`позавчера` либо ISO-дату и разрешает относительный день через текущую `Europe/Moscow`. При отсутствии даты явно фиксируется default «сегодня»; слова «утром», «вечером» и описательные обороты датой не становятся. Несколько сумм безопасно отклоняются с просьбой вводить расходы отдельно, потому что текущий action contract представляет один расход.
+
+Остаток фразы сохраняется как описание. Owner-scoped merchant rule и однозначные продуктовые/топливные hints остаются deterministic fast path. Только для семантической неоднозначности компактный expense-only prompt получает исходный текст как недоверенные данные, уже зафиксированные backend сумму/дату и разрешённые `{id, name}` категорий. Модель не возвращает сумму или дату, не создаёт категорию и не выполняет write; `thinking=false` задаётся на уровне этого schema-request. Чужой/выдуманный ID, ambiguity или confidence ниже 0.85 оставляет `category_id=null` в pending draft. UI требует выбрать доступную категорию до confirm. `expense.create` handler не принимает unresolved payload и повторно проверяет доступ, поэтому реальная трата по-прежнему появляется только после явного подтверждения. Merchant rule обучается только при «Запомнить выбор», причём в payload попадает распознанный merchant/rule key, а не произвольная многословная фраза.
 
 ### Chat permissions и AI history
 
@@ -184,6 +186,7 @@ Payload проходит action-specific Pydantic-схему и имеет ве�
    - 4B: read tools, вопросы, объяснение сравнений/прогноза.
 5. **Recipes**: read search/recommendations по реальным IDs.
 6. **Menu**: proposal и подтверждаемое применение.
+6.6. **Natural expense follow-up**: свободный порядок слов, deterministic facts, компактная semantic интерпретация и pending draft с явной неопределённостью.
 7. **Planner**: read + natural-language pending action.
 8. **Wishlist + finance**: deterministic affordability scenario и объяснение.
 9. **Chat retrieval** разбить:
@@ -197,6 +200,16 @@ Payload проходит action-specific Pydantic-схему и имеет ве�
 порядок доменных фаз: host runtime/systemd, model download helper, закрытый
 host-gateway доступ, smoke/benchmark и Pi runbook готовы; production установка и
 выбор 4B/2B остаются явными ручными операциями.
+
+Read-only real-model проверка PHASE 6.6 запускается внутри production web-контейнера и использует тот же `prepare_expense_draft`, что HTTP endpoint, но не вызывает `create_pending_action` и завершает DB session rollback:
+
+```bash
+sudo docker compose exec -T web python -B scripts/home_ai_expense_evaluation.py \
+  --username "USERNAME" \
+  --expense-list-id EXPENSE_LIST_ID
+```
+
+Набор из 34 held-out фраз находится только в diagnostic/test module и не включён в production prompt.
 
 Дробление фаз 2, 4 и 9 уменьшает размер изменений и отдельно проверяет наиболее рискованные persistence, finance и privacy boundaries.
 

@@ -2,7 +2,7 @@
 
 ## Текущая фаза
 
-**PHASE 6.5 — завершена 2026-09-06 как инфраструктурная фаза.** Подготовлен отдельный host `llama-server` для Raspberry Pi 5: воспроизводимая source build установка, systemd/env templates, безопасная загрузка GGUF, закрытый доступ из Docker, manual smoke/benchmark и production runbook. На production Pi ничего автоматически не устанавливалось и модель не скачивалась. Следующая доменная фаза — только PHASE 7 (Planner).
+**PHASE 6.6 — завершена 2026-09-07 как follow-up natural-language expenses.** Production expense path принимает свободный порядок слов, извлекает деньги и даты backend-кодом, использует компактную semantic LLM-схему только при необходимости и сохраняет исключительно подтверждаемый pending draft. Добавлен read-only held-out evaluator из 34 фраз для реального Raspberry Pi. Следующая доменная фаза остаётся только PHASE 7 (Planner); она не начата.
 
 Исходная точка: `main` / `a791e8b` (`Prepare Home OS for production`). Рабочее дерево до фазы было чистым.
 
@@ -27,8 +27,10 @@
 - Runtime migration добавляет `claim_token`/`claimed_at` в ранее созданную `ai_actions`, сохраняя существующие записи.
 - Добавлена таблица `expense_merchant_rules`: правило всегда scoped по владельцу, списку трат и реально существующей категории; новые категории Home AI не создаёт.
 - Добавлен узкий expense command service без собственного `commit()`: он проверяет owner/edit-share доступ и категорию выбранного списка как при draft, так и при confirm.
-- Простые строки расходов разбираются локально: одна сумма, merchant, `сегодня`/`вчера` в `Europe/Moscow`; известные merchant rules и однозначные продуктовые/топливные hints обходят LLM.
-- Неоднозначный fallback получает только ограниченный список категорий выбранного writable list. Низкая confidence, ambiguity или чужой category ID не создают pending action.
+- Natural expense pre-parser независимо от порядка слов извлекает одну сумму, валютный суффикс/разделитель тысяч, `сегодня`/`вчера`/`позавчера` или ISO-дату. Отсутствующая дата явно означает сегодняшний день в `Europe/Moscow`; время суток остаётся описанием.
+- Несколько сумм не объединяются: текущая single-action архитектура возвращает просьбу ввести расходы отдельно. Отсутствующая, нулевая, отрицательная или чрезмерная сумма не дополняется догадкой модели.
+- Известные merchant rules и однозначные продуктовые/топливные hints обходят LLM. Неоднозначный fallback получает фиксированные backend-факты и только категории выбранного writable list через компактный expense-only contract с `thinking=false`.
+- Низкая confidence, ambiguity или чужой category ID создают pending draft с unresolved category; UI показывает неопределённость и требует owner-scoped выбор до confirm. До подтверждения `ExpenseItem` отсутствует.
 - `expense.create` стал единственным production handler: он создаёт `ExpenseItem` только после confirm, а исправленная пользователем категория может создать или обновить правило лишь с явным «Запомнить выбор».
 - Добавлен read-only `FinanceSnapshot`: доходы, расходы, баланс, накопления, категории, крупнейшие расходы, лимиты, регулярные платежи, прогноз и сравнение с предыдущим сопоставимым периодом рассчитываются Python-кодом без LLM.
 - Сохранена финансовая модель доступа: собственные и расшаренные списки участвуют в расходах, а доходы, лимиты и регулярные платежи выбираются только для текущего пользователя. Опциональный фильтр списка применяется после server-side проверки доступных списков.
@@ -46,6 +48,7 @@
 - Существующий AI client получил один общий переключатель `AI_ENABLE_THINKING` (production default false) и передаёт его через поддерживаемый llama.cpp `chat_template_kwargs`, чтобы Qwen3.5 не расходовала короткий Pi context на reasoning перед schema-ответом.
 - Model helper использует `.partial`, предварительную проверку места, Content-Length, SHA-256 и atomic no-clobber rename. Зафиксированы кандидаты Qwen3.5-4B Q4_K_M (первый) и Qwen3.5-2B Q4_K_M (fallback), без GGUF/mmproj в Git или CI.
 - Manual smoke проверяет systemd, health, models/chat, container reachability, русский ответ, structured JSON и безопасные expense/finance/recipe/menu сценарии с latency/token/RSS/RAM metrics. Отдельный benchmark прогоняет семь одинаковых prompts для 2B/4B и не объявляет победителя без реального запуска на Pi.
+- PHASE 6.6 содержит 34 held-out natural expense фразы отдельно от production prompt и read-only evaluator, вызывающий фактический production preparation path без создания action/expense.
 
 ## Изменённые файлы
 
@@ -128,6 +131,7 @@
 - Покрыты меню на один день и неделю, полный период, только существующие/короткие owner-scoped Recipe ID, исключение последних двух недель, time/cost/servings/ingredient filters, пустой shortlist без вызова модели, конфликт существующего MenuItem, форма и preview card, permission, чужие/несуществующие IDs, invalid JSON, timeout, unavailable/disabled backend, cancel, confirm, double confirm и отсутствие записи до confirm.
 - Реальные LLM/GGUF не запускались и в автоматические тесты входить не будут.
 - PHASE 6.5 targeted tests: `pytest tests/test_home_ai_runtime_assets.py -q` — `7 passed`; проверены env/systemd/Compose templates, отсутствие GGUF, pinned source policy и mock modes smoke/benchmark без сети или модели.
+- PHASE 6.6 Home AI regression: parser/expense/action/client/finance/recipes/menu/diagnostic tests — `159 passed`; полный `pytest -q` — `198 passed, 1 skipped` из-за ограничения Windows symlink. Held-out набор содержит 34 фразы и не входит в production prompt; CI использует только deterministic parser и `FakeAIClient`.
 - Финальная локальная проверка: `ruff check .` — успешно; `pytest -q` — `132 passed, 1 skipped` (Windows symlink restriction); `bash -n` четырёх новых shell scripts, `docker compose config --quiet` и `git diff --check` — успешно. Реальный inference остаётся только ручной Pi-проверкой.
 
 ## Известные риски и вопросы
