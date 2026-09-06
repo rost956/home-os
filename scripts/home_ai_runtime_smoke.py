@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from home_ai_benchmark_contract import (
-    ROUTING_RESPONSE_SCHEMA,
+    DIAGNOSTIC_SEED,
     ROUTING_SYSTEM_PROMPT,
     SYNTHETIC_RECIPE_IDS,
     routing_response_format,
+    routing_response_schema,
 )
 
 
@@ -76,7 +77,7 @@ CASES = (
             "arguments": {"merchant": "Лента", "amount": 1840, "date_hint": "вчера"},
             "referenced_ids": [],
         },
-        response_schema=ROUTING_RESPONSE_SCHEMA,
+        response_schema=routing_response_schema(),
     ),
     PromptCase(
         name="finance_read_only",
@@ -88,7 +89,7 @@ CASES = (
             "arguments": {"period": "current_month"},
             "referenced_ids": [],
         },
-        response_schema=ROUTING_RESPONSE_SCHEMA,
+        response_schema=routing_response_schema(),
     ),
     PromptCase(
         name="recipe_read_only",
@@ -99,9 +100,12 @@ CASES = (
             "tool": "recipes.recommend",
             "arguments": {"max_minutes": 40},
         },
-        allowed_ids=frozenset({101, 102, 103}),
+        allowed_ids=SYNTHETIC_RECIPE_IDS,
         minimum_ids=1,
-        response_schema=ROUTING_RESPONSE_SCHEMA,
+        response_schema=routing_response_schema(
+            allowed_ids=SYNTHETIC_RECIPE_IDS,
+            minimum_ids=1,
+        ),
     ),
     PromptCase(
         name="menu_proposal_no_write",
@@ -117,7 +121,10 @@ CASES = (
         },
         allowed_ids=SYNTHETIC_RECIPE_IDS,
         minimum_ids=1,
-        response_schema=ROUTING_RESPONSE_SCHEMA,
+        response_schema=routing_response_schema(
+            allowed_ids=SYNTHETIC_RECIPE_IDS,
+            minimum_ids=1,
+        ),
     ),
 )
 
@@ -166,17 +173,15 @@ def _chat_payload(model: str, case: PromptCase) -> dict[str, Any]:
             {"role": "user", "content": case.user},
         ],
         "temperature": 0.0,
+        "seed": DIAGNOSTIC_SEED,
+        "cache_prompt": False,
         "max_tokens": 256,
         "stream": True,
         "stream_options": {"include_usage": True},
         "chat_template_kwargs": {"enable_thinking": False},
     }
     if case.response_schema is not None:
-        payload["response_format"] = (
-            routing_response_format()
-            if case.response_schema is ROUTING_RESPONSE_SCHEMA
-            else {"type": "json_schema", "schema": case.response_schema}
-        )
+        payload["response_format"] = routing_response_format(case.response_schema)
     elif case.expected is not None:
         payload["response_format"] = {"type": "json_object"}
     return payload
@@ -250,35 +255,59 @@ def _assert_case(case: PromptCase, content: str) -> dict[str, Any] | None:
         raise SmokeFailure(f"{case.name} did not return valid JSON: {content[:200]}") from exc
     if not isinstance(parsed, dict):
         raise SmokeFailure(f"{case.name} returned JSON that is not an object: actual={content}")
+    actual_json = json.dumps(parsed, ensure_ascii=False, sort_keys=True)
     expected_keys = set(case.expected)
     if case.allowed_ids:
         expected_keys.add("referenced_ids")
+        if "referenced_ids" not in parsed:
+            raise SmokeFailure(
+                f"{case.name}: missing IDs; expected at least {case.minimum_ids} from "
+                f"{sorted(case.allowed_ids)}; actual={actual_json}"
+            )
     if set(parsed) != expected_keys:
         raise SmokeFailure(
             f"{case.name}: response keys differ; "
             f"expected={json.dumps(case.expected, ensure_ascii=False, sort_keys=True)}; "
-            f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
+            f"actual={actual_json}"
+        )
+    if "intent" in case.expected or "tool" in case.expected:
+        expected_route = (case.expected.get("intent"), case.expected.get("tool"))
+        actual_route = (parsed.get("intent"), parsed.get("tool"))
+        if actual_route != expected_route:
+            raise SmokeFailure(
+                f"{case.name}: wrong routing; expected intent/tool={expected_route!r}; "
+                f"actual intent/tool={actual_route!r}; actual={actual_json}"
+            )
+    if "arguments" in case.expected and parsed.get("arguments") != case.expected["arguments"]:
+        raise SmokeFailure(
+            f"{case.name}: wrong arguments; expected="
+            f"{json.dumps(case.expected['arguments'], ensure_ascii=False, sort_keys=True)}; "
+            f"actual={actual_json}"
         )
     for key, expected_value in case.expected.items():
+        if key in {"intent", "tool", "arguments"}:
+            continue
         if parsed.get(key) != expected_value:
             raise SmokeFailure(
                 f"{case.name}: contract mismatch; "
                 f"expected={json.dumps(case.expected, ensure_ascii=False, sort_keys=True)}; "
-                f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
+                f"actual={actual_json}"
             )
     if case.allowed_ids:
         recipe_ids = parsed.get("referenced_ids")
-        if (
-            not isinstance(recipe_ids, list)
-            or len(recipe_ids) < case.minimum_ids
-            or len(recipe_ids) != len(set(recipe_ids))
-            or any(not isinstance(item, int) or item not in case.allowed_ids for item in recipe_ids)
-        ):
+        if not isinstance(recipe_ids, list) or len(recipe_ids) < case.minimum_ids:
             raise SmokeFailure(
-                f"{case.name}: invalid referenced_ids; expected subset of {sorted(case.allowed_ids)} "
-                f"with at least {case.minimum_ids} item(s); "
-                f"actual={json.dumps(parsed, ensure_ascii=False, sort_keys=True)}"
+                f"{case.name}: missing IDs; expected at least {case.minimum_ids} from "
+                f"{sorted(case.allowed_ids)}; actual={actual_json}"
             )
+        invented_ids = [item for item in recipe_ids if not isinstance(item, int) or item not in case.allowed_ids]
+        if invented_ids:
+            raise SmokeFailure(
+                f"{case.name}: invented IDs; allowed={sorted(case.allowed_ids)}; "
+                f"invented={invented_ids!r}; actual={actual_json}"
+            )
+        if len(recipe_ids) != len(set(recipe_ids)):
+            raise SmokeFailure(f"{case.name}: duplicate IDs; actual={actual_json}")
     return parsed
 
 

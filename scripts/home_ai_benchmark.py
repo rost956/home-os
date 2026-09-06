@@ -14,9 +14,9 @@ from typing import Any
 from home_ai_benchmark_contract import (
     ALLOWED_INTENTS,
     ALLOWED_TOOLS,
-    ROUTING_RESPONSE_SCHEMA,
     ROUTING_SYSTEM_PROMPT,
     SYNTHETIC_RECIPE_IDS,
+    routing_response_schema,
 )
 from home_ai_runtime_smoke import (
     PromptCase,
@@ -67,7 +67,7 @@ CASES = (
         "recipe_query",
         "recipes.recommend",
         {"max_minutes": 40},
-        frozenset({101, 102, 103}),
+        SYNTHETIC_RECIPE_IDS,
         1,
     ),
     BenchmarkCase(
@@ -75,7 +75,7 @@ CASES = (
         "recipe_query",
         "recipes.recommend",
         {"budget": "low"},
-        frozenset({101, 102, 103}),
+        SYNTHETIC_RECIPE_IDS,
         1,
     ),
     BenchmarkCase(
@@ -83,7 +83,7 @@ CASES = (
         "menu_proposal",
         "menu.propose",
         {"days": 3, "no_repeats": True},
-        frozenset({101, 102, 103}),
+        SYNTHETIC_RECIPE_IDS,
         3,
     ),
 )
@@ -268,6 +268,21 @@ def _mock_report() -> dict[str, Any]:
     return report
 
 
+def _prompt_case(index: int, case: BenchmarkCase) -> PromptCase:
+    return PromptCase(
+        name=f"benchmark_{index}",
+        system=ROUTING_SYSTEM_PROMPT,
+        user=case.prompt,
+        expected={},
+        allowed_ids=case.allowed_ids,
+        minimum_ids=case.minimum_ids,
+        response_schema=routing_response_schema(
+            allowed_ids=case.allowed_ids,
+            minimum_ids=case.minimum_ids,
+        ),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://172.17.0.1:8081/v1")
@@ -289,13 +304,7 @@ def main() -> int:
         api_key = _read_api_key(args.api_key_file)
         report = {"candidate": args.candidate, "model": args.model, "cases": []}
         for index, case in enumerate(CASES, start=1):
-            prompt_case = PromptCase(
-                name=f"benchmark_{index}",
-                system=ROUTING_SYSTEM_PROMPT,
-                user=case.prompt,
-                expected={},
-                response_schema=ROUTING_RESPONSE_SCHEMA,
-            )
+            prompt_case = _prompt_case(index, case)
             content, metrics = _stream_chat(
                 args.base_url.rstrip("/"), args.model, api_key, args.timeout, prompt_case
             )

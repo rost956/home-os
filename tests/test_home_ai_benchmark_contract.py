@@ -9,13 +9,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from home_ai_benchmark import CASES, _grade, _print_case_result  # noqa: E402
+from home_ai_benchmark import CASES, _grade, _print_case_result, _prompt_case  # noqa: E402
 from home_ai_benchmark_contract import (  # noqa: E402
     ALLOWED_INTENTS,
     ALLOWED_TOOLS,
+    DIAGNOSTIC_SEED,
     ROUTING_RESPONSE_SCHEMA,
     ROUTING_SYSTEM_PROMPT,
+    SYNTHETIC_RECIPE_IDS,
     routing_response_format,
+    routing_response_schema,
 )
 from home_ai_runtime_smoke import (  # noqa: E402
     CASES as SMOKE_CASES,
@@ -51,6 +54,10 @@ def test_shared_contract_enumerates_exact_names_schema_and_routing_examples():
     assert ROUTING_RESPONSE_SCHEMA["required"] == ["intent", "tool", "arguments", "referenced_ids"]
     assert ROUTING_RESPONSE_SCHEMA["additionalProperties"] is False
     assert routing_response_format() == {"type": "json_schema", "schema": ROUTING_RESPONSE_SCHEMA}
+    selection_schema = routing_response_schema(allowed_ids=SYNTHETIC_RECIPE_IDS, minimum_ids=1)
+    assert selection_schema["properties"]["referenced_ids"]["minItems"] == 1
+    assert selection_schema["properties"]["referenced_ids"]["items"]["enum"] == [101, 102, 103]
+    assert routing_response_schema()["properties"]["referenced_ids"]["maxItems"] == 0
 
     for internal_name in (*ALLOWED_INTENTS, *ALLOWED_TOOLS):
         assert internal_name in ROUTING_SYSTEM_PROMPT
@@ -134,6 +141,9 @@ def test_smoke_schema_cases_disable_thinking_and_use_schema_constraints():
         if case.expected is None:
             continue
         payload = _chat_payload("test-model", case)
+        assert payload["temperature"] == 0
+        assert payload["seed"] == DIAGNOSTIC_SEED
+        assert payload["cache_prompt"] is False
         assert payload["chat_template_kwargs"] == {"enable_thinking": False}
         assert payload["response_format"]["type"] == "json_schema"
 
@@ -165,39 +175,88 @@ def test_smoke_failure_includes_actual_json():
     assert "expense.create_draft" in message
 
 
-def _menu_smoke_response(referenced_ids: list[int]) -> str:
-    return json.dumps(
-        {
-            "intent": "menu_proposal",
-            "tool": "menu.propose",
-            "arguments": {"days": 1, "no_repeats": True},
-            "referenced_ids": referenced_ids,
-        },
-        ensure_ascii=False,
-    )
+def _selection_smoke_response(case_name: str, referenced_ids: list[int]) -> str:
+    case = next(case for case in SMOKE_CASES if case.name == case_name)
+    payload = dict(case.expected or {})
+    payload["referenced_ids"] = referenced_ids
+    return json.dumps(payload, ensure_ascii=False)
 
 
-def test_menu_smoke_rejects_empty_referenced_ids():
-    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+@pytest.mark.parametrize("case_name", ["recipe_read_only", "menu_proposal_no_write"])
+def test_selection_smoke_rejects_empty_required_referenced_ids(case_name: str):
+    case = next(case for case in SMOKE_CASES if case.name == case_name)
 
-    with pytest.raises(SmokeFailure, match="invalid referenced_ids"):
-        _assert_case(menu_case, _menu_smoke_response([]))
+    with pytest.raises(SmokeFailure, match="missing IDs"):
+        _assert_case(case, _selection_smoke_response(case_name, []))
 
 
-def test_menu_smoke_accepts_existing_referenced_id():
-    menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
+@pytest.mark.parametrize("case_name", ["recipe_read_only", "menu_proposal_no_write"])
+def test_selection_smoke_accepts_existing_referenced_id(case_name: str):
+    case = next(case for case in SMOKE_CASES if case.name == case_name)
 
-    parsed = _assert_case(menu_case, _menu_smoke_response([101]))
+    parsed = _assert_case(case, _selection_smoke_response(case_name, [101]))
 
     assert parsed is not None
     assert parsed["referenced_ids"] == [101]
-    assert "Пустой список referenced_ids для menu.propose НЕДОПУСТИМ" in menu_case.system
-    assert "101 Овощной суп" in menu_case.system
-    assert "Выбери существующий рецепт" in menu_case.user
+    assert case.allowed_ids is SYNTHETIC_RECIPE_IDS
+    assert case.system == ROUTING_SYSTEM_PROMPT
 
 
-def test_menu_smoke_rejects_invented_referenced_id():
+@pytest.mark.parametrize("case_name", ["recipe_read_only", "menu_proposal_no_write"])
+def test_selection_smoke_rejects_invented_referenced_id(case_name: str):
+    case = next(case for case in SMOKE_CASES if case.name == case_name)
+
+    with pytest.raises(SmokeFailure, match="invented IDs"):
+        _assert_case(case, _selection_smoke_response(case_name, [999]))
+
+
+def test_shared_selection_contract_is_used_by_smoke_and_benchmark():
+    assert "recipes.recommend и\nmenu.propose" in ROUTING_SYSTEM_PROMPT
+    assert "Пустой referenced_ids НЕДОПУСТИМ" in ROUTING_SYSTEM_PROMPT
+    assert "никогда не придумывай ID" in ROUTING_SYSTEM_PROMPT
+    for index, case in enumerate(CASES, start=1):
+        prompt_case = _prompt_case(index, case)
+        assert prompt_case.system == ROUTING_SYSTEM_PROMPT
+        assert prompt_case.allowed_ids is case.allowed_ids
+        referenced_ids_schema = prompt_case.response_schema["properties"]["referenced_ids"]
+        if case.allowed_ids:
+            assert referenced_ids_schema["minItems"] == case.minimum_ids
+            assert referenced_ids_schema["items"]["enum"] == sorted(case.allowed_ids)
+        else:
+            assert referenced_ids_schema["maxItems"] == 0
+        payload = _chat_payload("test-model", prompt_case)
+        assert payload["temperature"] == 0
+        assert payload["seed"] == DIAGNOSTIC_SEED
+        assert payload["cache_prompt"] is False
+
+
+def test_smoke_failures_distinguish_routing_arguments_and_ids():
+    recipe_case = next(case for case in SMOKE_CASES if case.name == "recipe_read_only")
+    wrong_route = {
+        "intent": "finance_question",
+        "tool": "finance.summary",
+        "arguments": {"max_minutes": 40},
+        "referenced_ids": [101],
+    }
+    wrong_arguments = {
+        "intent": "recipe_query",
+        "tool": "recipes.recommend",
+        "arguments": {"budget": "low"},
+        "referenced_ids": [101],
+    }
+
+    with pytest.raises(SmokeFailure, match="wrong routing"):
+        _assert_case(recipe_case, json.dumps(wrong_route))
+    with pytest.raises(SmokeFailure, match="wrong arguments"):
+        _assert_case(recipe_case, json.dumps(wrong_arguments))
+
+
+def test_menu_smoke_prompt_still_requires_read_only_existing_recipe_choice():
     menu_case = next(case for case in SMOKE_CASES if case.name == "menu_proposal_no_write")
 
-    with pytest.raises(SmokeFailure, match="invalid referenced_ids"):
-        _assert_case(menu_case, _menu_smoke_response([999]))
+    parsed = _assert_case(menu_case, _selection_smoke_response(menu_case.name, [101]))
+
+    assert parsed is not None
+    assert "101 Овощной суп" in menu_case.system
+    assert "Выбери существующий рецепт" in menu_case.user
+    assert "не подтверждай, не применяй и не записывай" in menu_case.user

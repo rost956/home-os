@@ -249,6 +249,10 @@ RSS llama-server и свободная память системы.
 read-only контракт, что benchmark: фиксированные `intent`, `tool`, имена
 аргументов и enum-значения надо копировать буквально. Ошибка выводит фактически
 возвращённый JSON, чтобы отличить выбор неверного маршрута от нарушения схемы.
+Все диагностические запросы smoke и benchmark используют `temperature=0`,
+фиксированный RNG seed и отключённый prompt cache, чтобы повторные прогоны были
+сопоставимыми. Это детерминированный test profile; он намеренно не имитирует
+production sampling temperature и не меняет production-настройки Home AI.
 
 ```bash
 cd /opt/recipe_budget_service

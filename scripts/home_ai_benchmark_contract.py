@@ -7,6 +7,7 @@ schema. The benchmark never executes the selected tool.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 ALLOWED_INTENTS = (
@@ -25,6 +26,7 @@ ALLOWED_TOOLS = (
 )
 
 SYNTHETIC_RECIPE_IDS = frozenset({101, 102, 103})
+DIAGNOSTIC_SEED = 6500
 
 ROUTING_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -84,6 +86,12 @@ ROUTING_SYSTEM_PROMPT = """
 - recipes.recommend
 - menu.propose
 
+Общее точное правило выбора существующих рецептов для recipes.recommend и
+menu.propose: доступны только ID 101, 102 и 103, перечисленные ниже. Когда запрос
+требует выбрать рецепт или составить меню, referenced_ids содержит хотя бы один
+из этих существующих ID. Пустой referenced_ids НЕДОПУСТИМ. Каждый ID копируй из
+списка доступных рецептов; никогда не придумывай ID.
+
 Точное соответствие tool -> intent и arguments:
 1. expense.create_draft -> intent expense_draft.
    arguments содержит РОВНО merchant (строка), amount (целое число рублей) и
@@ -107,14 +115,12 @@ ROUTING_SYSTEM_PROMPT = """
 4. recipes.recommend -> intent recipe_query.
    Для ограничения времени arguments содержит РОВНО max_minutes (целое 1..480).
    Имя max_time_minutes запрещено. Для низкой стоимости arguments содержит РОВНО
-   budget="low". Имена criteria и значение low_cost запрещены.
-   referenced_ids содержит один или несколько уникальных ID только из 101,102,103.
+   budget="low". Имена criteria и значение low_cost запрещены. Для referenced_ids
+   строго выполняй общее правило выбора существующих рецептов выше.
 5. menu.propose -> intent menu_proposal.
    arguments содержит РОВНО days (целое 1..7) и no_repeats (boolean).
-   Когда доступные рецепты перечислены, обязательно выбери существующие рецепты:
-   referenced_ids содержит хотя бы один уникальный ID только из 101,102,103.
-   Пустой список referenced_ids для menu.propose НЕДОПУСТИМ. Никогда не придумывай
-   ID; для трех дней выбери все три существующих ID без повторов. Строка
+   Для referenced_ids строго выполняй общее правило выбора существующих рецептов
+   выше; для трех дней выбери все три существующих ID без повторов. Строка
    menu.propose является tool, но никогда intent.
 
 Тестовые read-only рецепты: 101 Овощной суп (35 минут, недорогой), 102 Каша
@@ -123,6 +129,28 @@ ROUTING_SYSTEM_PROMPT = """
 """.strip()
 
 
-def routing_response_format() -> dict[str, Any]:
+def routing_response_schema(
+    *,
+    allowed_ids: frozenset[int] = frozenset(),
+    minimum_ids: int = 0,
+) -> dict[str, Any]:
+    """Return an exact per-case schema derived from the shared routing contract."""
+    if minimum_ids < 0 or minimum_ids > len(allowed_ids):
+        raise ValueError("minimum_ids must fit within allowed_ids")
+    if minimum_ids and not allowed_ids:
+        raise ValueError("minimum_ids requires allowed_ids")
+
+    schema = deepcopy(ROUTING_RESPONSE_SCHEMA)
+    referenced_ids = schema["properties"]["referenced_ids"]
+    referenced_ids["items"]["enum"] = sorted(allowed_ids or SYNTHETIC_RECIPE_IDS)
+    if allowed_ids:
+        referenced_ids["minItems"] = minimum_ids
+        referenced_ids["maxItems"] = len(allowed_ids)
+    else:
+        referenced_ids["maxItems"] = 0
+    return schema
+
+
+def routing_response_format(schema: dict[str, Any] = ROUTING_RESPONSE_SCHEMA) -> dict[str, Any]:
     """Return llama.cpp's schema-constrained response_format payload."""
-    return {"type": "json_schema", "schema": ROUTING_RESPONSE_SCHEMA}
+    return {"type": "json_schema", "schema": schema}
