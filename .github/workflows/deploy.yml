@@ -24,7 +24,7 @@ jobs:
       DEPLOY_TARGET: ${{ vars.PRODUCTION_PATH || '/opt/recipe_budget_service' }}
     steps:
       - name: Check out the verified revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
