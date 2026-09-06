@@ -1,6 +1,107 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+validate_source_caddyfile() {
+    local caddyfile="$1"
+    if [[ -d "$caddyfile" ]]; then
+        echo "Source Caddyfile must be an ordinary file, not a directory: $caddyfile" >&2
+        return 1
+    fi
+    if [[ ! -e "$caddyfile" ]]; then
+        echo "Missing source Caddyfile: $caddyfile" >&2
+        return 1
+    fi
+    if [[ -L "$caddyfile" || ! -f "$caddyfile" ]]; then
+        echo "Source Caddyfile must be an ordinary file: $caddyfile" >&2
+        return 1
+    fi
+}
+
+remove_caddyfile() {
+    rm -rf -- "$1"
+}
+
+install_source_caddyfile() {
+    local source_caddyfile="$1"
+    local target_caddyfile="$2"
+
+    validate_source_caddyfile "$source_caddyfile" || return 1
+    remove_caddyfile "$target_caddyfile" || return 1
+    install -m 0644 "$source_caddyfile" "$target_caddyfile" || return 1
+    [[ -f "$target_caddyfile" && ! -L "$target_caddyfile" && ! -d "$target_caddyfile" ]] || {
+        echo "Failed to create an ordinary target Caddyfile: $target_caddyfile" >&2
+        return 1
+    }
+}
+
+snapshot_has_regular_caddyfile() {
+    local snapshot="$1"
+    local archive_entries listing entry
+
+    if ! archive_entries="$(tar -tzf "$snapshot")"; then
+        echo "Cannot inspect deployment snapshot: $snapshot" >&2
+        return 2
+    fi
+    while IFS= read -r entry; do
+        if [[ "$entry" == "Caddyfile" ]]; then
+            if ! listing="$(tar -tvzf "$snapshot" -- Caddyfile)"; then
+                echo "Cannot inspect Caddyfile in deployment snapshot: $snapshot" >&2
+                return 2
+            fi
+            [[ "${listing:0:1}" == "-" ]] || return 1
+            return 0
+        fi
+    done <<< "$archive_entries"
+    return 1
+}
+
+restore_caddyfile_from_snapshot() {
+    local snapshot="$1"
+    local target_caddyfile="$2"
+    local temp_caddyfile status
+
+    if snapshot_has_regular_caddyfile "$snapshot"; then
+        if ! temp_caddyfile="$(mktemp "$(dirname "$target_caddyfile")/.caddyfile.restore.XXXXXX")"; then
+            echo "Cannot create temporary Caddyfile for rollback" >&2
+            return 1
+        fi
+        if ! tar -xOzf "$snapshot" -- Caddyfile > "$temp_caddyfile"; then
+            rm -f -- "$temp_caddyfile"
+            echo "Cannot extract Caddyfile from deployment snapshot: $snapshot" >&2
+            return 1
+        fi
+        if ! remove_caddyfile "$target_caddyfile" || ! install -m 0644 "$temp_caddyfile" "$target_caddyfile"; then
+            rm -f -- "$temp_caddyfile"
+            echo "Cannot restore Caddyfile from deployment snapshot" >&2
+            return 1
+        fi
+        rm -f -- "$temp_caddyfile"
+        [[ -f "$target_caddyfile" && ! -L "$target_caddyfile" && ! -d "$target_caddyfile" ]] || return 1
+        return 0
+    else
+        status=$?
+    fi
+
+    if [[ "$status" -eq 1 ]]; then
+        echo "Deployment snapshot has no valid ordinary Caddyfile; leaving it absent" >&2
+        remove_caddyfile "$target_caddyfile"
+        return $?
+    fi
+    return "$status"
+}
+
+replace_live_code() {
+    validate_source_caddyfile "$SOURCE/Caddyfile" || return 1
+    rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops" || return 1
+    rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt" || return 1
+    tar -C "$SOURCE" -cf - app scripts ops Dockerfile docker-compose.yml requirements.txt | tar -C "$TARGET" -xf - || return 1
+    install_source_caddyfile "$SOURCE/Caddyfile" "$TARGET/Caddyfile"
+}
+
+if [[ "${DEPLOY_PRODUCTION_LIBRARY_ONLY:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 SOURCE=""
 TARGET="/opt/recipe_budget_service"
 REVISION="unknown"
@@ -30,6 +131,7 @@ if [[ -d "$SOURCE/data" ]] && find "$SOURCE/data" -type f -print -quit | grep -q
     echo "Refusing a source tree containing production data" >&2
     exit 2
 fi
+validate_source_caddyfile "$SOURCE/Caddyfile" || exit 2
 [[ -d "$TARGET" && -w "$TARGET" ]] || {
     echo "Target must already exist and be writable: $TARGET" >&2
     echo "Create it once with: sudo install -d -o \"$USER\" -g \"$USER\" '$TARGET'" >&2
@@ -101,20 +203,18 @@ echo "Building while the current containers remain online"
 
 if [[ -f "$TARGET/docker-compose.yml" ]]; then
     SNAPSHOT_PATHS=()
-    for item in app scripts ops Dockerfile docker-compose.yml Caddyfile requirements.txt; do
-        [[ -e "$TARGET/$item" ]] && SNAPSHOT_PATHS+=("$item")
+    for item in app scripts ops Dockerfile docker-compose.yml requirements.txt; do
+        [[ -e "$TARGET/$item" || -L "$TARGET/$item" ]] && SNAPSHOT_PATHS+=("$item")
     done
+    if [[ -f "$TARGET/Caddyfile" && ! -L "$TARGET/Caddyfile" ]]; then
+        SNAPSHOT_PATHS+=("Caddyfile")
+    elif [[ -e "$TARGET/Caddyfile" || -L "$TARGET/Caddyfile" ]]; then
+        echo "Skipping invalid live Caddyfile in snapshot: $TARGET/Caddyfile" >&2
+    fi
     if [[ "${#SNAPSHOT_PATHS[@]}" -gt 0 ]]; then
         tar -czf "$SNAPSHOT" -C "$TARGET" "${SNAPSHOT_PATHS[@]}"
     fi
 fi
-
-replace_live_code() {
-    rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops"
-    rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt"
-    tar -C "$SOURCE" -cf - app scripts ops Dockerfile docker-compose.yml requirements.txt | tar -C "$TARGET" -xf -
-    cat "$SOURCE/Caddyfile" > "$TARGET/Caddyfile"
-}
 
 health_ok() {
     local attempt
@@ -152,30 +252,57 @@ health_ok() {
 }
 
 rollback() {
+    local rollback_status=0
     echo "Deployment failed; restoring previous code and image"
     if [[ -f "$SNAPSHOT" ]]; then
-        rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops"
-        rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt"
-        tar -xzf "$SNAPSHOT" -C "$TARGET" --exclude=Caddyfile
-        if tar -tzf "$SNAPSHOT" | grep -qx 'Caddyfile'; then
-            tar -xOzf "$SNAPSHOT" Caddyfile > "$TARGET/Caddyfile"
-        else
-            rm -f -- "$TARGET/Caddyfile"
+        if ! rm -rf -- "$TARGET/app" "$TARGET/scripts" "$TARGET/ops" \
+            || ! rm -f -- "$TARGET/Dockerfile" "$TARGET/docker-compose.yml" "$TARGET/requirements.txt" \
+            || ! tar -xzf "$SNAPSHOT" -C "$TARGET" --exclude=Caddyfile \
+            || ! restore_caddyfile_from_snapshot "$SNAPSHOT" "$TARGET/Caddyfile"; then
+            echo "Rollback code restore failed" >&2
+            rollback_status=1
         fi
+    else
+        echo "No deployment snapshot is available for code rollback" >&2
     fi
     if [[ "$HAD_OLD_IMAGE" == "1" ]]; then
-        "${DOCKER[@]}" image tag "$ROLLBACK_IMAGE" "$IMAGE_NAME"
-        "${LIVE_COMPOSE[@]}" up -d --no-build --remove-orphans || true
-        "${LIVE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
-            >/dev/null 2>&1 || true
-        health_ok || true
+        if ! "${DOCKER[@]}" image tag "$ROLLBACK_IMAGE" "$IMAGE_NAME"; then
+            echo "Rollback image restore failed" >&2
+            rollback_status=1
+        fi
+        if ! "${LIVE_COMPOSE[@]}" up -d --no-build --remove-orphans; then
+            echo "Rollback container start failed" >&2
+            rollback_status=1
+        fi
+        if ! "${LIVE_COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >/dev/null 2>&1; then
+            echo "Rollback Caddy reload failed" >&2
+            rollback_status=1
+        fi
+        if ! health_ok; then
+            echo "Rollback healthcheck failed" >&2
+            rollback_status=1
+        fi
     fi
     "${LIVE_COMPOSE[@]}" ps || true
     "${LIVE_COMPOSE[@]}" logs --tail=100 web caddy || true
+    return "$rollback_status"
+}
+
+handle_deploy_error() {
+    local deploy_status="$1"
+    trap - ERR
+    if [[ "$ROLLBACK_NEEDED" == "1" ]]; then
+        echo "Deployment failed with status $deploy_status; starting rollback" >&2
+        if ! rollback; then
+            echo "Rollback also failed; original deployment status was $deploy_status" >&2
+        fi
+    fi
+    exit "$deploy_status"
 }
 
 ROLLBACK_NEEDED=1
-trap 'if [[ "$ROLLBACK_NEEDED" == "1" ]]; then rollback; fi' ERR
+trap 'handle_deploy_error "$?"' ERR
 replace_live_code
 set +e
 "${LIVE_COMPOSE[@]}" up -d --no-build --remove-orphans
@@ -192,8 +319,12 @@ fi
 set -e
 
 if [[ "$DEPLOY_STATUS" -ne 0 ]]; then
-    rollback
+    echo "Deployment failed with status $DEPLOY_STATUS; starting rollback" >&2
+    if ! rollback; then
+        echo "Rollback also failed; original deployment status was $DEPLOY_STATUS" >&2
+    fi
     ROLLBACK_NEEDED=0
+    trap - ERR
     exit 1
 fi
 
