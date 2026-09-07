@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from app.ai.client import FakeAIClient
 from app.ai.dependencies import get_ai_client
+from app.ai.errors import AIUnavailableError
 from app.ai.expenses import normalize_merchant_key, parse_expense_text
 from app.ai.permissions import get_or_create_ai_user_settings
 from app.ai.schemas import AICompletionResponse
@@ -428,3 +429,59 @@ def test_saved_merchant_rule_matches_inside_natural_phrase_without_llm(client, d
     assert fake_client.requests == []
     assert payload["category_id"] == transport.id
     assert payload["merchant_key"] == "север сервис"
+
+
+def test_short_unknown_expense_phrases_reach_bounded_semantic_model(client, db, make_user, login):
+    owner = make_user("short-expense-semantics")
+    _expense_list, food, _transport = expense_setup(db, owner)
+    enable_finance(db, owner)
+    texts = ("шава 350", "озон 900", "кофе 250", "цветы Ане 1800", "закинул на телефон 500")
+    fake = FakeAIClient(
+        responses=[
+            AICompletionResponse(
+                content=json.dumps(
+                    {
+                        "title": text.rsplit(" ", 1)[0],
+                        "merchant": None,
+                        "category_id": food.id,
+                        "category_confidence": 0.9,
+                        "ambiguous": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            for text in texts
+        ]
+    )
+    app.dependency_overrides[get_ai_client] = lambda: fake
+    try:
+        login(owner.username)
+        responses = [client.post("/ai/expenses/draft", data={"text": text}, follow_redirects=False) for text in texts]
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    assert all(response.status_code == 303 for response in responses)
+    assert len(fake.requests) == len(texts)
+    assert all(request.enable_thinking is False for request in fake.requests)
+    assert db.query(ExpenseItem).count() == 0
+    assert db.query(AIAction).count() == len(texts)
+
+
+def test_unsupported_refund_and_ai_unavailable_create_no_expense_action(client, db, make_user, login):
+    owner = make_user("expense-safe-fallback")
+    expense_setup(db, owner)
+    enable_finance(db, owner)
+    fake = FakeAIClient(responses=[AIUnavailableError("offline")])
+    app.dependency_overrides[get_ai_client] = lambda: fake
+    try:
+        login(owner.username)
+        refund = client.post("/ai/expenses/draft", data={"text": "Саша вернул 500 за такси"})
+        unavailable = client.post("/ai/expenses/draft", data={"text": "озон 900"})
+    finally:
+        app.dependency_overrides.pop(get_ai_client, None)
+
+    assert refund.status_code == 422
+    assert "Возвраты и компенсации" in refund.text
+    assert unavailable.status_code == 422
+    assert db.query(AIAction).count() == 0
+    assert db.query(ExpenseItem).count() == 0

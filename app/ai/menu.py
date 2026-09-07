@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.ai.action_schemas import ApplyMenuActionPayload, MenuActionEntry
 from app.ai.actions import create_pending_action
-from app.ai.recipes import recipe_search_arguments_from_text
+from app.ai.recipes import analyze_recipe_text, recipe_search_arguments_from_text
+from app.ai.russian_dates import parse_bounded_cardinal, parse_future_russian_day_expression
 from app.ai.tools.recipes import (
     RecipeCandidate,
     RecipeRecommendationArguments,
@@ -83,9 +84,12 @@ class MenuProposalError(Exception):
 class MenuPlanningWindow:
     starts_on: date
     ends_on: date
+    requested_dates: tuple[date, ...] | None = None
 
     @property
     def dates(self) -> tuple[date, ...]:
+        if self.requested_dates is not None:
+            return self.requested_dates
         return tuple(self.starts_on + timedelta(days=offset) for offset in range((self.ends_on - self.starts_on).days + 1))
 
 
@@ -97,12 +101,53 @@ def _next_weekday(after: date, weekday: int) -> date:
 def menu_planning_window(question: str, *, today: date) -> MenuPlanningWindow:
     normalized = question.casefold().replace("ё", "е")
     starts_on = today + timedelta(days=1)
+    duration_match = re.search(
+        r"\b(?P<count>\d{1,2}|один|одна|два|две|три|четыре|пять|шесть|семь|восемь|девять|десять|"
+        r"одиннадцать|двенадцать|тринадцать|четырнадцать)\s+дн(?:я|ей)?\b",
+        normalized,
+    )
+    if duration_match:
+        duration = parse_bounded_cardinal(duration_match.group("count"), maximum=MAX_MENU_DAYS)
+        if duration is None:
+            raise MenuProposalError(f"Menu period must contain between 1 and {MAX_MENU_DAYS} days")
+        return MenuPlanningWindow(starts_on=starts_on, ends_on=starts_on + timedelta(days=duration - 1))
     if re.search(r"\bследующ\w*\s+недел", normalized):
         starts_on = _next_weekday(today, 0)
         return MenuPlanningWindow(starts_on=starts_on, ends_on=starts_on + timedelta(days=6))
+    if re.search(r"\b(?:на\s+)?выходн", normalized):
+        saturday = _next_weekday(today, 5)
+        dates = (saturday, saturday + timedelta(days=1))
+        return MenuPlanningWindow(starts_on=dates[0], ends_on=dates[-1], requested_dates=dates)
     if re.search(r"\bдо\s+пятниц", normalized):
         ends_on = _next_weekday(today, 4)
         return MenuPlanningWindow(starts_on=starts_on, ends_on=ends_on)
+    try:
+        explicit_date = parse_future_russian_day_expression(question, today=today)
+    except ValueError as exc:
+        raise MenuProposalError("Menu date is invalid") from exc
+    if explicit_date is not None:
+        if explicit_date.value <= today:
+            raise MenuProposalError("Menu date must be in the future")
+        return MenuPlanningWindow(starts_on=explicit_date.value, ends_on=explicit_date.value)
+    weekday_patterns = (
+        (0, r"\bпонедельник\w*\b"),
+        (1, r"\bвторник\w*\b"),
+        (2, r"\bсред(?:а|у|ы|е)\b"),
+        (3, r"\bчетверг\w*\b"),
+        (4, r"\bпятниц\w*\b"),
+        (5, r"\bсуббот\w*\b"),
+        (6, r"\bвоскресень\w*\b"),
+    )
+    weekdays = [weekday for weekday, pattern in weekday_patterns if re.search(pattern, normalized)]
+    if weekdays:
+        if len(weekdays) > 1:
+            week_starts_on = _next_weekday(today, 0)
+            dates = tuple(week_starts_on + timedelta(days=weekday) for weekday in sorted(set(weekdays)))
+        else:
+            dates = (_next_weekday(today, weekdays[0]),)
+        return MenuPlanningWindow(starts_on=dates[0], ends_on=dates[-1], requested_dates=dates)
+    if re.search(r"\bнедел(?:я|ю|и)\b", normalized):
+        return MenuPlanningWindow(starts_on=starts_on, ends_on=starts_on + timedelta(days=6))
     if "завтра" in normalized or "tomorrow" in normalized:
         return MenuPlanningWindow(starts_on=starts_on, ends_on=starts_on)
     return MenuPlanningWindow(starts_on=starts_on, ends_on=starts_on)
@@ -111,7 +156,7 @@ def menu_planning_window(question: str, *, today: date) -> MenuPlanningWindow:
 def _recent_exclusion_days(question: str) -> int:
     normalized = question.casefold().replace("ё", "е")
     match = re.search(r"последн\w*\s+(\d{1,2})\s+(?:дн|недел)", normalized)
-    if not re.search(r"без\s+повтор", normalized):
+    if not re.search(r"без\s+повтор|не\s+повтор", normalized):
         return 0
     if match:
         count = int(match.group(1))
@@ -120,6 +165,8 @@ def _recent_exclusion_days(question: str) -> int:
         return 14
     if re.search(r"последн\w*\s+двух\s+дн", normalized):
         return 2
+    if re.search(r"прошл\w*\s+недел", normalized):
+        return 7
     return 0
 
 
@@ -191,6 +238,8 @@ def _selection_request(question: str, window: MenuPlanningWindow, candidates: li
                     "Create a menu proposal only. Do not create, edit, delete, or apply menu items. "
                     "Use only recipe_id values from the supplied shortlist. Return one entry for each selected date, "
                     "with plan_date, meal_name, recipe_id, optional note, and optional rationale. "
+                    "preprocessing.fixed_candidate_filters are already enforced server-side; use unresolved_text only "
+                    "to choose among the shortlist and never reverse an exclusion into a preference. "
                     "Do not invent recipes, IDs, prices, history, or unavailable dates. "
                     'Return strict JSON: {"entries":[{"plan_date":"YYYY-MM-DD","meal_name":"Dinner","recipe_id":1,"note":null,"rationale":null}]}.'
                 ),
@@ -200,17 +249,23 @@ def _selection_request(question: str, window: MenuPlanningWindow, candidates: li
                 "content": json.dumps(
                     {
                         "question": question,
+                        "preprocessing": {
+                            "fixed_candidate_filters": analyze_recipe_text(question).arguments,
+                            "unresolved_text": analyze_recipe_text(question).unresolved_text,
+                        },
                         "allowed_dates": [item.isoformat() for item in window.dates],
                         "shortlist": candidate_payload,
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),
+                    default=str,
                 ),
             },
         ],
         max_tokens=600,
         temperature=0.1,
         output_mode="json",
+        enable_thinking=False,
     )
 
 

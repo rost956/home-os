@@ -2,7 +2,7 @@
 
 ## Текущая фаза
 
-**PHASE 6.6 — завершена 2026-09-07 как follow-up natural-language expenses.** Production expense path принимает свободный порядок слов, извлекает деньги и даты backend-кодом, использует компактную semantic LLM-схему только при необходимости и сохраняет исключительно подтверждаемый pending draft. Добавлен read-only held-out evaluator из 34 фраз для реального Raspberry Pi. Следующая доменная фаза остаётся только PHASE 7 (Planner); она не начата.
+**PHASE 6.6 — завершена 2026-09-08: natural-language expenses и semantic routing hardening.** Частичный deterministic parse больше не считается полным пониманием: неразрешённые recipe/finance constraints передаются bounded LLM selector, а извлечённые даты, периоды, фильтры и ID остаются авторитетными server facts. Menu duration/date/negative constraints исправлены до построения shortlist. Добавлен opt-in regression всех 40 audit phrases на реальной модели и синтетической in-memory БД. Следующая доменная фаза остаётся только PHASE 7 (Planner); она не начата.
 
 Исходная точка: `main` / `a791e8b` (`Prepare Home OS for production`). Рабочее дерево до фазы было чистым.
 
@@ -48,7 +48,11 @@
 - Существующий AI client получил один общий переключатель `AI_ENABLE_THINKING` (production default false) и передаёт его через поддерживаемый llama.cpp `chat_template_kwargs`, чтобы Qwen3.5 не расходовала короткий Pi context на reasoning перед schema-ответом.
 - Model helper использует `.partial`, предварительную проверку места, Content-Length, SHA-256 и atomic no-clobber rename. Зафиксированы кандидаты Qwen3.5-4B Q4_K_M (первый) и Qwen3.5-2B Q4_K_M (fallback), без GGUF/mmproj в Git или CI.
 - Manual smoke проверяет systemd, health, models/chat, container reachability, русский ответ, structured JSON и безопасные expense/finance/recipe/menu сценарии с latency/token/RSS/RAM metrics. Отдельный benchmark прогоняет семь одинаковых prompts для 2B/4B и не объявляет победителя без реального запуска на Pi.
-- PHASE 6.6 содержит 34 held-out natural expense фразы отдельно от production prompt и read-only evaluator, вызывающий фактический production preparation path без создания action/expense.
+- PHASE 6.6 содержит 34 held-out natural expense фразы отдельно от production prompt и read-only expense evaluator. Semantic hardening дополнительно хранит ровно 40 audit phrases вне production prompts и прогоняет production orchestration expenses/finance/recipes/menu на синтетической in-memory БД. Runner не открывает production DB, не подтверждает actions и откатывает menu proposal после каждого case.
+- Expense parser распознаёт безопасные русские day-of-month формы, явный month/year и прошедший weekday; присутствующая, но неоднозначная дата больше не подменяется сегодняшней. Refund/reimbursement markers безопасно отклоняются, потому что текущий expense contract не умеет представить их без потери смысла.
+- Finance routing использует явный приоритет bounded intents: category/breakdown wording выигрывает у общего слова «расходы», а извлечённый month/year сохраняется даже при LLM fallback.
+- Recipe preprocessing возвращает parsed constraints, unresolved text и признак semantic pass; поддерживает explicit recipe ID, несколько include/exclude ingredients и не инвертирует `без X`. SQL negative ingredient filters проверяют поле состава, поэтому nullable tags и заголовок вида «суп без лука» не дают ложный empty result.
+- Menu preprocessing поддерживает 1–14 дней словами/цифрами, выходные, несколько weekdays, явную русскую дату и естественную формулировку запрета повторов. LLM по-прежнему выбирает только из owner-scoped shortlist и server-owned dates; запись остаётся только pending `menu.apply`.
 
 ## Изменённые файлы
 
@@ -70,6 +74,7 @@
 - `app/ai/finance.py`
 - `app/ai/menu.py`
 - `app/ai/recipes.py`
+- `app/ai/russian_dates.py`
 - `app/ai/tools/__init__.py`
 - `app/ai/tools/finance.py`
 - `app/ai/tools/recipes.py`
@@ -97,8 +102,12 @@
 - `scripts/wait_llama_server.sh`
 - `scripts/home_ai_runtime_smoke.py`
 - `scripts/home_ai_benchmark.py`
+- `scripts/home_ai_semantic_cases.py`
+- `scripts/home_ai_semantic_regression.py`
+- `docs/home_ai/AI_VALUE_AUDIT.md`
 - `docs/home_ai/RASPBERRY_PI_RUNTIME.md`
 - `tests/test_home_ai_runtime_assets.py`
+- `tests/test_home_ai_semantic_regression.py`
 - `.gitignore`, `.dockerignore`, `README.md`
 - `app/models.py`
 - `app/main.py`, `requirements.txt`, `requirements-dev.txt`, `docker-compose.yml`, `.env.example`
@@ -131,7 +140,7 @@
 - Покрыты меню на один день и неделю, полный период, только существующие/короткие owner-scoped Recipe ID, исключение последних двух недель, time/cost/servings/ingredient filters, пустой shortlist без вызова модели, конфликт существующего MenuItem, форма и preview card, permission, чужие/несуществующие IDs, invalid JSON, timeout, unavailable/disabled backend, cancel, confirm, double confirm и отсутствие записи до confirm.
 - Реальные LLM/GGUF не запускались и в автоматические тесты входить не будут.
 - PHASE 6.5 targeted tests: `pytest tests/test_home_ai_runtime_assets.py -q` — `7 passed`; проверены env/systemd/Compose templates, отсутствие GGUF, pinned source policy и mock modes smoke/benchmark без сети или модели.
-- PHASE 6.6 Home AI regression: parser/expense/action/client/finance/recipes/menu/diagnostic tests — `159 passed`; полный `pytest -q` — `198 passed, 1 skipped` из-за ограничения Windows symlink. Held-out набор содержит 34 фразы и не входит в production prompt; CI использует только deterministic parser и `FakeAIClient`.
+- PHASE 6.6 semantic hardening: targeted expense/finance/recipe/menu/manual-runner tests — `140 passed`; широкий AI/runtime набор — `191 passed`; полный `pytest -q` — `230 passed, 1 skipped` из-за ограничения Windows symlink. 40 audit phrases не входят в production prompts; CI использует deterministic preprocessing, synthetic fixtures и `FakeAIClient`, а real-model режим остаётся opt-in.
 - Финальная локальная проверка: `ruff check .` — успешно; `pytest -q` — `132 passed, 1 skipped` (Windows symlink restriction); `bash -n` четырёх новых shell scripts, `docker compose config --quiet` и `git diff --check` — успешно. Реальный inference остаётся только ручной Pi-проверкой.
 
 ## Известные риски и вопросы

@@ -9,7 +9,7 @@ import pytest
 from app.ai.client import FakeAIClient
 from app.ai.dependencies import get_ai_client
 from app.ai.errors import AITimeoutError, AIUnavailableError
-from app.ai.finance import select_deterministic_finance_tool
+from app.ai.finance import analyze_finance_route, select_deterministic_finance_tool
 from app.ai.permissions import get_or_create_ai_user_settings
 from app.ai.schemas import AICompletionResponse
 from app.ai.tools.finance import FinanceToolName
@@ -83,6 +83,48 @@ def test_deterministic_finance_tool_selection(question, expected_tool):
     assert call.tool == expected_tool
     if "августе" in question:
         assert call.arguments == {"period": "month", "year": 2026, "month": 8}
+
+
+def test_category_breakdown_wins_over_generic_expense_wording_and_preserves_period():
+    analysis = analyze_finance_route("Разложи расходы за март 2025 по направлениям", today=TODAY)
+
+    assert analysis.needs_semantic_resolution is False
+    assert analysis.deterministic_call is not None
+    assert analysis.deterministic_call.tool == FinanceToolName.CATEGORY_BREAKDOWN
+    assert analysis.deterministic_call.arguments == {
+        "period": "month",
+        "year": 2025,
+        "month": 3,
+        "limit": 10,
+    }
+    assert analysis.matched_intents[:2] == (
+        FinanceToolName.CATEGORY_BREAKDOWN,
+        FinanceToolName.SUMMARY,
+    )
+
+
+def test_finance_llm_route_cannot_discard_deterministic_period(client, db, make_user, login, monkeypatch):
+    user = make_user("finance-partial-period")
+    enable_finance(db, user)
+    monkeypatch.setattr("app.ai.finance.today_msk", lambda: TODAY)
+    login(user.username)
+    fake = FakeAIClient(
+        responses=[
+            AICompletionResponse(
+                content='{"tool":"get_category_breakdown","arguments":{"period":"current","limit":5}}'
+            ),
+            answer("Разбивка за прошлый месяц."),
+        ]
+    )
+
+    response = ask_with_fake(client, fake, "Что съело зарплату в прошлом месяце?")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tool"] == "get_category_breakdown"
+    assert response.json()["result"]["data"]["period"]["start"] == "2026-08-01"
+    selector_context = fake.requests[0].messages[1].content
+    assert '"fixed_period_arguments":{"period":"previous"}' in selector_context
+    assert '"unresolved_text":"Что съело зарплату в прошлом месяце?"' in selector_context
 
 
 def test_llm_selector_uses_one_allowlisted_tool_and_bounded_result(client, db, make_user, login, monkeypatch):

@@ -8,6 +8,7 @@ import pytest
 
 from app.ai.expenses import (
     EXPENSE_SEMANTIC_SYSTEM_PROMPT,
+    ExpenseDraftAmbiguityError,
     ExpenseMultipleExpensesError,
     ExpenseTextParseError,
     expense_semantic_request,
@@ -93,3 +94,30 @@ def test_held_out_set_is_large_separate_from_prompt_and_manual_runner_is_read_on
 )
 def test_amount_forms(text: str, amount: Decimal):
     assert parse_expense_text(text, today=REFERENCE_DAY).amount == amount
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("5 числа корм коту 1200", date(2026, 9, 5)),
+        ("пятого числа корм коту 1200", date(2026, 9, 5)),
+        ("5 сентября 2025 корм коту 1200", date(2025, 9, 5)),
+        ("в субботу кино 980", date(2026, 9, 5)),
+    ],
+)
+def test_expense_date_variants_are_resolved_without_defaulting(text: str, expected: date):
+    parsed = parse_expense_text(text, today=REFERENCE_DAY)
+
+    assert parsed.expense_date == expected
+    assert parsed.date_was_defaulted is False
+
+
+@pytest.mark.parametrize("text", ["25 числа корм коту 1200", "в начале месяца кофе 250"])
+def test_unresolved_expense_date_is_not_silently_today(text: str):
+    with pytest.raises(ExpenseDraftAmbiguityError):
+        parse_expense_text(text, today=REFERENCE_DAY)
+
+
+def test_refund_is_not_silently_parsed_as_an_expense():
+    with pytest.raises(ExpenseDraftAmbiguityError, match="Возвраты"):
+        parse_expense_text("Саша вернул 500 за такси", today=REFERENCE_DAY)

@@ -26,6 +26,7 @@ from app.timezone import today_msk
 
 from .action_schemas import CreateExpenseActionPayload, validate_action_payload
 from .client import AIClient
+from .russian_dates import contains_unparsed_date_expression, parse_russian_day_expression
 from .schemas import AICompletionRequest, AIMessage, ExpenseSemanticSelection
 
 MAX_EXPENSE_TEXT_LENGTH = 500
@@ -39,6 +40,10 @@ AMOUNT_PATTERN = re.compile(
 ISO_DATE_PATTERN = re.compile(r"(?<!\d)(?P<date>\d{4}-\d{2}-\d{2})(?!\d)")
 RELATIVE_DATE_PATTERN = re.compile(
     r"(?<!\w)(?P<date>сегодня|вчера|позавчера|today|yesterday)(?!\w)",
+    re.IGNORECASE,
+)
+WEEKDAY_DATE_PATTERN = re.compile(
+    r"(?<!\w)(?:в\s+)?(?P<weekday>понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)(?!\w)",
     re.IGNORECASE,
 )
 WHITESPACE_PATTERN = re.compile(r"\s+")
@@ -69,6 +74,19 @@ FUEL_MERCHANTS = frozenset(
 )
 FOOD_CATEGORY_NAMES = frozenset({"еда", "продукты", "продукт", "grocery", "groceries"})
 FUEL_CATEGORY_NAMES = frozenset({"бензин", "топливо", "авто", "транспорт", "машина"})
+UNSUPPORTED_TRANSACTION_PATTERN = re.compile(
+    r"(?<!\w)(?:вернул(?:а|и)?|возврат\w*|компенсир\w*|возместил\w*)(?!\w)",
+    re.IGNORECASE,
+)
+WEEKDAY_NUMBERS = {
+    "понедельник": 0,
+    "вторник": 1,
+    "среду": 2,
+    "четверг": 3,
+    "пятницу": 4,
+    "субботу": 5,
+    "воскресенье": 6,
+}
 
 
 class ExpenseDraftError(Exception):
@@ -79,7 +97,7 @@ class ExpenseTextParseError(ExpenseDraftError):
     pass
 
 
-class ExpenseDraftAmbiguityError(ExpenseDraftError):
+class ExpenseDraftAmbiguityError(ExpenseTextParseError):
     pass
 
 
@@ -140,6 +158,12 @@ def parse_expense_text(raw_text: str, *, today: date | None = None) -> ParsedExp
     clean_text = WHITESPACE_PATTERN.sub(" ", raw_text.strip())
     if not clean_text or len(clean_text) > MAX_EXPENSE_TEXT_LENGTH:
         raise ExpenseTextParseError("Введите описание расхода длиной до 500 символов")
+    if UNSUPPORTED_TRANSACTION_PATTERN.search(clean_text):
+        raise ExpenseDraftAmbiguityError(
+            "Возвраты и компенсации нельзя безопасно записать как обычный расход"
+        )
+
+    reference_day = today or today_msk()
 
     explicit_matches = list(ISO_DATE_PATTERN.finditer(clean_text))
     explicit_dates: list[date] = []
@@ -150,10 +174,26 @@ def parse_expense_text(raw_text: str, *, today: date | None = None) -> ParsedExp
             raise ExpenseTextParseError("Дата расхода указана некорректно") from exc
     relative_matches = list(RELATIVE_DATE_PATTERN.finditer(clean_text))
     relative_offsets = {DATE_WORDS[match.group("date").casefold()] for match in relative_matches}
-    if len(set(explicit_dates)) > 1 or len(relative_offsets) > 1 or (explicit_dates and relative_matches):
+    weekday_matches = list(WEEKDAY_DATE_PATTERN.finditer(clean_text))
+    weekday_values = {WEEKDAY_NUMBERS[match.group("weekday").casefold().replace("ё", "е")] for match in weekday_matches}
+    try:
+        russian_day = parse_russian_day_expression(clean_text, today=reference_day)
+    except ValueError as exc:
+        raise ExpenseDraftAmbiguityError(
+            "Дата расхода неоднозначна. Укажите месяц и год или точную дату"
+        ) from exc
+    date_source_count = bool(explicit_dates) + bool(relative_matches) + bool(weekday_matches) + bool(russian_day)
+    if (
+        len(set(explicit_dates)) > 1
+        or len(relative_offsets) > 1
+        or len(weekday_values) > 1
+        or date_source_count > 1
+    ):
         raise ExpenseTextParseError("Укажите одну дату расхода")
 
-    date_spans = [match.span() for match in explicit_matches + relative_matches]
+    date_spans = [match.span() for match in explicit_matches + relative_matches + weekday_matches]
+    if russian_day is not None:
+        date_spans.append(russian_day.span)
     amount_matches = [
         match for match in AMOUNT_PATTERN.finditer(clean_text) if not any(_overlaps(match.span(), span) for span in date_spans)
     ]
@@ -165,14 +205,24 @@ def parse_expense_text(raw_text: str, *, today: date | None = None) -> ParsedExp
     if amount <= 0 or amount > MAX_EXPENSE_AMOUNT:
         raise ExpenseTextParseError("Сумма расхода должна быть больше нуля и не превышать 99 999 999,99")
 
-    reference_day = today or today_msk()
     if explicit_dates:
         selected_date = explicit_dates[0]
         date_source = "explicit"
     elif relative_offsets:
         selected_date = reference_day + timedelta(days=next(iter(relative_offsets)))
         date_source = "relative"
+    elif weekday_values:
+        weekday = next(iter(weekday_values))
+        selected_date = reference_day - timedelta(days=(reference_day.weekday() - weekday) % 7)
+        date_source = "weekday"
+    elif russian_day is not None:
+        selected_date = russian_day.value
+        date_source = russian_day.source
     else:
+        if contains_unparsed_date_expression(clean_text):
+            raise ExpenseDraftAmbiguityError(
+                "Не удалось однозначно определить дату расхода. Укажите её точнее"
+            )
         selected_date = reference_day
         date_source = "default_today"
     title = _clean_remaining_text(clean_text, [amount_matches[0].span(), *date_spans])

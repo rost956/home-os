@@ -36,6 +36,14 @@ class RecipeSearchArguments(BaseModel):
     query: str | None = Field(default=None, min_length=1, max_length=100)
     ingredient: str | None = Field(default=None, min_length=1, max_length=100)
     exclude_ingredient: str | None = Field(default=None, min_length=1, max_length=100)
+    include_ingredients: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+        default_factory=list,
+        max_length=5,
+    )
+    exclude_ingredients: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(
+        default_factory=list,
+        max_length=5,
+    )
     max_cook_time: int | None = Field(default=None, ge=0, le=1_440)
     max_cost: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1_000_000"))
     min_servings: Decimal | None = Field(default=None, gt=Decimal("0"), le=Decimal("1_000"))
@@ -220,11 +228,17 @@ def _recipe_query(user: User, arguments: RecipeSearchArguments):
         statement = statement.where(
             or_(Recipe.title.ilike(pattern), Recipe.ingredients.ilike(pattern), Recipe.tags.ilike(pattern))
         )
+    for ingredient in arguments.include_ingredients:
+        pattern = f"%{ingredient}%"
+        statement = statement.where(
+            or_(Recipe.title.ilike(pattern), Recipe.ingredients.ilike(pattern), Recipe.tags.ilike(pattern))
+        )
     if arguments.exclude_ingredient:
         pattern = f"%{arguments.exclude_ingredient}%"
-        statement = statement.where(
-            ~or_(Recipe.title.ilike(pattern), Recipe.ingredients.ilike(pattern), Recipe.tags.ilike(pattern))
-        )
+        statement = statement.where(~Recipe.ingredients.ilike(pattern))
+    for ingredient in arguments.exclude_ingredients:
+        pattern = f"%{ingredient}%"
+        statement = statement.where(~Recipe.ingredients.ilike(pattern))
     if arguments.max_cook_time is not None:
         statement = statement.where(Recipe.cook_time_minutes.is_not(None), Recipe.cook_time_minutes <= arguments.max_cook_time)
     if arguments.max_cost is not None:

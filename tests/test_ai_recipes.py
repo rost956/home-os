@@ -10,7 +10,7 @@ from app.ai.client import FakeAIClient
 from app.ai.dependencies import get_ai_client
 from app.ai.errors import AITimeoutError, AIUnavailableError
 from app.ai.permissions import get_or_create_ai_user_settings
-from app.ai.recipes import select_deterministic_recipe_tool
+from app.ai.recipes import analyze_recipe_text, select_deterministic_recipe_tool
 from app.ai.schemas import AICompletionResponse
 from app.ai.tools.recipes import RecipeToolCall, RecipeToolName, execute_recipe_tool
 from app.main import app
@@ -91,6 +91,104 @@ def test_common_recipe_questions_use_deterministic_read_tools(question, expected
     assert call.arguments == expected_arguments
 
 
+@pytest.mark.parametrize(
+    ("question", "expected_arguments"),
+    [
+        ("Найди суп без лука, до 45 минут", {"query": "суп", "exclude_ingredient": "лук", "max_cook_time": 45}),
+        ("ужин без курицы до 30 минут", {"exclude_ingredient": "куриц", "max_cook_time": 30}),
+        ("что-нибудь с фаршем без сыра", {"ingredient": "фарш", "exclude_ingredient": "сыр"}),
+        ("Что можно приготовить из картошки и грибов?", {"include_ingredients": ["картошк", "гриб"]}),
+    ],
+)
+def test_recipe_constraints_survive_preprocessing(question: str, expected_arguments: dict[str, object]):
+    analysis = analyze_recipe_text(question)
+
+    assert analysis.arguments == expected_arguments
+    assert not set(analysis.arguments).intersection({"user_id", "recipe_id"})
+
+
+def test_multiple_include_and_exclude_constraints_are_applied_by_owner_scoped_query(db, make_user):
+    user = make_user("recipe-multiple-constraints")
+    wanted = add_recipe(db, user, "Wanted", "картошка, грибы, зелень")
+    add_recipe(db, user, "Cheesy", "картошка, грибы, сыр")
+    add_recipe(db, user, "Missing mushroom", "картошка, зелень")
+    db.commit()
+
+    result = execute_recipe_tool(
+        db,
+        user,
+        RecipeToolCall(
+            tool=RecipeToolName.SEARCH,
+            arguments={
+                "include_ingredients": ["картошк", "гриб"],
+                "exclude_ingredients": ["сыр", "лук"],
+            },
+        ),
+        today=TODAY,
+    )
+
+    assert [candidate.recipe_id for candidate in result.data.candidates] == [wanted.id]
+
+
+@pytest.mark.parametrize("question", ["Покажи рецепт номер 12", "рецепт 12"])
+def test_explicit_recipe_number_routes_to_details(question: str):
+    call = select_deterministic_recipe_tool(question)
+
+    assert call == RecipeToolCall(tool=RecipeToolName.DETAILS, arguments={"recipe_id": 12})
+
+
+def test_explicit_accessible_recipe_id_uses_owner_scoped_details(client, db, make_user, login):
+    user = make_user("recipe-explicit-id")
+    recipe = Recipe(
+        id=12,
+        owner_id=user.id,
+        title="Recipe twelve",
+        ingredients="beans",
+        cook_time_minutes=20,
+        cost=Decimal("200"),
+        servings=Decimal("2"),
+        steps="Cook",
+    )
+    db.add(recipe)
+    db.commit()
+    enable_recipes(db, user)
+    login(user.username)
+    fake = FakeAIClient(responses=[answer("Вот сохранённый рецепт.", [12])])
+
+    response = ask_with_fake(client, fake, "Покажи рецепт номер 12")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tool"] == "get_recipe_details"
+    assert response.json()["result"]["data"]["recipe"]["recipe_id"] == 12
+    assert len(fake.requests) == 1
+    assert db.query(AIAction).count() == 0
+
+
+def test_partial_recipe_parse_reaches_llm_with_fixed_negative_constraint(client, db, make_user, login):
+    user = make_user("recipe-partial-semantic")
+    allowed = add_recipe(db, user, "Fast beans", "фасоль", cook_time=20)
+    add_recipe(db, user, "Fish", "рыба", cook_time=15)
+    db.commit()
+    enable_recipes(db, user)
+    login(user.username)
+    fake = FakeAIClient(
+        responses=[
+            AICompletionResponse(content='{"tool":"recommend_recipes","arguments":{"sort_by":"time","limit":5}}'),
+            answer("Быстрый вариант.", [allowed.id]),
+        ]
+    )
+
+    response = ask_with_fake(client, fake, "что-нибудь быстрое без рыбы")
+
+    assert response.status_code == 200, response.text
+    assert len(fake.requests) == 2
+    selector_context = fake.requests[0].messages[1].content
+    assert '"exclude_ingredient":"рыб"' in selector_context
+    assert '"unresolved_text":"быстрое"' in selector_context
+    result_titles = [item["title"] for item in response.json()["result"]["data"]["candidates"]]
+    assert result_titles == ["Fast beans"]
+
+
 def test_recipe_search_filters_are_deterministic_and_owner_scoped(db, make_user):
     alice = make_user("recipe-filter-alice")
     bob = make_user("recipe-filter-bob")
@@ -156,7 +254,7 @@ def test_recipe_shortlist_is_limited_and_only_real_ids_reach_model(client, db, m
 
     response = ask_with_fake(client, fake, "What should I cook tomorrow?")
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     payload = response.json()
     candidates = payload["result"]["data"]["candidates"]
     assert len(candidates) == 5
