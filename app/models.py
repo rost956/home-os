@@ -78,6 +78,7 @@ class Vehicle(Base):
     maintenance_items: Mapped[list["VehicleMaintenanceItem"]] = relationship(
         back_populates="vehicle", cascade="all, delete-orphan"
     )
+    fuel_entries: Mapped[list["VehicleFuelEntry"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
 
     @property
     def title(self) -> str:
@@ -123,6 +124,24 @@ class VehicleMaintenanceItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="maintenance_items")
+
+
+class VehicleFuelEntry(Base):
+    __tablename__ = "vehicle_fuel_entries"
+    __table_args__ = (Index("ix_vehicle_fuel_entries_vehicle_occurred_on", "vehicle_id", "occurred_on"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    odometer: Mapped[int] = mapped_column(Integer, nullable=False)
+    liters: Mapped[Decimal] = mapped_column(Numeric(10, 3), nullable=False)
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    price_per_liter: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+    full_tank: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    fuel_station: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    vehicle: Mapped[Vehicle] = relationship(back_populates="fuel_entries")
 
 
 class AIUserSettings(Base):

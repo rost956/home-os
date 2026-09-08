@@ -60,6 +60,7 @@ from .models import (
     ShoppingPriceHistory,
     User,
     Vehicle,
+    VehicleFuelEntry,
     VehicleLogEntry,
     VehicleMaintenanceItem,
     WatchItem,
@@ -90,6 +91,7 @@ from .services.preferences import (
     validate_gradient,
     validate_palette,
 )
+from .services.vehicle_fuel import fuel_segments, fuel_summary
 from .services.vehicle_maintenance import STATUS_ORDER, calculate_maintenance
 from .timezone import (
     UTC as UTC_TZ,
@@ -2232,11 +2234,14 @@ def vehicle_overview(request: Request, vehicle_id: int, user: User = Depends(get
     ).all()
     maintenance = maintenance_states(vehicle, db)
     maintenance_counts = {status: sum(row["state"].status == status for row in maintenance) for status in STATUS_ORDER}
+    fuel_entries = db.scalars(select(VehicleFuelEntry).where(VehicleFuelEntry.vehicle_id == vehicle.id).order_by(desc(VehicleFuelEntry.occurred_on), desc(VehicleFuelEntry.id))).all()
+    fuel_data = fuel_summary(fuel_entries)
     return render(request, "vehicle_detail.html", {
         "user": user, "vehicle": vehicle,
         "log_summary": {"count": log_summary[0], "cost": log_summary[1], "latest_date": log_summary[2]},
         "recent_entries": recent_entries, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS,
         "maintenance": maintenance[:5], "maintenance_counts": maintenance_counts,
+        "latest_fuel": fuel_entries[0] if fuel_entries else None, "fuel_summary": fuel_data,
     })
 
 
@@ -2544,6 +2549,71 @@ def vehicle_maintenance_service(request: Request, vehicle_id: int, item_id: int,
     if add_to_log: db.add(VehicleLogEntry(vehicle_id=vehicle.id, occurred_on=service_date, odometer=service_odometer, entry_type="maintenance", title=item.name, description=notes.strip() or None, cost=service_cost, service_location=service_location.strip() or None))
     db.commit()
     return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Обслуживание отмечено")
+
+
+def require_fuel_entry(db: Session, vehicle_id: int, entry_id: int) -> VehicleFuelEntry:
+    entry = db.scalar(select(VehicleFuelEntry).where(VehicleFuelEntry.id == entry_id, VehicleFuelEntry.vehicle_id == vehicle_id))
+    if not entry: raise HTTPException(status_code=404, detail="Заправка не найдена")
+    return entry
+
+
+def validate_fuel(occurred_on: str, odometer: str, liters: str, total_cost: str, station: str, notes: str) -> dict[str, Any]:
+    try:
+        result = {"occurred_on": date.fromisoformat(occurred_on), "odometer": parse_optional_int(odometer, "Пробег", 0, 10_000_000), "liters": parse_optional_decimal(liters, "Литры", Decimal("0.001")), "total_cost": require_positive_money(total_cost, "Стоимость")}
+    except (ValueError, HTTPException) as exc: raise ValueError(str(getattr(exc, "detail", "Некорректные данные"))) from exc
+    if result["odometer"] is None or result["liters"] is None: raise ValueError("Укажите дату, пробег и количество литров.")
+    if len(station.strip()) > 180 or len(notes.strip()) > 4000: raise ValueError("Одно из полей слишком длинное.")
+    result.update({"price_per_liter": (result["total_cost"] / result["liters"]).quantize(Decimal("0.001")), "fuel_station": station.strip() or None, "notes": notes.strip() or None})
+    return result
+
+
+@app.get("/vehicles/{vehicle_id}/fuel")
+def vehicle_fuel_page(request: Request, vehicle_id: int, date_from: str = "", date_to: str = "", sort: str = "date_desc", page: int = 1, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); entries = db.scalars(select(VehicleFuelEntry).where(VehicleFuelEntry.vehicle_id == vehicle.id).order_by(desc(VehicleFuelEntry.occurred_on), desc(VehicleFuelEntry.id))).all()
+    if date_from: entries = [entry for entry in entries if entry.occurred_on >= date.fromisoformat(date_from)]
+    if date_to: entries = [entry for entry in entries if entry.occurred_on <= date.fromisoformat(date_to)]
+    all_entries = db.scalars(select(VehicleFuelEntry).where(VehicleFuelEntry.vehicle_id == vehicle.id)).all()
+    segments = [segment for segment in fuel_segments(all_entries) if (not date_from or segment.end.occurred_on >= date.fromisoformat(date_from)) and (not date_to or segment.end.occurred_on <= date.fromisoformat(date_to))]
+    sort_fields = {"date_desc": ("occurred_on", True), "date_asc": ("occurred_on", False), "odometer_desc": ("odometer", True), "odometer_asc": ("odometer", False), "liters_desc": ("liters", True), "liters_asc": ("liters", False), "cost_desc": ("total_cost", True), "cost_asc": ("total_cost", False)}
+    sort = sort if sort in sort_fields else "date_desc"; field, reverse = sort_fields[sort]; entries.sort(key=lambda entry: (getattr(entry, field), entry.id), reverse=reverse)
+    total, page_size = len(entries), 25; page_count = max(1, (total + page_size - 1) // page_size); page = max(1, min(page, page_count)); display_entries = entries[(page - 1) * page_size:page * page_size]
+    query = urlencode({key: value for key, value in {"date_from": date_from, "date_to": date_to, "sort": sort}.items() if value})
+    return render(request, "vehicle_fuel.html", {"user": user, "vehicle": vehicle, "entries": display_entries, "summary": fuel_summary(entries, segments), "segments": segments, "filters": {"date_from": date_from, "date_to": date_to}, "sort": sort, "page": page, "page_count": page_count, "query_string": query})
+
+
+@app.get("/vehicles/{vehicle_id}/fuel/new")
+def vehicle_fuel_new(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": require_owned_vehicle(db, vehicle_id, user), "entry": None, "today": msk_today()})
+
+
+@app.post("/vehicles/{vehicle_id}/fuel")
+def vehicle_fuel_create(request: Request, vehicle_id: int, occurred_on: str = Form(""), odometer: str = Form(""), liters: str = Form(""), total_cost: str = Form(""), full_tank: str | None = Form(None), fuel_station: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    try: data = validate_fuel(occurred_on, odometer, liters, total_cost, fuel_station, notes)
+    except ValueError as exc: return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "error": str(exc), "form": locals()})
+    entry = VehicleFuelEntry(vehicle_id=vehicle.id, full_tank=full_tank is not None, **data); db.add(entry); vehicle.current_odometer = max(vehicle.current_odometer, data["odometer"]); db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/fuel", "Заправка добавлена")
+
+
+@app.get("/vehicles/{vehicle_id}/fuel/{entry_id}/edit")
+def vehicle_fuel_edit_page(request: Request, vehicle_id: int, entry_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); entry = require_fuel_entry(db, vehicle.id, entry_id)
+    return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": entry, "today": msk_today(), "form": {"occurred_on": entry.occurred_on.isoformat(), "odometer": entry.odometer, "liters": entry.liters, "total_cost": entry.total_cost, "full_tank": entry.full_tank, "fuel_station": entry.fuel_station or "", "notes": entry.notes or ""}})
+
+
+@app.post("/vehicles/{vehicle_id}/fuel/{entry_id}/edit")
+def vehicle_fuel_update(request: Request, vehicle_id: int, entry_id: int, occurred_on: str = Form(""), odometer: str = Form(""), liters: str = Form(""), total_cost: str = Form(""), full_tank: str | None = Form(None), fuel_station: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); entry = require_fuel_entry(db, vehicle.id, entry_id)
+    try: data = validate_fuel(occurred_on, odometer, liters, total_cost, fuel_station, notes)
+    except ValueError as exc: return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": entry, "today": msk_today(), "error": str(exc), "form": locals()})
+    for key, value in data.items(): setattr(entry, key, value)
+    entry.full_tank = full_tank is not None; vehicle.current_odometer = max(vehicle.current_odometer, data["odometer"]); db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/fuel", "Заправка сохранена")
+
+
+@app.post("/vehicles/{vehicle_id}/fuel/{entry_id}/delete")
+def vehicle_fuel_delete(vehicle_id: int, entry_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); db.delete(require_fuel_entry(db, vehicle.id, entry_id)); db.commit(); return redirect_notice(f"/vehicles/{vehicle.id}/fuel", "Заправка удалена")
 
 
 @app.post("/recipes/{recipe_id}/favorite")

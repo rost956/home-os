@@ -62,13 +62,6 @@
 <section class="card analytics-card">
     <div class="card-head analytics-head">
         <h2>По датам</h2>
-        {% if category_chart %}
-        <div class="chart-legend compact-legend">
-            {% for category in category_chart %}
-            <a class="analytics-category-link" href="/expenses/categories/{{ category.id }}/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ selected_list_id or '' }}"><i style="background: {{ category.color }}"></i>{{ category.name }} · {{ category.list_title }}</a>
-            {% endfor %}
-        </div>
-        {% endif %}
     </div>
     {% if daily_chart %}
     <div class="date-chart stacked-date-chart compact-daily-chart analytics-date-chart" aria-label="График трат по датам" data-scroll-latest>

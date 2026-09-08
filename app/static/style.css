@@ -1302,17 +1302,17 @@ html[data-theme="dark"] {
 }
 
 html[data-theme="dark"] .topbar {
-    background: rgba(11, 17, 32, .92);
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
 }
 
 html[data-theme="dark"] .brand-mark {
-    background: #e5e7eb;
-    color: #111827;
+    background: var(--accent-background, var(--primary));
+    color: var(--primary-foreground);
 }
 
 html[data-theme="dark"] .nav-icon {
-    background: #1f2937;
-    color: #e5e7eb;
+    background: var(--soft);
+    color: var(--text);
 }
 
 html[data-theme="dark"] .nav-menu,
@@ -1355,10 +1355,9 @@ html[data-theme="dark"] .share-chip {
     color: var(--text);
 }
 
-html[data-theme="dark"] .brand-mark,
 html[data-theme="dark"] .step-number {
-    background: #e5e7eb;
-    color: #0b1120;
+    background: var(--surface);
+    color: var(--text);
 }
 
 html[data-theme="dark"] .chip {
