@@ -75,6 +75,9 @@ class Vehicle(Base):
     log_entries: Mapped[list["VehicleLogEntry"]] = relationship(
         back_populates="vehicle", cascade="all, delete-orphan"
     )
+    maintenance_items: Mapped[list["VehicleMaintenanceItem"]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
 
     @property
     def title(self) -> str:
@@ -101,6 +104,25 @@ class VehicleLogEntry(Base):
     )
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="log_entries")
+
+
+class VehicleMaintenanceItem(Base):
+    __tablename__ = "vehicle_maintenance_items"
+    __table_args__ = (Index("ix_vehicle_maintenance_items_vehicle_category", "vehicle_id", "category"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    last_service_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_service_odometer: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interval_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    interval_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    vehicle: Mapped[Vehicle] = relationship(back_populates="maintenance_items")
 
 
 class AIUserSettings(Base):

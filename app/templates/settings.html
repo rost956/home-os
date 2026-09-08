@@ -53,6 +53,7 @@
     </section>
 
     <button class="btn" type="submit">Сохранить настройки</button>
+    <section class="card content-card gradient-settings"><h2>Градиент акцента</h2><label class="check-row"><input type="checkbox" name="gradient_enabled" {% if ui_gradient.gradient_enabled %}checked{% endif %}> Использовать градиент для основных действий</label><div class="form-row two-cols"><label>Начало<input type="color" name="gradient_start_color" value="{{ ui_gradient.gradient_start_color or ui_palette.get('primary', palette_defaults.primary) }}"></label><label>Конец<input type="color" name="gradient_end_color" value="{{ ui_gradient.gradient_end_color or ui_palette.get('secondary', palette_defaults.secondary) }}"></label></div><label>Угол (0–360)<input type="number" name="gradient_angle" min="0" max="360" value="{{ ui_gradient.gradient_angle or 135 }}"></label></section>
 </form>
 <script>
 (() => {
@@ -78,6 +79,14 @@
         picker.value = input.value;
         picker.dispatchEvent(new Event('input'));
     }));
+    const gradientToggle = document.querySelector('[name="gradient_enabled"]');
+    const updateGradient = () => {
+        const start = document.querySelector('[name="gradient_start_color"]').value;
+        const end = document.querySelector('[name="gradient_end_color"]').value;
+        const angle = document.querySelector('[name="gradient_angle"]').value || 135;
+        root.style.setProperty('--accent-background', gradientToggle.checked ? `linear-gradient(${angle}deg, ${start}, ${end})` : 'var(--primary)');
+    };
+    ['gradient_enabled', 'gradient_start_color', 'gradient_end_color', 'gradient_angle'].forEach((name) => document.querySelector(`[name="${name}"]`).addEventListener('input', updateGradient));
     document.querySelector('.settings-form').addEventListener('submit', (event) => {
         if (event.submitter && event.submitter.name === 'reset_palette') return;
         document.querySelectorAll('[data-default-value]').forEach((input) => {

@@ -21,6 +21,7 @@ PALETTE_GROUPS = (
     ("Состояния и границы", ("success", "warning", "danger", "border")),
 )
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+GRADIENT_KEYS = {"gradient_enabled", "gradient_start_color", "gradient_end_color", "gradient_angle"}
 
 DEFAULT_PALETTES = {
     "light": {
@@ -50,6 +51,22 @@ def load_palette(raw: str | None) -> dict[str, str]:
     if not isinstance(values, dict):
         return {}
     return {key: value.lower() for key, value in values.items() if key in PALETTE_KEYS and isinstance(value, str) and HEX_COLOR.fullmatch(value)}
+
+
+def load_gradient(raw: str | None) -> dict[str, str | int | bool]:
+    try:
+        values = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        values = {}
+    if not isinstance(values, dict):
+        return {}
+    start, end = values.get("gradient_start_color"), values.get("gradient_end_color")
+    if not (isinstance(start, str) and isinstance(end, str) and HEX_COLOR.fullmatch(start) and HEX_COLOR.fullmatch(end)):
+        return {}
+    angle = values.get("gradient_angle", 135)
+    if isinstance(angle, bool) or not isinstance(angle, int) or not 0 <= angle <= 360:
+        return {}
+    return {"gradient_enabled": values.get("gradient_enabled") is True, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": angle}
 
 
 def relative_luminance(value: str) -> float:
@@ -98,3 +115,25 @@ def palette_css_variables(palette: dict[str, str]) -> str:
         elif key == "primary":
             variables["primary-foreground"] = contrast_text_color(value)
     return ";".join(f"--{key}:{value}" for key, value in variables.items())
+
+
+def gradient_css_variables(gradient: dict[str, str | int | bool]) -> str:
+    if not gradient or not gradient.get("gradient_enabled"):
+        return "--accent-background:var(--primary)"
+    start, end, angle = gradient["gradient_start_color"], gradient["gradient_end_color"], gradient["gradient_angle"]
+    foreground = contrast_text_color(str(start)) if contrast_text_color(str(start)) == contrast_text_color(str(end)) else "#ffffff"
+    return f"--accent-background:linear-gradient({angle}deg,{start},{end});--primary-foreground:{foreground}"
+
+
+def validate_gradient(enabled: bool, start: str, end: str, angle: str) -> tuple[dict[str, str | int | bool], str | None]:
+    if not enabled:
+        return {}, None
+    if not HEX_COLOR.fullmatch(start.strip()) or not HEX_COLOR.fullmatch(end.strip()):
+        return {}, "Используйте цвета градиента только в формате #RRGGBB."
+    try:
+        numeric_angle = int(angle)
+    except ValueError:
+        return {}, "Угол градиента должен быть числом от 0 до 360."
+    if not 0 <= numeric_angle <= 360:
+        return {}, "Угол градиента должен быть от 0 до 360."
+    return {"gradient_enabled": True, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": numeric_angle}, None

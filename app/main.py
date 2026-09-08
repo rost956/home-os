@@ -1,3 +1,4 @@
+# ruff: noqa: E701, E702
 import asyncio
 import base64
 import ipaddress
@@ -60,6 +61,7 @@ from .models import (
     User,
     Vehicle,
     VehicleLogEntry,
+    VehicleMaintenanceItem,
     WatchItem,
     WishlistItem,
     WishlistShare,
@@ -81,10 +83,14 @@ from .services.preferences import (
     PALETTE_GROUPS,
     PALETTE_TOKENS,
     default_palette,
+    gradient_css_variables,
+    load_gradient,
     load_palette,
     palette_css_variables,
+    validate_gradient,
     validate_palette,
 )
+from .services.vehicle_maintenance import STATUS_ORDER, calculate_maintenance
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -203,6 +209,7 @@ def presence_info(target: User | None) -> dict[str, Any]:
 templates.env.filters["msk_datetime"] = format_msk_datetime
 templates.env.filters["fmt_odometer"] = format_odometer
 templates.env.filters["palette_css"] = palette_css_variables
+templates.env.filters["gradient_css"] = gradient_css_variables
 templates.env.globals["presence_info"] = presence_info
 
 
@@ -594,6 +601,7 @@ def render(request: Request, template: str, context: dict):
     context.setdefault("home_ai_enabled", settings.home_ai_enabled)
     user = context["user"]
     context.setdefault("ui_palette", load_palette(user.ui_palette_json) if user else {})
+    context.setdefault("ui_gradient", load_gradient(user.ui_palette_json) if user else {})
     return templates.TemplateResponse(request, template, context)
 
 
@@ -2071,7 +2079,7 @@ async def save_settings(
     request: Request,
     appearance: str = Form("system"),
     financial_period_start_day: str = Form("1"),
-    reset_palette: str | None = Form(None),
+    reset_palette: str | None = Form(None), gradient_enabled: str | None = Form(None), gradient_start_color: str = Form(""), gradient_end_color: str = Form(""), gradient_angle: str = Form("135"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -2097,10 +2105,13 @@ async def save_settings(
     palette, palette_error = validate_palette(submitted_palette, theme=clean_appearance)
     if palette_error:
         return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme), "error": palette_error})
+    gradient, gradient_error = validate_gradient(gradient_enabled is not None, gradient_start_color, gradient_end_color, gradient_angle)
+    if gradient_error:
+        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme), "error": gradient_error})
 
     user.theme = clean_appearance
     user.expense_period_start_day = start_day
-    user.ui_palette_json = None if reset_palette == "1" else json.dumps(palette, separators=(",", ":"))
+    user.ui_palette_json = None if reset_palette == "1" else json.dumps({**palette, **gradient}, separators=(",", ":"))
     db.commit()
     return redirect_notice("/settings", "Настройки сохранены")
 
@@ -2219,10 +2230,13 @@ def vehicle_overview(request: Request, vehicle_id: int, user: User = Depends(get
         .order_by(desc(VehicleLogEntry.occurred_on), desc(VehicleLogEntry.id))
         .limit(3)
     ).all()
+    maintenance = maintenance_states(vehicle, db)
+    maintenance_counts = {status: sum(row["state"].status == status for row in maintenance) for status in STATUS_ORDER}
     return render(request, "vehicle_detail.html", {
         "user": user, "vehicle": vehicle,
         "log_summary": {"count": log_summary[0], "cost": log_summary[1], "latest_date": log_summary[2]},
         "recent_entries": recent_entries, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS,
+        "maintenance": maintenance[:5], "maintenance_counts": maintenance_counts,
     })
 
 
@@ -2425,6 +2439,111 @@ def vehicle_log_delete(vehicle_id: int, entry_id: int, user: User = Depends(get_
     db.delete(entry)
     db.commit()
     return redirect_notice(f"/vehicles/{vehicle.id}/log", "Запись удалена")
+
+
+VEHICLE_MAINTENANCE_CATEGORIES = {"engine": "Двигатель", "transmission": "Трансмиссия", "filters": "Фильтры", "fluids": "Жидкости", "brakes": "Тормоза", "suspension": "Подвеска", "tires": "Шины", "electrical": "Электрика", "body": "Кузов", "other": "Другое"}
+
+
+def maintenance_states(vehicle: Vehicle, db: Session) -> list[dict[str, Any]]:
+    rows = []
+    for item in db.scalars(select(VehicleMaintenanceItem).where(VehicleMaintenanceItem.vehicle_id == vehicle.id)).all():
+        state = calculate_maintenance(current_odometer=vehicle.current_odometer, today=msk_today(), last_odometer=item.last_service_odometer, last_date=item.last_service_date, interval_km=item.interval_km, interval_months=item.interval_months)
+        due = min([value for value in (state.remaining_km, state.remaining_days) if value is not None], default=10**12)
+        rows.append({"item": item, "state": state, "due": due})
+    return sorted(rows, key=lambda row: (STATUS_ORDER[row["state"].status], row["due"], row["item"].name.lower()))
+
+
+def maintenance_form_values(item: VehicleMaintenanceItem | None = None, **values: str) -> dict[str, str]:
+    form = {"name": item.name if item else "", "category": item.category if item else "engine", "last_service_date": item.last_service_date.isoformat() if item and item.last_service_date else "", "last_service_odometer": str(item.last_service_odometer) if item and item.last_service_odometer is not None else "", "interval_km": str(item.interval_km) if item and item.interval_km else "", "interval_months": str(item.interval_months) if item and item.interval_months else "", "notes": item.notes or "" if item else ""}
+    form.update(values)
+    return form
+
+
+def validate_maintenance_form(form: dict[str, str]) -> dict[str, Any]:
+    name, category, notes = form["name"].strip(), form["category"].strip(), form["notes"].strip()
+    if not name or len(name) > 160: raise ValueError("Укажите название до 160 символов.")
+    if category not in VEHICLE_MAINTENANCE_CATEGORIES: raise ValueError("Выберите категорию из списка.")
+    if len(notes) > 4000: raise ValueError("Заметки слишком длинные.")
+    try:
+        interval_km = parse_optional_int(form["interval_km"], "Интервал пробега", 1, 10_000_000)
+        interval_months = parse_optional_int(form["interval_months"], "Интервал месяцев", 1, 1_200)
+        last_odometer = parse_optional_int(form["last_service_odometer"], "Пробег обслуживания", 0, 10_000_000)
+        last_date = parse_date(form["last_service_date"])
+    except HTTPException as exc: raise ValueError(str(exc.detail)) from exc
+    if interval_km is None and interval_months is None: raise ValueError("Задайте хотя бы один интервал.")
+    if interval_km is not None and last_odometer is None: raise ValueError("Для интервала по пробегу укажите последний пробег обслуживания.")
+    if interval_months is not None and last_date is None: raise ValueError("Для интервала по времени укажите дату последнего обслуживания.")
+    return {"name": name, "category": category, "last_service_date": last_date, "last_service_odometer": last_odometer, "interval_km": interval_km, "interval_months": interval_months, "notes": notes or None}
+
+
+def require_maintenance_item(db: Session, vehicle_id: int, item_id: int) -> VehicleMaintenanceItem:
+    item = db.scalar(select(VehicleMaintenanceItem).where(VehicleMaintenanceItem.id == item_id, VehicleMaintenanceItem.vehicle_id == vehicle_id))
+    if not item: raise HTTPException(status_code=404, detail="Позиция обслуживания не найдена")
+    return item
+
+
+def render_maintenance_form(request: Request, user: User, vehicle: Vehicle, form: dict[str, str], item: VehicleMaintenanceItem | None = None, error: str | None = None):
+    return render(request, "vehicle_maintenance_form.html", {"user": user, "vehicle": vehicle, "form": form, "item": item, "error": error, "categories": VEHICLE_MAINTENANCE_CATEGORIES})
+
+
+@app.get("/vehicles/{vehicle_id}/maintenance")
+def vehicle_maintenance_page(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    return render(request, "vehicle_maintenance.html", {"user": user, "vehicle": vehicle, "rows": maintenance_states(vehicle, db), "categories": VEHICLE_MAINTENANCE_CATEGORIES, "today": msk_today()})
+
+
+@app.get("/vehicles/{vehicle_id}/maintenance/new")
+def vehicle_maintenance_new(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    return render_maintenance_form(request, user, vehicle, maintenance_form_values())
+
+
+@app.post("/vehicles/{vehicle_id}/maintenance")
+def vehicle_maintenance_create(request: Request, vehicle_id: int, name: str = Form(""), category: str = Form("other"), last_service_date: str = Form(""), last_service_odometer: str = Form(""), interval_km: str = Form(""), interval_months: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); form = maintenance_form_values(name=name, category=category, last_service_date=last_service_date, last_service_odometer=last_service_odometer, interval_km=interval_km, interval_months=interval_months, notes=notes)
+    try: data = validate_maintenance_form(form)
+    except ValueError as exc: return render_maintenance_form(request, user, vehicle, form, error=str(exc))
+    db.add(VehicleMaintenanceItem(vehicle_id=vehicle.id, **data)); db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Позиция обслуживания добавлена")
+
+
+@app.get("/vehicles/{vehicle_id}/maintenance/{item_id}/edit")
+def vehicle_maintenance_edit(request: Request, vehicle_id: int, item_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); item = require_maintenance_item(db, vehicle.id, item_id)
+    return render_maintenance_form(request, user, vehicle, maintenance_form_values(item), item)
+
+
+@app.post("/vehicles/{vehicle_id}/maintenance/{item_id}/edit")
+def vehicle_maintenance_update(request: Request, vehicle_id: int, item_id: int, name: str = Form(""), category: str = Form("other"), last_service_date: str = Form(""), last_service_odometer: str = Form(""), interval_km: str = Form(""), interval_months: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); item = require_maintenance_item(db, vehicle.id, item_id); form = maintenance_form_values(name=name, category=category, last_service_date=last_service_date, last_service_odometer=last_service_odometer, interval_km=interval_km, interval_months=interval_months, notes=notes)
+    try: data = validate_maintenance_form(form)
+    except ValueError as exc: return render_maintenance_form(request, user, vehicle, form, item, str(exc))
+    for field, value in data.items(): setattr(item, field, value)
+    db.commit(); return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Позиция обслуживания сохранена")
+
+
+@app.post("/vehicles/{vehicle_id}/maintenance/{item_id}/delete")
+def vehicle_maintenance_delete(vehicle_id: int, item_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); db.delete(require_maintenance_item(db, vehicle.id, item_id)); db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Позиция обслуживания удалена")
+
+
+@app.post("/vehicles/{vehicle_id}/maintenance/{item_id}/service")
+def vehicle_maintenance_service(request: Request, vehicle_id: int, item_id: int, occurred_on: str = Form(""), odometer: str = Form(""), cost: str = Form(""), service_location: str = Form(""), notes: str = Form(""), add_to_log: str | None = Form(None), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user); item = require_maintenance_item(db, vehicle.id, item_id)
+    try:
+        service_date = date.fromisoformat(occurred_on); service_odometer = parse_optional_int(odometer, "Пробег", 0, 10_000_000); service_cost = optional_nonnegative_money(cost, "Стоимость")
+    except (ValueError, HTTPException) as exc:
+        return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", f"Не удалось отметить обслуживание: {getattr(exc, 'detail', 'некорректные данные')}")
+    if item.interval_km is not None and service_odometer is None: return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Укажите пробег обслуживания")
+    if item.last_service_odometer is not None and service_odometer is not None and service_odometer < item.last_service_odometer: return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Пробег не может быть меньше предыдущего обслуживания")
+    if item.last_service_date and service_date < item.last_service_date: return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Дата не может быть раньше предыдущего обслуживания")
+    item.last_service_date = service_date if item.interval_months is not None else item.last_service_date
+    item.last_service_odometer = service_odometer if item.interval_km is not None else item.last_service_odometer
+    if service_odometer is not None: vehicle.current_odometer = max(vehicle.current_odometer, service_odometer)
+    if add_to_log: db.add(VehicleLogEntry(vehicle_id=vehicle.id, occurred_on=service_date, odometer=service_odometer, entry_type="maintenance", title=item.name, description=notes.strip() or None, cost=service_cost, service_location=service_location.strip() or None))
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/maintenance", "Обслуживание отмечено")
 
 
 @app.post("/recipes/{recipe_id}/favorite")

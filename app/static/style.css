@@ -48,7 +48,7 @@ button:disabled, input:disabled, select:disabled, textarea:disabled {
     opacity: .58;
 }
 :focus-visible {
-    outline: 3px solid rgba(37, 99, 235, .22);
+    outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent);
     outline-offset: 2px;
 }
 .icon-sprite {
@@ -78,7 +78,7 @@ button:disabled, input:disabled, select:disabled, textarea:disabled {
     justify-content: space-between;
     min-height: 58px;
     padding: max(8px, env(safe-area-inset-top)) max(18px, calc((100vw - 1240px) / 2)) 8px;
-    background: rgba(255, 255, 255, .96);
+    background: color-mix(in srgb, var(--surface) 96%, transparent);
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(14px);
 }
@@ -99,8 +99,8 @@ button:disabled, input:disabled, select:disabled, textarea:disabled {
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-control);
-    background: #111827;
-    color: #fff;
+    background: var(--accent-background, var(--primary));
+    color: var(--primary-foreground);
 }
 .brand-mark .icon { width: 19px; height: 19px; }
 .brand-text { font-size: 18px; }
@@ -474,7 +474,7 @@ input:not([type="color"]):focus, textarea:focus, select:focus {
     padding: 10px 16px;
     border: 1px solid var(--primary);
     border-radius: 8px;
-    background: var(--primary);
+    background: var(--accent-background, var(--primary));
     color: var(--primary-foreground);
     cursor: pointer;
     font-weight: 900;
@@ -483,7 +483,7 @@ input:not([type="color"]):focus, textarea:focus, select:focus {
     gap: 8px;
 }
 .btn .icon { width: 18px; height: 18px; }
-.btn:hover { background: var(--primary-dark); text-decoration: none; }
+.btn:hover { filter: brightness(.94); text-decoration: none; }
 .btn.secondary, .btn.ghost { background: var(--soft); border-color: var(--line); color: var(--text); }
 .btn.secondary:hover, .btn.ghost:hover { background: #e9edf3; }
 .btn.danger, .danger { background: var(--danger); border-color: var(--danger); color: #fff; }
@@ -938,6 +938,7 @@ input:not([type="color"]):focus, textarea:focus, select:focus {
 .vehicle-log-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }.vehicle-log-summary > div { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }.vehicle-log-summary span { color: var(--muted); font-size: 12px; font-weight: 800; }.vehicle-log-summary b { overflow-wrap: anywhere; }
 .vehicle-log-filters { margin-bottom: 14px; box-shadow: none; }.filter-grid { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)) auto; align-items: end; gap: 10px; }.filter-grid label { margin: 0; }
 .vehicle-log-card { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 14px; align-items: start; color: var(--text); box-shadow: none; }.vehicle-log-card:hover { background: var(--soft); text-decoration: none; }.vehicle-log-card time { color: var(--muted); font-size: 13px; font-weight: 800; }.vehicle-log-card h2 { margin: 4px 0; font-size: 17px; overflow-wrap: anywhere; }.vehicle-log-card p { margin: 0; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }.vehicle-log-metrics { display: grid; gap: 5px; justify-items: end; color: var(--muted); font-size: 13px; white-space: nowrap; }.vehicle-log-metrics b { color: var(--primary); }.vehicle-log-entry { display: grid; gap: 18px; }.vehicle-log-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.vehicle-log-entry-head time { color: var(--muted); font-weight: 800; }
+.maintenance-list{display:grid;gap:12px}.maintenance-card{display:grid;gap:14px;box-shadow:none;border-left:4px solid var(--success)}.maintenance-card.soon{border-left-color:var(--warning)}.maintenance-card.overdue{border-left-color:var(--danger)}.maintenance-head{display:flex;justify-content:space-between;gap:12px;align-items:start}.maintenance-head h2{margin:6px 0 2px}.maintenance-head p,.maintenance-values span,.maintenance-values small{margin:0;color:var(--muted);font-size:12px}.maintenance-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--success);color:#fff;font-size:12px;font-weight:900}.soon .maintenance-badge{background:var(--warning)}.overdue .maintenance-badge{background:var(--danger)}.maintenance-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.maintenance-values div{display:grid;gap:3px;padding:10px;border-radius:8px;background:var(--soft)}.maintenance-service{border-top:1px solid var(--line);padding-top:12px}.maintenance-service summary{cursor:pointer;color:var(--primary);font-weight:800}.maintenance-service form{margin-top:12px}.check-row{display:flex;align-items:center;gap:8px}.link-danger{padding:0;border:0;background:none;color:var(--danger);cursor:pointer;font:inherit;font-weight:800}
 @media (max-width: 520px) { .vehicle-details { grid-template-columns: 1fr; } .vehicle-card { grid-template-columns: 38px minmax(0, 1fr); } .vehicle-card strong { grid-column: 1 / -1; } .vehicle-log-summary { grid-template-columns: 1fr; } .vehicle-log-recent a, .vehicle-log-card { grid-template-columns: 1fr; gap: 4px; } .vehicle-log-metrics { justify-items: start; grid-auto-flow: column; justify-content: start; gap: 12px; } .filter-grid { grid-template-columns: 1fr; } }
 
 .recent-expenses-section {
