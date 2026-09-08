@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ category.name }} — аналитика{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div><h1>{{ category.name }}</h1><div class="subline">{{ expense_list.title }} · {{ from_date }} — {{ to_date }}</div></div>
+    <a class="icon-btn" href="/expenses/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ return_list_id }}" title="Назад в аналитику" aria-label="Назад в аналитику"><svg class="icon"><use href="#i-arrow-left"></use></svg></a>
+</div>
+<a class="back-link" href="/expenses/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ return_list_id }}">← Назад в аналитику</a>
+
+<section class="stats-grid category-drill-stats">
+    <div class="card stat-card"><span>Всего</span><b>{{ total_amount|fmt_decimal }} ₽</b></div>
+    <div class="card stat-card"><span>Операций</span><b>{{ total_count }}</b></div>
+</section>
+
+<form method="get" class="card drill-sort-form">
+    <input type="hidden" name="from_date" value="{{ from_date }}"><input type="hidden" name="to_date" value="{{ to_date }}"><input type="hidden" name="list_id" value="{{ return_list_id }}">
+    <label>Сортировка<select name="sort" onchange="this.form.submit()"><option value="date_desc" {% if selected_sort == 'date_desc' %}selected{% endif %}>Сначала новые</option><option value="date_asc" {% if selected_sort == 'date_asc' %}selected{% endif %}>Сначала старые</option><option value="amount_desc" {% if selected_sort == 'amount_desc' %}selected{% endif %}>Сначала дорогие</option><option value="amount_asc" {% if selected_sort == 'amount_asc' %}selected{% endif %}>Сначала дешёвые</option></select></label>
+    <button class="btn secondary" type="submit">Применить</button>
+</form>
+
+<section class="card content-card">
+{% if items %}
+    <div class="list expense-items-list">
+    {% for item in items %}<article class="list-row expense-list-row"><div><b>{{ item.title }}</b><span class="subline">{{ item.created_at|msk_datetime('%d.%m.%Y') }}</span></div><strong>{{ item.amount|fmt_decimal }} ₽</strong></article>{% endfor %}
+    </div>
+    {% if total_pages > 1 %}<nav class="pagination" aria-label="Страницы">{% if page > 1 %}<a class="btn secondary" href="?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ return_list_id }}&sort={{ selected_sort }}&page={{ page - 1 }}">Назад</a>{% endif %}<span>Страница {{ page }} из {{ total_pages }}</span>{% if page < total_pages %}<a class="btn secondary" href="?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ return_list_id }}&sort={{ selected_sort }}&page={{ page + 1 }}">Далее</a>{% endif %}</nav>{% endif %}
+{% else %}<div class="empty">За выбранный период расходов в этой категории нет.</div>{% endif %}
+</section>
+{% endblock %}

@@ -30,8 +30,9 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
-    theme: Mapped[str] = mapped_column(String(20), default="light", nullable=False)
+    theme: Mapped[str] = mapped_column(String(20), default="system", nullable=False)
     expense_period_start_day: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    ui_palette_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     recipes: Mapped[list["Recipe"]] = relationship(back_populates="owner", cascade="all, delete-orphan")

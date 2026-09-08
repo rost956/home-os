@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import json
+import re
+
+PALETTE_TOKENS = (
+    ("primary", "Основной акцент"),
+    ("secondary", "Второй акцент"),
+    ("bg", "Фон страницы"),
+    ("surface", "Фон карточек"),
+    ("text", "Основной текст"),
+    ("muted", "Вторичный текст"),
+    ("border", "Границы"),
+    ("success", "Успех"),
+    ("warning", "Предупреждение"),
+    ("danger", "Ошибка"),
+)
+PALETTE_KEYS = {key for key, _label in PALETTE_TOKENS}
+HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+DEFAULT_PALETTES = {
+    "light": {
+        "primary": "#2563eb", "secondary": "#7c3aed", "bg": "#f6f7f9", "surface": "#ffffff",
+        "text": "#111827", "muted": "#6b7280", "border": "#e5e7eb", "success": "#16a34a",
+        "warning": "#d97706", "danger": "#dc2626",
+    },
+    "dark": {
+        "primary": "#3b82f6", "secondary": "#a78bfa", "bg": "#0b1120", "surface": "#111827",
+        "text": "#e5e7eb", "muted": "#94a3b8", "border": "#263244", "success": "#4ade80",
+        "warning": "#fbbf24", "danger": "#f87171",
+    },
+}
+
+
+def default_palette(theme: str) -> dict[str, str]:
+    return dict(DEFAULT_PALETTES["dark" if theme == "dark" else "light"])
+
+
+def load_palette(raw: str | None) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(values, dict):
+        return {}
+    return {key: value.lower() for key, value in values.items() if key in PALETTE_KEYS and isinstance(value, str) and HEX_COLOR.fullmatch(value)}
+
+
+def relative_luminance(value: str) -> float:
+    channels = [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    normalized = [channel / 12.92 if channel <= .04045 else ((channel + .055) / 1.055) ** 2.4 for channel in channels]
+    return .2126 * normalized[0] + .7152 * normalized[1] + .0722 * normalized[2]
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    light, dark = sorted((relative_luminance(first), relative_luminance(second)), reverse=True)
+    return (light + .05) / (dark + .05)
+
+
+def validate_palette(values: dict[str, str], *, theme: str) -> tuple[dict[str, str], str | None]:
+    palette: dict[str, str] = {}
+    for key, value in values.items():
+        if key not in PALETTE_KEYS or not isinstance(value, str) or not HEX_COLOR.fullmatch(value.strip()):
+            return {}, "Используйте цвета только в формате #RRGGBB."
+        palette[key] = value.strip().lower()
+    effective = default_palette(theme)
+    effective.update(palette)
+    for foreground, background, label in (("text", "bg", "текст и фон"), ("text", "surface", "текст и карточки"), ("primary", "#ffffff", "акцент и текст кнопки")):
+        background_color = effective[background] if background in effective else background
+        if contrast_ratio(effective[foreground], background_color) < 3:
+            return {}, f"Недостаточный контраст: {label}. Выберите более контрастные цвета."
+    return palette, None
+
+
+def palette_css_variables(palette: dict[str, str]) -> str:
+    variables: dict[str, str] = {}
+    for key, value in palette.items():
+        variables[key] = value
+        if key == "surface":
+            variables["card"] = value
+        elif key == "border":
+            variables["line"] = value
+    return ";".join(f"--{key}:{value}" for key, value in variables.items())

@@ -72,6 +72,7 @@ class Settings:
     data_dir: Path
     allowed_hosts: tuple[str, ...]
     registration_enabled: bool
+    home_ai_enabled: bool
     enforce_same_origin: bool
     secure_cookies: bool
     background_jobs_enabled: bool
@@ -104,6 +105,7 @@ def load_settings() -> Settings:
         data_dir=data_dir,
         allowed_hosts=_allowed_hosts(app_env),
         registration_enabled=env_bool("REGISTRATION_ENABLED", app_env != "production"),
+        home_ai_enabled=env_bool("HOME_AI_ENABLED", False),
         enforce_same_origin=env_bool("ENFORCE_SAME_ORIGIN", app_env == "production"),
         secure_cookies=env_bool("SECURE_COOKIES", app_env == "production"),
         background_jobs_enabled=env_bool("BACKGROUND_JOBS_ENABLED", app_env not in {"test", "testing"}),

@@ -152,7 +152,8 @@ def expense_period_start_day(user: User | None) -> int:
     return max(1, min(31, int(value)))
 
 
-def expense_period_bounds(day: date, start_day: int) -> tuple[date, date]:
+def financial_period_bounds(day: date, start_day: int) -> tuple[date, date]:
+    """Return the user's current financial period for a reference date."""
     current_start = clamp_month_day(day.year, day.month, start_day)
     if day < current_start:
         year, month = shifted_month(day.year, day.month, -1)
@@ -160,6 +161,11 @@ def expense_period_bounds(day: date, start_day: int) -> tuple[date, date]:
     next_year, next_month = shifted_month(current_start.year, current_start.month, 1)
     next_start = clamp_month_day(next_year, next_month, start_day)
     return current_start, next_start - timedelta(days=1)
+
+
+def expense_period_bounds(day: date, start_day: int) -> tuple[date, date]:
+    """Backward-compatible name for financial_period_bounds."""
+    return financial_period_bounds(day, start_day)
 
 
 def previous_expense_period_bounds(period_start: date, start_day: int) -> tuple[date, date]:
@@ -379,7 +385,7 @@ def build_finance_snapshot(
 ) -> FinanceSnapshot:
     current_day = today or today_msk()
     start_day = expense_period_start_day(user)
-    period_start, period_end = expense_period_bounds(current_day, start_day)
+    period_start, period_end = financial_period_bounds(current_day, start_day)
     actual_end = min(current_day, period_end)
     previous_start, previous_end = previous_expense_period_bounds(period_start, start_day)
     elapsed_days = max(1, (actual_end - period_start).days + 1)

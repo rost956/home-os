@@ -25,6 +25,7 @@ services:
       TIMER_REMINDER_MINUTES: ${TIMER_REMINDER_MINUTES:-120}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
       PUSH_ENDPOINT_HOSTS: ${PUSH_ENDPOINT_HOSTS:-}
+      HOME_AI_ENABLED: ${HOME_AI_ENABLED:-false}
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_MODEL: ${AI_MODEL:-}

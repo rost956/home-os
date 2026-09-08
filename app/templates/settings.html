@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<div class="page-head compact-head">
+    <div><h1>Настройки</h1><div class="subline">Персональные настройки аккаунта</div></div>
+</div>
+
+<form method="post" action="/settings" class="form settings-form">
+    <section class="card content-card">
+        <h2>Интерфейс</h2>
+        <label>Тема
+            <select name="appearance">
+                <option value="system" {% if user.theme == 'system' %}selected{% endif %}>Системная</option>
+                <option value="light" {% if user.theme == 'light' %}selected{% endif %}>Светлая</option>
+                <option value="dark" {% if user.theme == 'dark' %}selected{% endif %}>Тёмная</option>
+            </select>
+        </label>
+    </section>
+
+    <section class="card content-card">
+        <h2>Финансы</h2>
+        <label>День начала финансового периода
+            <input name="financial_period_start_day" type="number" min="1" max="31" value="{{ user.expense_period_start_day }}" required>
+        </label>
+        <div class="subline">Если этого дня нет в месяце, используется последний день месяца.</div>
+    </section>
+
+    <section class="card content-card palette-settings" data-palette-preview>
+        <div class="card-head"><div><h2>Цвета интерфейса</h2><div class="subline">Пустое значение использует палитру выбранной темы.</div></div></div>
+        <div class="palette-preview" aria-label="Предпросмотр палитры">
+            <span class="palette-preview-surface"><b>Текст и карточка</b><small>Вторичный текст</small></span>
+            <span class="palette-preview-primary">Основное действие</span>
+            <span class="palette-preview-secondary">Акцент</span>
+        </div>
+        <div class="palette-grid">
+        {% for key, label in palette_tokens %}
+            {% set value = ui_palette.get(key, palette_defaults[key]) %}
+            <label>{{ label }}
+                <span class="color-control"><input type="color" value="{{ value }}" data-color-picker="color_{{ key }}"><input name="color_{{ key }}" value="{{ value }}" maxlength="7" pattern="#[0-9A-Fa-f]{6}" data-default-value="{{ palette_defaults[key] }}" data-color-hex="color_{{ key }}"></span>
+            </label>
+        {% endfor %}
+        </div>
+        <button class="btn secondary" type="submit" name="reset_palette" value="1">Сбросить цвета</button>
+    </section>
+
+    <button class="btn" type="submit">Сохранить настройки</button>
+</form>
+<script>
+(() => {
+    const root = document.documentElement;
+    document.querySelectorAll('[data-color-picker]').forEach((picker) => {
+        const input = document.querySelector(`[data-color-hex="${picker.dataset.colorPicker}"]`);
+        const key = picker.dataset.colorPicker.replace('color_', '');
+        picker.addEventListener('input', () => { input.value = picker.value; root.style.setProperty(`--${key}`, picker.value); });
+        input.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(input.value)) { picker.value = input.value; root.style.setProperty(`--${key}`, input.value); } });
+    });
+    document.querySelector('.settings-form').addEventListener('submit', (event) => {
+        if (event.submitter && event.submitter.name === 'reset_palette') return;
+        document.querySelectorAll('[data-default-value]').forEach((input) => {
+            if (input.value.toLowerCase() === input.dataset.defaultValue.toLowerCase()) input.value = '';
+        });
+    });
+})();
+</script>
+{% endblock %}

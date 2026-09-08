@@ -25,13 +25,12 @@ except Exception:  # pragma: no cover - dependency is installed in Docker, but k
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import and_, desc, func, or_, select, update
+from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from .ai.router import router as ai_router
 from .auth import get_current_user, get_current_user_optional, hash_password, verify_password
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
@@ -76,6 +75,7 @@ from .services.finance import (
     shifted_month,
     summarize_cashflow,
 )
+from .services.preferences import PALETTE_TOKENS, default_palette, load_palette, palette_css_variables, validate_palette
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -188,6 +188,7 @@ def presence_info(target: User | None) -> dict[str, Any]:
 
 
 templates.env.filters["msk_datetime"] = format_msk_datetime
+templates.env.filters["palette_css"] = palette_css_variables
 templates.env.globals["presence_info"] = presence_info
 
 
@@ -371,7 +372,7 @@ def schema_change_required() -> bool:
     if set(Base.metadata.tables) - existing_tables:
         return True
     required_columns = {
-        "users": {"theme", "expense_period_start_day", "last_seen_at"},
+        "users": {"theme", "expense_period_start_day", "ui_palette_json", "last_seen_at"},
         "recipes": {"image_path", "tags", "is_favorite"},
         "watch_items": {"last_watched_at"},
         "chat_threads": {"is_pinned"},
@@ -423,10 +424,12 @@ def ensure_runtime_schema() -> None:
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
             connection.exec_driver_sql(
-                "ALTER TABLE users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'light'"
+                "ALTER TABLE users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'system'"
             )
         if "expense_period_start_day" not in user_columns:
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN expense_period_start_day INTEGER NOT NULL DEFAULT 1")
+        if "ui_palette_json" not in user_columns:
+            connection.exec_driver_sql("ALTER TABLE users ADD COLUMN ui_palette_json TEXT")
         if "last_seen_at" not in user_columns:
             connection.exec_driver_sql("ALTER TABLE users ADD COLUMN last_seen_at DATETIME")
 
@@ -574,6 +577,9 @@ async def protect_unsafe_requests(request: Request, call_next):
 def render(request: Request, template: str, context: dict):
     context.setdefault("user", None)
     context.setdefault("registration_enabled", settings.registration_enabled)
+    context.setdefault("home_ai_enabled", settings.home_ai_enabled)
+    user = context["user"]
+    context.setdefault("ui_palette", load_palette(user.ui_palette_json) if user else {})
     return templates.TemplateResponse(request, template, context)
 
 
@@ -2033,12 +2039,56 @@ def update_theme(
     db: Session = Depends(get_db),
 ):
     clean_theme = theme.strip().lower()
-    if clean_theme not in {"light", "dark"}:
+    if clean_theme not in {"system", "light", "dark"}:
         raise HTTPException(status_code=400, detail="Некорректная тема")
     user.theme = clean_theme
     db.add(user)
     db.commit()
     return JSONResponse({"theme": clean_theme})
+
+
+@app.get("/settings")
+def settings_page(request: Request, user: User = Depends(get_current_user)):
+    return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme)})
+
+
+@app.post("/settings")
+async def save_settings(
+    request: Request,
+    appearance: str = Form("system"),
+    financial_period_start_day: str = Form("1"),
+    reset_palette: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    clean_appearance = appearance.strip().lower()
+    if clean_appearance not in {"system", "light", "dark"}:
+        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": "Выберите корректную тему."})
+    try:
+        start_day = int(financial_period_start_day)
+    except ValueError:
+        start_day = 0
+    if not 1 <= start_day <= 31:
+        return render(
+            request,
+            "settings.html",
+            {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": "День начала финансового периода должен быть от 1 до 31."},
+        )
+
+    submitted_palette = {
+        key.removeprefix("color_"): value
+        for key, value in (await request.form()).items()
+        if key.startswith("color_") and value.strip()
+    }
+    palette, palette_error = validate_palette(submitted_palette, theme=clean_appearance)
+    if palette_error:
+        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": palette_error})
+
+    user.theme = clean_appearance
+    user.expense_period_start_day = start_day
+    user.ui_palette_json = None if reset_palette == "1" else json.dumps(palette, separators=(",", ":"))
+    db.commit()
+    return redirect_notice("/settings", "Настройки сохранены")
 
 
 @app.post("/settings/expense-period")
@@ -2649,8 +2699,9 @@ def expenses_analytics_page(
 
     by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
     forecast_eligible_by_day: dict[date, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    by_category: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
-    by_day_category: dict[date, dict[str, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0.00")))
+    by_category: dict[int, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    by_day_category: dict[date, dict[int, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0.00")))
+    category_metadata: dict[int, dict[str, str]] = {}
     top_items = []
 
     for expense_list in accessible_lists:
@@ -2666,8 +2717,9 @@ def expenses_analytics_page(
                 by_day[item_date] += item.amount
                 if item.include_in_forecast:
                     forecast_eligible_by_day[item_date] += item.amount
-                by_category[category.name] += item.amount
-                by_day_category[item_date][category.name] += item.amount
+                category_metadata[category.id] = {"name": category.name, "list_title": expense_list.title}
+                by_category[category.id] += item.amount
+                by_day_category[item_date][category.id] += item.amount
                 top_items.append({
                     "title": item.title,
                     "amount": item.amount,
@@ -2683,8 +2735,12 @@ def expenses_analytics_page(
     max_day_total = max(by_day.values(), default=Decimal("0.00"))
     max_category_total = max(by_category.values(), default=Decimal("0.00"))
 
-    category_names = [name for name, _ in sorted(by_category.items(), key=lambda pair: pair[1], reverse=True)]
-    category_colors = category_color_map(category_names)
+    category_ids = [category_id for category_id, _ in sorted(by_category.items(), key=lambda pair: pair[1], reverse=True)]
+    category_labels = {
+        category_id: f"{category_metadata[category_id]['name']} · {category_metadata[category_id]['list_title']}"
+        for category_id in category_ids
+    }
+    category_colors = category_color_map([category_labels[category_id] for category_id in category_ids])
 
     daily_chart = []
     chart_dates: list[date] = []
@@ -2699,15 +2755,17 @@ def expenses_analytics_page(
     for current in chart_dates:
         day_total = by_day[current]
         segments = []
-        for name in category_names:
-            value = by_day_category[current].get(name, Decimal("0.00"))
+        for category_id in category_ids:
+            value = by_day_category[current].get(category_id, Decimal("0.00"))
             if value <= 0:
                 continue
             segments.append({
-                "name": name,
+                "name": category_metadata[category_id]["name"],
+                "list_title": category_metadata[category_id]["list_title"],
+                "id": category_id,
                 "total": value,
                 "height": float((value / max_day_total) * 100) if max_day_total else 0,
-                "color": category_colors[name],
+                "color": category_colors[category_labels[category_id]],
             })
         daily_chart.append({
             "date": current.isoformat(),
@@ -2719,12 +2777,14 @@ def expenses_analytics_page(
 
     category_chart = [
         {
-            "name": name,
+            "name": category_metadata[category_id]["name"],
+            "list_title": category_metadata[category_id]["list_title"],
+            "id": category_id,
             "total": value,
             "percent": int((value / max_category_total) * 100) if max_category_total else 0,
-            "color": category_colors[name],
+            "color": category_colors[category_labels[category_id]],
         }
-        for name, value in sorted(by_category.items(), key=lambda pair: pair[1], reverse=True)
+        for category_id, value in sorted(by_category.items(), key=lambda pair: pair[1], reverse=True)
     ]
     top_items.sort(key=lambda item: item["amount"], reverse=True)
 
@@ -2781,6 +2841,73 @@ def expenses_analytics_page(
             "current_period_start": current_month_start,
             "current_period_end": current_month_end,
             "current_period_label": format_period_range(current_month_start, current_month_end),
+        },
+    )
+
+
+@app.get("/expenses/categories/{category_id}/analytics")
+def expense_category_analytics_page(
+    request: Request,
+    category_id: int,
+    from_date: str = "",
+    to_date: str = "",
+    list_id: str = "",
+    sort: str = "date_desc",
+    page: int = 1,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    category, expense_list = require_expense_category_access(db, category_id, user)
+    today = msk_today()
+    default_start, _default_end = expense_period_bounds(today, expense_period_start_day(user))
+    date_from = parse_date(from_date, default_start) or default_start
+    date_to = parse_date(to_date, today) or today
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+    allowed_sorts = {
+        "date_desc": (desc(ExpenseItem.created_at), desc(ExpenseItem.id)),
+        "date_asc": (asc(ExpenseItem.created_at), asc(ExpenseItem.id)),
+        "amount_desc": (desc(ExpenseItem.amount), desc(ExpenseItem.id)),
+        "amount_asc": (asc(ExpenseItem.amount), asc(ExpenseItem.id)),
+    }
+    selected_sort = sort if sort in allowed_sorts else "date_desc"
+    safe_page = max(1, page)
+    page_size = 25
+    start_utc, _ = msk_day_utc_bounds(date_from)
+    _, end_utc = msk_day_utc_bounds(date_to)
+    filters = (
+        ExpenseItem.category_id == category.id,
+        ExpenseItem.include_in_analytics.is_(True),
+        ExpenseItem.created_at >= start_utc,
+        ExpenseItem.created_at <= end_utc,
+    )
+    total_count = db.scalar(select(func.count()).select_from(ExpenseItem).where(*filters)) or 0
+    total_amount = db.scalar(select(func.coalesce(func.sum(ExpenseItem.amount), 0)).where(*filters)) or Decimal("0.00")
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    safe_page = min(safe_page, total_pages)
+    items = db.scalars(
+        select(ExpenseItem)
+        .where(*filters)
+        .order_by(*allowed_sorts[selected_sort])
+        .offset((safe_page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return render(
+        request,
+        "expense_category_analytics.html",
+        {
+            "user": user,
+            "category": category,
+            "expense_list": expense_list,
+            "items": items,
+            "from_date": date_from.isoformat(),
+            "to_date": date_to.isoformat(),
+            "selected_sort": selected_sort,
+            "total_count": total_count,
+            "total_amount": total_amount,
+            "page": safe_page,
+            "total_pages": total_pages,
+            "return_list_id": list_id,
         },
     )
 
@@ -5381,4 +5508,9 @@ def import_data_json(
 
 
 app.include_router(system_router)
-app.include_router(ai_router)
+if settings.home_ai_enabled:
+    # Keep Home AI code and its database schema intact, but do not expose it or
+    # initialize its runtime integration while the feature is frozen.
+    from .ai.router import router as ai_router
+
+    app.include_router(ai_router)

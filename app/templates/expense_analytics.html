@@ -65,7 +65,7 @@
         {% if category_chart %}
         <div class="chart-legend compact-legend">
             {% for category in category_chart %}
-            <span><i style="background: {{ category.color }}"></i>{{ category.name }}</span>
+            <a class="analytics-category-link" href="/expenses/categories/{{ category.id }}/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ selected_list_id or '' }}"><i style="background: {{ category.color }}"></i>{{ category.name }} · {{ category.list_title }}</a>
             {% endfor %}
         </div>
         {% endif %}
@@ -76,7 +76,7 @@
         <div class="date-bar-wrap" title="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
             <div class="date-bar-stack" aria-label="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
                 {% for segment in day.segments %}
-                <div class="date-bar-segment" style="height: {{ segment.height }}%; background: {{ segment.color }}" title="{{ segment.name }} · {{ segment.total|fmt_decimal }} ₽"></div>
+                <a class="date-bar-segment" href="/expenses/categories/{{ segment.id }}/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ selected_list_id or '' }}" style="height: {{ segment.height }}%; background: {{ segment.color }}" title="{{ segment.name }} · {{ segment.total|fmt_decimal }} ₽"></a>
                 {% endfor %}
             </div>
             <div class="date-axis-label" aria-label="{{ day.label }} · {{ day.total|fmt_decimal }} ₽">
@@ -96,13 +96,13 @@
         <h2>Категории</h2>
         <div class="bar-list">
         {% for category in category_chart %}
-            <div class="bar-row">
+            <a class="bar-row analytics-category-row" href="/expenses/categories/{{ category.id }}/analytics?from_date={{ from_date }}&to_date={{ to_date }}&list_id={{ selected_list_id or '' }}">
                 <div class="bar-title">
-                    <b><i class="category-dot" style="background: {{ category.color }}"></i>{{ category.name }}</b>
+                    <b><i class="category-dot" style="background: {{ category.color }}"></i>{{ category.name }} <small>· {{ category.list_title }}</small></b>
                     <span>{{ category.total|fmt_decimal }} ₽</span>
                 </div>
                 <div class="bar-track"><div style="width: {{ category.percent }}%; background: {{ category.color }}"></div></div>
-            </div>
+            </a>
         {% else %}
             <div class="empty small">Нет данных</div>
         {% endfor %}

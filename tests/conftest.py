@@ -19,6 +19,9 @@ os.environ.update(
         "REGISTRATION_ENABLED": "true",
         "ENFORCE_SAME_ORIGIN": "false",
         "SECURE_COOKIES": "false",
+        # AI-focused tests retain their existing explicit routes; production and
+        # development defaults remain frozen through HOME_AI_ENABLED=false.
+        "HOME_AI_ENABLED": "true",
     }
 )
 

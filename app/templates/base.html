@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="{{ user.theme if user else 'light' }}">
+<html lang="ru" data-theme="{{ user.theme if user else 'system' }}" data-theme-preference="{{ user.theme if user else 'system' }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,11 +7,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{% block title %}Домашний сервис{% endblock %}</title>
+    <script>
+    if (document.documentElement.dataset.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.dataset.theme = 'dark';
+    }
+    </script>
     <link rel="manifest" href="/manifest.json?v=56">
     <meta name="theme-color" content="#111827">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="stylesheet" href="/static/style.css?v=57">
+    {% if ui_palette %}<style>html { {{ ui_palette|palette_css }} }</style>{% endif %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -75,24 +81,42 @@
                 <span id="chatUnreadBadge" class="nav-badge hidden">0</span>
             </summary>
             <nav class="nav-menu" aria-label="Основная навигация">
+                <details class="nav-group" data-nav-group="main" open>
+                <summary class="nav-group-title">Главное</summary>
                 <a href="/today"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-home"></use></svg></span><b>Сегодня</b></a>
                 <a href="/search"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-search"></use></svg></span><b>Поиск</b></a>
+                </details>
+                <details class="nav-group" data-nav-group="food" open>
+                <summary class="nav-group-title">Еда</summary>
                 <a href="/recipes"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-recipes"></use></svg></span><b>Рецепты</b></a>
                 <a href="/menu"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-menu-plan"></use></svg></span><b>Меню</b></a>
                 <a href="/shopping"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-shopping"></use></svg></span><b>Покупки</b></a>
+                </details>
+                <details class="nav-group" data-nav-group="finance" open>
+                <summary class="nav-group-title">Финансы</summary>
                 <a href="/expenses"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-expenses"></use></svg></span><b>Траты</b></a>
                 <a href="/income"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-income"></use></svg></span><b>Доходы</b></a>
                 <a href="/expenses/analytics"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-analytics"></use></svg></span><b>Аналитика</b></a>
                 <a href="/finance"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-finance"></use></svg></span><b>Доходы и траты</b></a>
                 <a href="/expenses/planning"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-limits"></use></svg></span><b>Лимиты</b></a>
                 <a href="/expenses/splits"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-splits"></use></svg></span><b>Долги</b></a>
+                </details>
+                <details class="nav-group" data-nav-group="home" open>
+                <summary class="nav-group-title">Дом</summary>
                 <a href="/chats"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-chat"></use></svg></span><b>Чаты</b><span id="chatUnreadBadgeMenu" class="nav-badge hidden">0</span></a>
                 <a href="/wishlist"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-wishlist"></use></svg></span><b>Хотелки</b></a>
                 <a href="/watch"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-watch"></use></svg></span><b>Сериалы и фильмы</b></a>
                 <a href="/moments"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-moments"></use></svg></span><b>Моменты</b></a>
                 <a href="/planner"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-planner"></use></svg></span><b>Планировщик</b></a>
+                </details>
+                <details class="nav-group" data-nav-group="service" open>
+                <summary class="nav-group-title">Сервис</summary>
+                {% if home_ai_enabled %}
                 <a href="/ai/settings"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-ai"></use></svg></span><b>Home AI</b></a>
+                {% endif %}
+                <a href="/settings"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-edit"></use></svg></span><b>Настройки</b></a>
                 <a href="/backup"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-backup"></use></svg></span><b>Бэкап</b></a>
+                </details>
             </nav>
         </details>
         <button id="themeToggle" class="icon-btn" type="button" title="Тема" aria-label="Сменить тему"><svg class="icon"><use href="{{ '#i-sun' if user.theme == 'dark' else '#i-moon' }}"></use></svg></button>
@@ -271,13 +295,17 @@
     }
 
     if (themeToggle) {
-        function applyTheme(theme) {
+        function applyTheme(preference) {
+            const theme = preference === 'system'
+                ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                : preference;
             document.documentElement.dataset.theme = theme;
+            document.documentElement.dataset.themePreference = preference;
             themeToggle.innerHTML = theme === 'dark' ? '<svg class="icon"><use href="#i-sun"></use></svg>' : '<svg class="icon"><use href="#i-moon"></use></svg>';
             themeToggle.title = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
             themeToggle.setAttribute('aria-label', themeToggle.title);
         }
-        applyTheme(document.documentElement.dataset.theme || 'light');
+        applyTheme(document.documentElement.dataset.themePreference || 'system');
         themeToggle.addEventListener('click', async () => {
             const current = document.documentElement.dataset.theme || 'light';
             const next = current === 'dark' ? 'light' : 'dark';
@@ -308,6 +336,13 @@
             const dropdown = document.getElementById('navDropdown');
             if (dropdown) dropdown.open = false;
         });
+    });
+
+    document.querySelectorAll('[data-nav-group]').forEach((group) => {
+        const storageKey = 'nav-group:' + group.dataset.navGroup;
+        const saved = localStorage.getItem(storageKey);
+        if (saved !== null) group.open = saved === 'open';
+        group.addEventListener('toggle', () => localStorage.setItem(storageKey, group.open ? 'open' : 'closed'));
     });
 
     async function pingPresence() {
