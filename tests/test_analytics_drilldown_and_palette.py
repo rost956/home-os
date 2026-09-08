@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from app.models import ExpenseCategory, ExpenseItem, ExpenseList
+from app.services.preferences import default_palette, validate_palette
 from app.timezone import msk_date_to_utc_naive
 
 
@@ -97,3 +98,21 @@ def test_palette_is_per_user_validated_and_reset(client, db, make_user, login):
     assert reset.status_code == 303
     db.expire_all()
     assert db.get(type(owner), owner.id).ui_palette_json is None
+
+
+def test_default_palettes_pass_contrast_validation():
+    for theme in ("light", "dark"):
+        palette, error = validate_palette(default_palette(theme), theme=theme)
+        assert error is None
+        assert palette == default_palette(theme)
+
+
+def test_primary_button_uses_its_computed_foreground_for_contrast():
+    palette, error = validate_palette({"primary": "#2563eb"}, theme="light")
+    assert error is None
+    assert palette == {"primary": "#2563eb"}
+
+
+def test_unreadable_text_on_surface_is_rejected():
+    _, error = validate_palette({"text": "#fefefe", "bg": "#111827", "surface": "#ffffff"}, theme="light")
+    assert error == "Основной текст плохо читается на фоне карточек."

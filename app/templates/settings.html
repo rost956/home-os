@@ -28,16 +28,25 @@
     <section class="card content-card palette-settings" data-palette-preview>
         <div class="card-head"><div><h2>Цвета интерфейса</h2><div class="subline">Пустое значение использует палитру выбранной темы.</div></div></div>
         <div class="palette-preview" aria-label="Предпросмотр палитры">
-            <span class="palette-preview-surface"><b>Текст и карточка</b><small>Вторичный текст</small></span>
-            <span class="palette-preview-primary">Основное действие</span>
-            <span class="palette-preview-secondary">Акцент</span>
+            <h3>Пример карточки</h3>
+            <p>Вторичный текст</p>
+            <div class="palette-preview-actions"><button class="btn" type="button">Основное действие</button><a class="palette-preview-link" href="#palette-controls">Ссылка</a></div>
+            <div class="palette-preview-status"><span class="palette-preview-dot" aria-hidden="true"></span><span>Акцент</span><span class="palette-preview-success">✓ Успех</span></div>
         </div>
-        <div class="palette-grid">
-        {% for key, label in palette_tokens %}
-            {% set value = ui_palette.get(key, palette_defaults[key]) %}
-            <label>{{ label }}
-                <span class="color-control"><input type="color" value="{{ value }}" data-color-picker="color_{{ key }}"><input name="color_{{ key }}" value="{{ value }}" maxlength="7" pattern="#[0-9A-Fa-f]{6}" data-default-value="{{ palette_defaults[key] }}" data-color-hex="color_{{ key }}"></span>
-            </label>
+        <div id="palette-controls">
+        {% for group_name, group_keys in palette_groups %}
+            <section class="palette-group" aria-labelledby="palette-group-{{ loop.index }}">
+                <h3 id="palette-group-{{ loop.index }}">{{ group_name }}</h3>
+                <div class="palette-grid">
+                {% for key, label in palette_tokens if key in group_keys %}
+                    {% set value = ui_palette.get(key, palette_defaults[key]) %}
+                    <div class="palette-token">
+                        <span>{{ label }}</span>
+                        <span class="color-control"><input type="color" value="{{ value }}" aria-label="{{ label }}" data-color-picker="color_{{ key }}"><input type="text" name="color_{{ key }}" value="{{ value }}" maxlength="7" pattern="#[0-9A-Fa-f]{6}" data-default-value="{{ palette_defaults[key] }}" data-color-hex="color_{{ key }}"><button class="palette-token-reset" type="button" data-reset-color="color_{{ key }}">Сбросить</button></span>
+                    </div>
+                {% endfor %}
+                </div>
+            </section>
         {% endfor %}
         </div>
         <button class="btn secondary" type="submit" name="reset_palette" value="1">Сбросить цвета</button>
@@ -51,9 +60,24 @@
     document.querySelectorAll('[data-color-picker]').forEach((picker) => {
         const input = document.querySelector(`[data-color-hex="${picker.dataset.colorPicker}"]`);
         const key = picker.dataset.colorPicker.replace('color_', '');
-        picker.addEventListener('input', () => { input.value = picker.value; root.style.setProperty(`--${key}`, picker.value); });
-        input.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(input.value)) { picker.value = input.value; root.style.setProperty(`--${key}`, input.value); } });
+        const apply = (value) => {
+            root.style.setProperty(`--${key}`, value);
+            if (key === 'primary') {
+                const luminance = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [.2126, .7152, .0722][index], 0);
+                const contrast = (foreground) => (Math.max(luminance(foreground), luminance(value)) + .05) / (Math.min(luminance(foreground), luminance(value)) + .05);
+                root.style.setProperty('--primary-foreground', contrast('#ffffff') >= contrast('#111827') ? '#ffffff' : '#111827');
+            }
+        };
+        picker.addEventListener('input', () => { input.value = picker.value; apply(picker.value); });
+        input.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(input.value)) { picker.value = input.value; apply(input.value); } });
     });
+    document.querySelectorAll('[data-reset-color]').forEach((button) => button.addEventListener('click', () => {
+        const input = document.querySelector(`[data-color-hex="${button.dataset.resetColor}"]`);
+        const picker = document.querySelector(`[data-color-picker="${button.dataset.resetColor}"]`);
+        input.value = input.dataset.defaultValue;
+        picker.value = input.value;
+        picker.dispatchEvent(new Event('input'));
+    }));
     document.querySelector('.settings-form').addEventListener('submit', (event) => {
         if (event.submitter && event.submitter.name === 'reset_palette') return;
         document.querySelectorAll('[data-default-value]').forEach((input) => {

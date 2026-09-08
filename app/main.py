@@ -75,7 +75,7 @@ from .services.finance import (
     shifted_month,
     summarize_cashflow,
 )
-from .services.preferences import PALETTE_TOKENS, default_palette, load_palette, palette_css_variables, validate_palette
+from .services.preferences import PALETTE_GROUPS, PALETTE_TOKENS, default_palette, load_palette, palette_css_variables, validate_palette
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -2049,7 +2049,7 @@ def update_theme(
 
 @app.get("/settings")
 def settings_page(request: Request, user: User = Depends(get_current_user)):
-    return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme)})
+    return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme)})
 
 
 @app.post("/settings")
@@ -2063,7 +2063,7 @@ async def save_settings(
 ):
     clean_appearance = appearance.strip().lower()
     if clean_appearance not in {"system", "light", "dark"}:
-        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": "Выберите корректную тему."})
+        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme), "error": "Выберите корректную тему."})
     try:
         start_day = int(financial_period_start_day)
     except ValueError:
@@ -2072,7 +2072,7 @@ async def save_settings(
         return render(
             request,
             "settings.html",
-            {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": "День начала финансового периода должен быть от 1 до 31."},
+            {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme), "error": "День начала финансового периода должен быть от 1 до 31."},
         )
 
     submitted_palette = {
@@ -2082,7 +2082,7 @@ async def save_settings(
     }
     palette, palette_error = validate_palette(submitted_palette, theme=clean_appearance)
     if palette_error:
-        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_defaults": default_palette(user.theme), "error": palette_error})
+        return render(request, "settings.html", {"user": user, "palette_tokens": PALETTE_TOKENS, "palette_groups": PALETTE_GROUPS, "palette_defaults": default_palette(user.theme), "error": palette_error})
 
     user.theme = clean_appearance
     user.expense_period_start_day = start_day

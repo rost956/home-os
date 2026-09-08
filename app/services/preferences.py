@@ -16,6 +16,10 @@ PALETTE_TOKENS = (
     ("danger", "Ошибка"),
 )
 PALETTE_KEYS = {key for key, _label in PALETTE_TOKENS}
+PALETTE_GROUPS = (
+    ("Основные", ("primary", "secondary", "bg", "surface", "text", "muted")),
+    ("Состояния и границы", ("success", "warning", "danger", "border")),
+)
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
 
 DEFAULT_PALETTES = {
@@ -59,6 +63,11 @@ def contrast_ratio(first: str, second: str) -> float:
     return (light + .05) / (dark + .05)
 
 
+def contrast_text_color(background: str) -> str:
+    """Return the button foreground with the best contrast against its background."""
+    return "#ffffff" if contrast_ratio("#ffffff", background) >= contrast_ratio("#111827", background) else "#111827"
+
+
 def validate_palette(values: dict[str, str], *, theme: str) -> tuple[dict[str, str], str | None]:
     palette: dict[str, str] = {}
     for key, value in values.items():
@@ -67,10 +76,14 @@ def validate_palette(values: dict[str, str], *, theme: str) -> tuple[dict[str, s
         palette[key] = value.strip().lower()
     effective = default_palette(theme)
     effective.update(palette)
-    for foreground, background, label in (("text", "bg", "текст и фон"), ("text", "surface", "текст и карточки"), ("primary", "#ffffff", "акцент и текст кнопки")):
-        background_color = effective[background] if background in effective else background
-        if contrast_ratio(effective[foreground], background_color) < 3:
-            return {}, f"Недостаточный контраст: {label}. Выберите более контрастные цвета."
+    critical_pairs = (
+        ("text", "bg", "Основной текст плохо читается на фоне страницы."),
+        ("text", "surface", "Основной текст плохо читается на фоне карточек."),
+        ("muted", "surface", "Вторичный текст плохо читается на фоне карточек."),
+    )
+    for foreground, background, message in critical_pairs:
+        if contrast_ratio(effective[foreground], effective[background]) < 4.5:
+            return {}, message
     return palette, None
 
 
@@ -82,4 +95,6 @@ def palette_css_variables(palette: dict[str, str]) -> str:
             variables["card"] = value
         elif key == "border":
             variables["line"] = value
+        elif key == "primary":
+            variables["primary-foreground"] = contrast_text_color(value)
     return ";".join(f"--{key}:{value}" for key, value in variables.items())
