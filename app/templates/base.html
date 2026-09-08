@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="{{ user.theme if user else 'system' }}" data-theme-preference="{{ user.theme if user else 'system' }}">
+<html lang="ru" data-theme="{{ user.theme if user else 'system' }}" data-theme-preference="{{ user.theme if user else 'system' }}"{% if ui_palette or ui_gradient %} style="{{ ui_palette|palette_css }}{% if ui_gradient %}{% if ui_palette %};{% endif %}{{ ui_gradient|gradient_css }}{% endif %}"{% endif %}>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -17,7 +17,6 @@
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="stylesheet" href="/static/style.css?v=57">
-    {% if ui_palette_css or ui_gradient %}<style>html { {{ ui_palette_css|palette_css }};{{ ui_gradient|gradient_css }} }</style>{% endif %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
 <svg class="icon-sprite" aria-hidden="true" focusable="false">

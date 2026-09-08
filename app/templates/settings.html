@@ -69,7 +69,9 @@
                 root.style.setProperty('--primary-foreground', contrast('#ffffff') >= contrast('#111827') ? '#ffffff' : '#111827');
             }
         };
-        picker.addEventListener('input', () => { input.value = picker.value; apply(picker.value); });
+        const syncPicker = () => { input.value = picker.value; apply(picker.value); };
+        picker.addEventListener('input', syncPicker);
+        picker.addEventListener('change', syncPicker);
         input.addEventListener('input', () => { if (/^#[0-9a-f]{6}$/i.test(input.value)) { picker.value = input.value; apply(input.value); } });
     });
     document.querySelectorAll('[data-reset-color]').forEach((button) => button.addEventListener('click', () => {

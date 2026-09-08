@@ -604,9 +604,6 @@ def render(request: Request, template: str, context: dict):
     user = context["user"]
     raw_palette = load_palette(user.ui_palette_json) if user else {}
     context.setdefault("ui_palette", raw_palette)
-    effective_palette = default_palette(user.theme) if user else {}
-    effective_palette.update(raw_palette)
-    context.setdefault("ui_palette_css", effective_palette)
     context.setdefault("ui_gradient", load_gradient(user.ui_palette_json) if user else {})
     return templates.TemplateResponse(request, template, context)
 

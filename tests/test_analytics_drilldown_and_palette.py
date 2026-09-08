@@ -86,7 +86,7 @@ def test_palette_is_per_user_validated_and_reset(client, db, make_user, login):
     db.expire_all()
     assert "#123456" in db.get(type(owner), owner.id).ui_palette_json
     assert db.get(type(other), other.id).ui_palette_json is None
-    assert "--primary:#123456" in client.get("/settings").text
+    assert 'style="--primary:#123456' in client.get("/settings").text
 
     invalid = client.post("/settings", data={**values, "color_primary": "red"})
     assert invalid.status_code == 200

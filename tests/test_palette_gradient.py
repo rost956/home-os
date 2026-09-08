@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from app.models import User
 
 
@@ -11,7 +13,7 @@ def test_gradient_and_palette_are_rendered_globally(client, db, make_user, login
     db.expire_all()
     assert "gradient_enabled" in db.get(User, user.id).ui_palette_json
     shared = client.get("/").text
-    assert "--primary:#123456" in shared
+    assert 'style="--primary:#123456' in shared
     assert "linear-gradient(42deg,#123456,#654321)" in shared
 
 
@@ -31,10 +33,62 @@ def test_gradient_validation_and_reset(client, db, make_user, login):
 def test_palette_survives_post_redirect_reload_and_is_effective_globally(client, db, make_user, login):
     user = make_user("palette-reload")
     login(user.username)
-    saved = client.post("/settings", data={"appearance": "light", "financial_period_start_day": "1", "color_primary": "#3ecfb9"}, follow_redirects=False)
-    assert saved.status_code == 303
-    settings = client.get("/settings").text
-    home = client.get("/").text
-    assert 'value="#3ecfb9"' in settings
-    assert "--primary:#3ecfb9" in home
-    assert "--surface:#ffffff" in home
+    for theme in ("light", "dark", "system"):
+        saved = client.post(
+            "/settings",
+            data={"appearance": theme, "financial_period_start_day": "1", "color_primary": "#3ecfb9"},
+            follow_redirects=False,
+        )
+        assert saved.status_code == 303
+
+        db.expire_all()
+        stored = json.loads(db.get(User, user.id).ui_palette_json)
+        assert stored["primary"] == "#3ecfb9"
+
+        for path in ("/settings", "/", "/vehicles"):
+            page = client.get(path)
+            assert page.status_code == 200
+            assert 'style="--primary:#3ecfb9' in page.text
+            assert '<style>html { --primary:#3ecfb9' not in page.text
+
+        logged_out = client.post("/logout", follow_redirects=False)
+        assert logged_out.status_code == 303
+        logged_in = login(user.username)
+        assert logged_in.status_code == 303
+        after_login = client.get("/vehicles")
+        assert after_login.status_code == 200
+        assert 'style="--primary:#3ecfb9' in after_login.text
+
+
+def test_palette_override_uses_element_inline_style_to_beat_theme_selectors(client, make_user, login):
+    user = make_user("palette-cascade")
+    login(user.username)
+    response = client.post(
+        "/settings",
+        data={"appearance": "system", "financial_period_start_day": "1", "color_primary": "#3ecfb9"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    html = client.get("/settings").text
+    opening_tag = html.split("<html", 1)[1].split(">", 1)[0]
+    assert 'data-theme="system"' in opening_tag
+    assert 'style="--primary:#3ecfb9;--primary-foreground:#111827"' in opening_tag
+
+    stylesheet = client.get("/static/style.css?v=57").text
+    assert ":root {" in stylesheet
+    assert "--primary: #2563eb;" in stylesheet
+    assert 'html[data-theme="dark"] {' in stylesheet
+
+
+def test_palette_form_has_one_submitted_field_per_color_and_syncs_picker_commit(client, make_user, login):
+    user = make_user("palette-fields")
+    login(user.username)
+
+    html = client.get("/settings").text
+    for key in ("primary", "secondary", "bg", "surface", "text", "muted", "border", "success", "warning", "danger"):
+        assert html.count(f'name="color_{key}"') == 1
+        assert html.count(f'data-color-picker="color_{key}"') == 1
+        assert html.count(f'data-color-hex="color_{key}"') == 1
+    assert "picker.addEventListener('input', syncPicker);" in html
+    assert "picker.addEventListener('change', syncPicker);" in html
