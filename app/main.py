@@ -602,7 +602,11 @@ def render(request: Request, template: str, context: dict):
     context.setdefault("registration_enabled", settings.registration_enabled)
     context.setdefault("home_ai_enabled", settings.home_ai_enabled)
     user = context["user"]
-    context.setdefault("ui_palette", load_palette(user.ui_palette_json) if user else {})
+    raw_palette = load_palette(user.ui_palette_json) if user else {}
+    context.setdefault("ui_palette", raw_palette)
+    effective_palette = default_palette(user.theme) if user else {}
+    effective_palette.update(raw_palette)
+    context.setdefault("ui_palette_css", effective_palette)
     context.setdefault("ui_gradient", load_gradient(user.ui_palette_json) if user else {})
     return templates.TemplateResponse(request, template, context)
 

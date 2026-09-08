@@ -26,3 +26,15 @@ def test_gradient_validation_and_reset(client, db, make_user, login):
     assert reset.status_code == 303
     db.expire_all()
     assert db.get(User, user.id).ui_palette_json is None
+
+
+def test_palette_survives_post_redirect_reload_and_is_effective_globally(client, db, make_user, login):
+    user = make_user("palette-reload")
+    login(user.username)
+    saved = client.post("/settings", data={"appearance": "light", "financial_period_start_day": "1", "color_primary": "#3ecfb9"}, follow_redirects=False)
+    assert saved.status_code == 303
+    settings = client.get("/settings").text
+    home = client.get("/").text
+    assert 'value="#3ecfb9"' in settings
+    assert "--primary:#3ecfb9" in home
+    assert "--surface:#ffffff" in home
