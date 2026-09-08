@@ -13,7 +13,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 from markupsafe import Markup, escape
 
@@ -58,6 +58,8 @@ from .models import (
     ShoppingListShare,
     ShoppingPriceHistory,
     User,
+    Vehicle,
+    VehicleLogEntry,
     WatchItem,
     WishlistItem,
     WishlistShare,
@@ -75,7 +77,14 @@ from .services.finance import (
     shifted_month,
     summarize_cashflow,
 )
-from .services.preferences import PALETTE_GROUPS, PALETTE_TOKENS, default_palette, load_palette, palette_css_variables, validate_palette
+from .services.preferences import (
+    PALETTE_GROUPS,
+    PALETTE_TOKENS,
+    default_palette,
+    load_palette,
+    palette_css_variables,
+    validate_palette,
+)
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -142,6 +151,10 @@ RUSSIAN_MONTH_NAMES = (
 )
 
 
+def format_odometer(value: int | None) -> str:
+    return f"{max(0, int(value or 0)):,}".replace(",", " ") + " км"
+
+
 def touch_user_presence(db: Session, user: User | None, commit: bool = True) -> None:
     if not user:
         return
@@ -188,6 +201,7 @@ def presence_info(target: User | None) -> dict[str, Any]:
 
 
 templates.env.filters["msk_datetime"] = format_msk_datetime
+templates.env.filters["fmt_odometer"] = format_odometer
 templates.env.filters["palette_css"] = palette_css_variables
 templates.env.globals["presence_info"] = presence_info
 
@@ -2101,6 +2115,316 @@ def update_expense_period(
     db.add(user)
     db.commit()
     return redirect_notice("/expenses/planning", "День начала финансового месяца сохранён")
+
+
+def vehicle_form_values(
+    *,
+    display_name: str = "",
+    make: str = "",
+    model: str = "",
+    year: str = "",
+    license_plate: str = "",
+    vin: str = "",
+    current_odometer: str = "0",
+    notes: str = "",
+) -> dict[str, str]:
+    return {
+        "display_name": display_name, "make": make, "model": model, "year": year,
+        "license_plate": license_plate, "vin": vin, "current_odometer": current_odometer, "notes": notes,
+    }
+
+
+def validate_vehicle_form(values: dict[str, str]) -> dict[str, Any]:
+    make = values["make"].strip()
+    model = values["model"].strip()
+    if not make or not model:
+        raise ValueError("Укажите марку и модель автомобиля.")
+    if len(make) > 80 or len(model) > 80:
+        raise ValueError("Марка и модель не должны быть длиннее 80 символов.")
+    try:
+        year = int(values["year"])
+    except ValueError as exc:
+        raise ValueError("Укажите корректный год выпуска.") from exc
+    if not 1886 <= year <= msk_today().year + 1:
+        raise ValueError("Год выпуска находится вне допустимого диапазона.")
+    try:
+        odometer = int(values["current_odometer"])
+    except ValueError as exc:
+        raise ValueError("Пробег должен быть целым числом.") from exc
+    if not 0 <= odometer <= 10_000_000:
+        raise ValueError("Пробег должен быть неотрицательным и реалистичным.")
+    display_name = values["display_name"].strip()
+    plate = values["license_plate"].strip()
+    vin = values["vin"].strip().upper()
+    notes = values["notes"].strip()
+    if len(display_name) > 100 or len(plate) > 40 or len(vin) > 40 or len(notes) > 4000:
+        raise ValueError("Одно из полей слишком длинное.")
+    if vin and len(vin) < 5:
+        raise ValueError("VIN должен содержать не менее 5 символов.")
+    return {"display_name": display_name or None, "make": make, "model": model, "year": year, "license_plate": plate or None, "vin": vin or None, "current_odometer": odometer, "notes": notes or None}
+
+
+def require_owned_vehicle(db: Session, vehicle_id: int, user: User) -> Vehicle:
+    vehicle = db.scalar(select(Vehicle).where(Vehicle.id == vehicle_id, Vehicle.owner_id == user.id))
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Автомобиль не найден")
+    return vehicle
+
+
+def render_vehicle_form(request: Request, *, user: User, form: dict[str, str], vehicle: Vehicle | None = None, error: str | None = None):
+    return render(request, "vehicle_form.html", {"user": user, "form": form, "vehicle": vehicle, "error": error})
+
+
+@app.get("/vehicles")
+def vehicles_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicles = db.scalars(select(Vehicle).where(Vehicle.owner_id == user.id).order_by(Vehicle.updated_at.desc(), Vehicle.id.desc())).all()
+    return render(request, "vehicles.html", {"user": user, "vehicles": vehicles})
+
+
+@app.get("/vehicles/new")
+def vehicle_new_page(request: Request, user: User = Depends(get_current_user)):
+    return render_vehicle_form(request, user=user, form=vehicle_form_values(year=str(msk_today().year)))
+
+
+@app.post("/vehicles")
+def vehicle_create(
+    request: Request, display_name: str = Form(""), make: str = Form(""), model: str = Form(""), year: str = Form(""),
+    license_plate: str = Form(""), vin: str = Form(""), current_odometer: str = Form("0"), notes: str = Form(""),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    form = vehicle_form_values(display_name=display_name, make=make, model=model, year=year, license_plate=license_plate, vin=vin, current_odometer=current_odometer, notes=notes)
+    try:
+        data = validate_vehicle_form(form)
+    except ValueError as exc:
+        return render_vehicle_form(request, user=user, form=form, error=str(exc))
+    vehicle = Vehicle(owner_id=user.id, **data)
+    db.add(vehicle)
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}", "Автомобиль добавлен")
+
+
+@app.get("/vehicles/{vehicle_id}")
+def vehicle_overview(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    log_summary = db.execute(
+        select(
+            func.count(VehicleLogEntry.id),
+            func.coalesce(func.sum(VehicleLogEntry.cost), 0),
+            func.max(VehicleLogEntry.occurred_on),
+        ).where(VehicleLogEntry.vehicle_id == vehicle.id)
+    ).one()
+    recent_entries = db.scalars(
+        select(VehicleLogEntry)
+        .where(VehicleLogEntry.vehicle_id == vehicle.id)
+        .order_by(desc(VehicleLogEntry.occurred_on), desc(VehicleLogEntry.id))
+        .limit(3)
+    ).all()
+    return render(request, "vehicle_detail.html", {
+        "user": user, "vehicle": vehicle,
+        "log_summary": {"count": log_summary[0], "cost": log_summary[1], "latest_date": log_summary[2]},
+        "recent_entries": recent_entries, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS,
+    })
+
+
+@app.get("/vehicles/{vehicle_id}/edit")
+def vehicle_edit_page(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    form = vehicle_form_values(display_name=vehicle.display_name or "", make=vehicle.make, model=vehicle.model, year=str(vehicle.year), license_plate=vehicle.license_plate or "", vin=vehicle.vin or "", current_odometer=str(vehicle.current_odometer), notes=vehicle.notes or "")
+    return render_vehicle_form(request, user=user, vehicle=vehicle, form=form)
+
+
+@app.post("/vehicles/{vehicle_id}/edit")
+def vehicle_update(
+    request: Request, vehicle_id: int, display_name: str = Form(""), make: str = Form(""), model: str = Form(""), year: str = Form(""),
+    license_plate: str = Form(""), vin: str = Form(""), current_odometer: str = Form("0"), notes: str = Form(""),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    form = vehicle_form_values(display_name=display_name, make=make, model=model, year=year, license_plate=license_plate, vin=vin, current_odometer=current_odometer, notes=notes)
+    try:
+        data = validate_vehicle_form(form)
+    except ValueError as exc:
+        return render_vehicle_form(request, user=user, vehicle=vehicle, form=form, error=str(exc))
+    for field, value in data.items():
+        setattr(vehicle, field, value)
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}", "Данные автомобиля сохранены")
+
+
+@app.post("/vehicles/{vehicle_id}/delete")
+def vehicle_delete(vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    db.delete(vehicle)
+    db.commit()
+    return redirect_notice("/vehicles", "Автомобиль удалён")
+
+
+VEHICLE_LOG_TYPE_LABELS = {
+    "maintenance": "Техническое обслуживание", "repair": "Ремонт", "diagnostics": "Диагностика",
+    "modification": "Доработка", "event": "Событие", "accident": "ДТП", "note": "Заметка", "other": "Другое",
+}
+VEHICLE_LOG_PAGE_SIZE = 25
+
+
+def vehicle_log_form_values(entry: VehicleLogEntry | None = None, **values: str) -> dict[str, str]:
+    form = {
+        "occurred_on": entry.occurred_on.isoformat() if entry else msk_today().isoformat(),
+        "odometer": str(entry.odometer) if entry and entry.odometer is not None else "",
+        "entry_type": entry.entry_type if entry else "maintenance", "title": entry.title if entry else "",
+        "description": (entry.description or "") if entry else "",
+        "cost": format_decimal(entry.cost) if entry and entry.cost is not None else "",
+        "service_location": (entry.service_location or "") if entry else "", "notes": (entry.notes or "") if entry else "",
+    }
+    form.update(values)
+    return form
+
+
+def validate_vehicle_log_form(values: dict[str, str]) -> dict[str, Any]:
+    try:
+        occurred_on = date.fromisoformat(values["occurred_on"].strip())
+    except ValueError as exc:
+        raise ValueError("Укажите корректную дату записи.") from exc
+    entry_type = values["entry_type"].strip()
+    if entry_type not in VEHICLE_LOG_TYPE_LABELS:
+        raise ValueError("Выберите тип записи из списка.")
+    title = values["title"].strip()
+    if not title:
+        raise ValueError("Укажите название записи.")
+    if len(title) > 160:
+        raise ValueError("Название не должно быть длиннее 160 символов.")
+    description, service_location, notes = values["description"].strip(), values["service_location"].strip(), values["notes"].strip()
+    if len(description) > 10_000 or len(service_location) > 180 or len(notes) > 4_000:
+        raise ValueError("Одно из полей слишком длинное.")
+    try:
+        odometer = parse_optional_int(values["odometer"], "Пробег", 0, 10_000_000)
+        cost = optional_nonnegative_money(values["cost"], "Стоимость")
+    except HTTPException as exc:
+        raise ValueError(str(exc.detail)) from exc
+    return {"occurred_on": occurred_on, "odometer": odometer, "entry_type": entry_type, "title": title,
+            "description": description or None, "cost": cost, "service_location": service_location or None, "notes": notes or None}
+
+
+def require_owned_vehicle_log_entry(db: Session, vehicle_id: int, entry_id: int) -> VehicleLogEntry:
+    entry = db.scalar(select(VehicleLogEntry).where(VehicleLogEntry.id == entry_id, VehicleLogEntry.vehicle_id == vehicle_id))
+    if not entry:
+        raise HTTPException(status_code=404, detail="Запись бортового журнала не найдена")
+    return entry
+
+
+def render_vehicle_log_form(request: Request, *, user: User, vehicle: Vehicle, form: dict[str, str], entry: VehicleLogEntry | None = None, error: str | None = None):
+    return render(request, "vehicle_log_form.html", {"user": user, "vehicle": vehicle, "entry": entry, "form": form, "error": error, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS})
+
+
+def vehicle_log_filters(entry_type: str, date_from: str, date_to: str, q: str) -> tuple[dict[str, str], list[Any]]:
+    filters = {"entry_type": entry_type.strip(), "date_from": date_from.strip(), "date_to": date_to.strip(), "q": q.strip()}
+    clauses: list[Any] = []
+    if filters["entry_type"]:
+        if filters["entry_type"] not in VEHICLE_LOG_TYPE_LABELS:
+            filters["entry_type"] = ""
+        else:
+            clauses.append(VehicleLogEntry.entry_type == filters["entry_type"])
+    try:
+        if filters["date_from"]:
+            clauses.append(VehicleLogEntry.occurred_on >= date.fromisoformat(filters["date_from"]))
+        if filters["date_to"]:
+            clauses.append(VehicleLogEntry.occurred_on <= date.fromisoformat(filters["date_to"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Некорректный диапазон дат") from exc
+    if filters["q"]:
+        term = f"%{filters['q'][:160]}%"
+        clauses.append(or_(VehicleLogEntry.title.ilike(term), VehicleLogEntry.description.ilike(term), VehicleLogEntry.service_location.ilike(term)))
+    return filters, clauses
+
+
+def vehicle_log_ordering(sort: str) -> tuple[str, tuple[Any, ...]]:
+    ordering = {
+        "date_desc": (desc(VehicleLogEntry.occurred_on), desc(VehicleLogEntry.id)), "date_asc": (asc(VehicleLogEntry.occurred_on), asc(VehicleLogEntry.id)),
+        "odometer_desc": (VehicleLogEntry.odometer.is_(None), desc(VehicleLogEntry.odometer), desc(VehicleLogEntry.id)), "odometer_asc": (VehicleLogEntry.odometer.is_(None), asc(VehicleLogEntry.odometer), desc(VehicleLogEntry.id)),
+        "cost_desc": (VehicleLogEntry.cost.is_(None), desc(VehicleLogEntry.cost), desc(VehicleLogEntry.id)), "cost_asc": (VehicleLogEntry.cost.is_(None), asc(VehicleLogEntry.cost), desc(VehicleLogEntry.id)),
+    }
+    normalized = sort if sort in ordering else "date_desc"
+    return normalized, ordering[normalized]
+
+
+@app.get("/vehicles/{vehicle_id}/log")
+def vehicle_log_page(request: Request, vehicle_id: int, entry_type: str = "", date_from: str = "", date_to: str = "", q: str = "", sort: str = "date_desc", page: int = 1, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    filters, clauses = vehicle_log_filters(entry_type, date_from, date_to, q)
+    sort, ordering = vehicle_log_ordering(sort)
+    base = select(VehicleLogEntry).where(VehicleLogEntry.vehicle_id == vehicle.id, *clauses)
+    total_count, total_cost, first_date, last_date = db.execute(select(func.count(VehicleLogEntry.id), func.coalesce(func.sum(VehicleLogEntry.cost), 0), func.min(VehicleLogEntry.occurred_on), func.max(VehicleLogEntry.occurred_on)).where(VehicleLogEntry.vehicle_id == vehicle.id, *clauses)).one()
+    page_count = max(1, (total_count + VEHICLE_LOG_PAGE_SIZE - 1) // VEHICLE_LOG_PAGE_SIZE)
+    page = max(1, min(page, page_count))
+    entries = db.scalars(base.order_by(*ordering).offset((page - 1) * VEHICLE_LOG_PAGE_SIZE).limit(VEHICLE_LOG_PAGE_SIZE)).all()
+    query_string = urlencode({key: value for key, value in {**filters, "sort": sort}.items() if value})
+    return render(request, "vehicle_log.html", {"user": user, "vehicle": vehicle, "entries": entries, "filters": filters, "sort": sort, "page": page, "page_count": page_count, "query_string": query_string, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS, "summary": {"count": total_count, "cost": total_cost, "first_date": first_date, "last_date": last_date}})
+
+
+@app.get("/vehicles/{vehicle_id}/log/new")
+def vehicle_log_new_page(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    return render_vehicle_log_form(request, user=user, vehicle=vehicle, form=vehicle_log_form_values())
+
+
+@app.post("/vehicles/{vehicle_id}/log")
+def vehicle_log_create(request: Request, vehicle_id: int, occurred_on: str = Form(""), odometer: str = Form(""), entry_type: str = Form(""), title: str = Form(""), description: str = Form(""), cost: str = Form(""), service_location: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    form = vehicle_log_form_values(occurred_on=occurred_on, odometer=odometer, entry_type=entry_type, title=title, description=description, cost=cost, service_location=service_location, notes=notes)
+    try:
+        data = validate_vehicle_log_form(form)
+    except ValueError as exc:
+        return render_vehicle_log_form(request, user=user, vehicle=vehicle, form=form, error=str(exc))
+    entry = VehicleLogEntry(vehicle_id=vehicle.id, **data)
+    db.add(entry)
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/log/{entry.id}", "Запись добавлена в бортовой журнал")
+
+
+@app.get("/vehicles/{vehicle_id}/log/print")
+def vehicle_log_print(request: Request, vehicle_id: int, entry_type: str = "", date_from: str = "", date_to: str = "", q: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    filters, clauses = vehicle_log_filters(entry_type, date_from, date_to, q)
+    entries = db.scalars(select(VehicleLogEntry).where(VehicleLogEntry.vehicle_id == vehicle.id, *clauses).order_by(asc(VehicleLogEntry.occurred_on), asc(VehicleLogEntry.id))).all()
+    count, total_cost = db.execute(select(func.count(VehicleLogEntry.id), func.coalesce(func.sum(VehicleLogEntry.cost), 0)).where(VehicleLogEntry.vehicle_id == vehicle.id, *clauses)).one()
+    return render(request, "vehicle_log_print.html", {"vehicle": vehicle, "entries": entries, "filters": filters, "summary": {"count": count, "cost": total_cost}, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS})
+
+
+@app.get("/vehicles/{vehicle_id}/log/{entry_id}")
+def vehicle_log_detail(request: Request, vehicle_id: int, entry_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    entry = require_owned_vehicle_log_entry(db, vehicle.id, entry_id)
+    return render(request, "vehicle_log_detail.html", {"user": user, "vehicle": vehicle, "entry": entry, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS})
+
+
+@app.get("/vehicles/{vehicle_id}/log/{entry_id}/edit")
+def vehicle_log_edit_page(request: Request, vehicle_id: int, entry_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    entry = require_owned_vehicle_log_entry(db, vehicle.id, entry_id)
+    return render_vehicle_log_form(request, user=user, vehicle=vehicle, entry=entry, form=vehicle_log_form_values(entry))
+
+
+@app.post("/vehicles/{vehicle_id}/log/{entry_id}/edit")
+def vehicle_log_update(request: Request, vehicle_id: int, entry_id: int, occurred_on: str = Form(""), odometer: str = Form(""), entry_type: str = Form(""), title: str = Form(""), description: str = Form(""), cost: str = Form(""), service_location: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    entry = require_owned_vehicle_log_entry(db, vehicle.id, entry_id)
+    form = vehicle_log_form_values(occurred_on=occurred_on, odometer=odometer, entry_type=entry_type, title=title, description=description, cost=cost, service_location=service_location, notes=notes)
+    try:
+        data = validate_vehicle_log_form(form)
+    except ValueError as exc:
+        return render_vehicle_log_form(request, user=user, vehicle=vehicle, entry=entry, form=form, error=str(exc))
+    for field, value in data.items():
+        setattr(entry, field, value)
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/log/{entry.id}", "Запись бортового журнала сохранена")
+
+
+@app.post("/vehicles/{vehicle_id}/log/{entry_id}/delete")
+def vehicle_log_delete(vehicle_id: int, entry_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    entry = require_owned_vehicle_log_entry(db, vehicle.id, entry_id)
+    db.delete(entry)
+    db.commit()
+    return redirect_notice(f"/vehicles/{vehicle.id}/log", "Запись удалена")
 
 
 @app.post("/recipes/{recipe_id}/favorite")

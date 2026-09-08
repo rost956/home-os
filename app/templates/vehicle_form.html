@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать автомобиль' if vehicle else 'Новый автомобиль' }}{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>{{ 'Редактировать автомобиль' if vehicle else 'Добавить автомобиль' }}</h1><div class="subline">Поля со звёздочкой обязательны</div></div><a class="icon-btn" href="{{ '/vehicles/' ~ vehicle.id if vehicle else '/vehicles' }}" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a></div>
+<form method="post" action="{{ '/vehicles/' ~ vehicle.id ~ '/edit' if vehicle else '/vehicles' }}" class="card form vehicle-form">
+    <div class="form-row two-cols"><label>Название / прозвище<input name="display_name" maxlength="100" value="{{ form.display_name }}" placeholder="Например, Фокус"></label><label>Госномер<input name="license_plate" maxlength="40" value="{{ form.license_plate }}" placeholder="Необязательно"></label></div>
+    <div class="form-row two-cols"><label>Марка *<input name="make" maxlength="80" value="{{ form.make }}" required></label><label>Модель *<input name="model" maxlength="80" value="{{ form.model }}" required></label></div>
+    <div class="form-row two-cols"><label>Год выпуска *<input name="year" type="number" min="1886" max="{{ today.year + 1 if today else 2100 }}" value="{{ form.year }}" required></label><label>Текущий пробег, км *<input name="current_odometer" type="number" min="0" max="10000000" value="{{ form.current_odometer }}" required></label></div>
+    <label>VIN<input name="vin" maxlength="40" value="{{ form.vin }}" placeholder="Необязательно"></label>
+    <label>Заметки<textarea name="notes" rows="5" maxlength="4000" placeholder="Необязательно">{{ form.notes }}</textarea></label>
+    <button class="btn" type="submit">{{ 'Сохранить изменения' if vehicle else 'Добавить автомобиль' }}</button>
+</form>
+{% endblock %}

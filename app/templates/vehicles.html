@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Автомобили{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Автомобили</h1><div class="subline">Личный транспорт и его текущий пробег</div></div><a class="btn" href="/vehicles/new">Добавить автомобиль</a></div>
+{% if vehicles %}
+<div class="vehicle-grid">
+{% for vehicle in vehicles %}
+    <a class="card vehicle-card" href="/vehicles/{{ vehicle.id }}">
+        <div class="vehicle-card-icon" aria-hidden="true">🚗</div>
+        <div class="vehicle-card-main"><h2>{{ vehicle.title }}</h2><span>{{ vehicle.make }} {{ vehicle.model }} · {{ vehicle.year }}</span>{% if vehicle.license_plate %}<small>{{ vehicle.license_plate }}</small>{% endif %}</div>
+        <strong>{{ vehicle.current_odometer|fmt_odometer }}</strong>
+    </a>
+{% endfor %}
+</div>
+{% else %}
+<section class="card vehicle-empty"><div><h2>Автомобилей пока нет</h2><p>Добавьте автомобиль, чтобы в дальнейшем вести бортовой журнал, обслуживание и расходы на топливо.</p><a class="btn" href="/vehicles/new">Добавить автомобиль</a></div></section>
+{% endif %}
+{% endblock %}

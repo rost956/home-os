@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -45,12 +46,61 @@ class User(Base):
     cooking_timers: Mapped[list["RecipeCookingTimer"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     moments: Mapped[list["Moment"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     planner_items: Mapped[list["PlannerItem"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     ai_settings: Mapped["AIUserSettings | None"] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         uselist=False,
     )
     ai_actions: Mapped[list["AIAction"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+
+
+class Vehicle(Base):
+    __tablename__ = "vehicles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    make: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    license_plate: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    vin: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    current_odometer: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    owner: Mapped[User] = relationship(back_populates="vehicles")
+    log_entries: Mapped[list["VehicleLogEntry"]] = relationship(
+        back_populates="vehicle", cascade="all, delete-orphan"
+    )
+
+    @property
+    def title(self) -> str:
+        return self.display_name or f"{self.make} {self.model}"
+
+
+class VehicleLogEntry(Base):
+    __tablename__ = "vehicle_log_entries"
+    __table_args__ = (Index("ix_vehicle_log_entries_vehicle_occurred_on", "vehicle_id", "occurred_on"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True)
+    occurred_on: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    odometer: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    entry_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    service_location: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
+    )
+
+    vehicle: Mapped[Vehicle] = relationship(back_populates="log_entries")
 
 
 class AIUserSettings(Base):
