@@ -909,13 +909,14 @@ input:not([type="color"]):focus, textarea:focus, select:focus {
 .watch-card .card-head {
     align-items: start;
 }
+.vehicle-list-head > div { min-width: 0; }
 .vehicle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 12px; }
 .vehicle-card { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 12px; align-items: center; color: var(--text); box-shadow: none; }
 .vehicle-card:hover { background: var(--soft); text-decoration: none; }
 .vehicle-card-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: var(--soft-blue); font-size: 22px; }
 .vehicle-card-main { min-width: 0; display: grid; gap: 3px; }
 .vehicle-card h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
-.vehicle-card span, .vehicle-card small { color: var(--muted); font-weight: 700; }
+.vehicle-card span, .vehicle-card small { color: var(--muted); font-weight: 700; overflow-wrap: anywhere; }
 .vehicle-card strong { grid-column: 2; color: var(--primary); }
 .vehicle-empty { min-height: 190px; display: grid; place-items: center; text-align: center; }
 .vehicle-empty > div { max-width: 470px; }
@@ -939,7 +940,7 @@ input:not([type="color"]):focus, textarea:focus, select:focus {
 .vehicle-log-filters { margin-bottom: 14px; box-shadow: none; }.filter-grid { display: grid; grid-template-columns: repeat(5, minmax(130px, 1fr)) auto; align-items: end; gap: 10px; }.filter-grid label { margin: 0; }
 .vehicle-log-card { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 14px; align-items: start; color: var(--text); box-shadow: none; }.vehicle-log-card:hover { background: var(--soft); text-decoration: none; }.vehicle-log-card time { color: var(--muted); font-size: 13px; font-weight: 800; }.vehicle-log-card h2 { margin: 4px 0; font-size: 17px; overflow-wrap: anywhere; }.vehicle-log-card p { margin: 0; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }.vehicle-log-metrics { display: grid; gap: 5px; justify-items: end; color: var(--muted); font-size: 13px; white-space: nowrap; }.vehicle-log-metrics b { color: var(--primary); }.vehicle-log-entry { display: grid; gap: 18px; }.vehicle-log-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.vehicle-log-entry-head time { color: var(--muted); font-weight: 800; }
 .maintenance-list{display:grid;gap:12px}.maintenance-card{display:grid;gap:14px;box-shadow:none;border-left:4px solid var(--success)}.maintenance-card.soon{border-left-color:var(--warning)}.maintenance-card.overdue{border-left-color:var(--danger)}.maintenance-head{display:flex;justify-content:space-between;gap:12px;align-items:start}.maintenance-head h2{margin:6px 0 2px}.maintenance-head p,.maintenance-values span,.maintenance-values small{margin:0;color:var(--muted);font-size:12px}.maintenance-badge{display:inline-block;padding:3px 8px;border-radius:99px;background:var(--success);color:#fff;font-size:12px;font-weight:900}.soon .maintenance-badge{background:var(--warning)}.overdue .maintenance-badge{background:var(--danger)}.maintenance-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.maintenance-values div{display:grid;gap:3px;padding:10px;border-radius:8px;background:var(--soft)}.maintenance-service{border-top:1px solid var(--line);padding-top:12px}.maintenance-service summary{cursor:pointer;color:var(--primary);font-weight:800}.maintenance-service form{margin-top:12px}.check-row{display:flex;align-items:center;gap:8px}.link-danger{padding:0;border:0;background:none;color:var(--danger);cursor:pointer;font:inherit;font-weight:800}
-@media (max-width: 520px) { .vehicle-details { grid-template-columns: 1fr; } .vehicle-card { grid-template-columns: 38px minmax(0, 1fr); } .vehicle-card strong { grid-column: 1 / -1; } .vehicle-log-summary { grid-template-columns: 1fr; } .vehicle-log-recent a, .vehicle-log-card { grid-template-columns: 1fr; gap: 4px; } .vehicle-log-metrics { justify-items: start; grid-auto-flow: column; justify-content: start; gap: 12px; } .filter-grid { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .vehicle-list-head { flex-direction: column; align-items: stretch; } .vehicle-list-head > .btn { width: 100%; justify-content: center; } .vehicle-details { grid-template-columns: 1fr; } .vehicle-card { grid-template-columns: 38px minmax(0, 1fr); } .vehicle-card strong { grid-column: 1 / -1; } .vehicle-log-summary { grid-template-columns: 1fr; } .vehicle-log-recent a, .vehicle-log-card { grid-template-columns: 1fr; gap: 4px; } .vehicle-log-metrics { justify-items: start; grid-auto-flow: column; justify-content: start; gap: 12px; } .filter-grid { grid-template-columns: 1fr; } }
 
 .recent-expenses-section {
     margin: 18px 0 22px;

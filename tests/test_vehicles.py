@@ -89,3 +89,32 @@ def test_multiple_vehicles_are_listed_and_other_users_cannot_access_or_mutate(cl
     assert client.post(f"/vehicles/{foreign.id}/edit", data=vehicle_data()).status_code == 404
     assert client.post(f"/vehicles/{foreign.id}/delete").status_code == 404
     assert 'href="/vehicles"' in listing.text
+
+
+def test_vehicle_list_has_a_narrow_screen_layout_without_overflow_masking(client, db, make_user, login):
+    user = make_user("vehicle-mobile")
+    long_model = "Model-" + "X" * 120
+    vehicle = Vehicle(
+        owner_id=user.id,
+        make="Manufacturer",
+        model=long_model,
+        year=2024,
+        current_odometer=123456,
+        license_plate="PLATE" * 24,
+    )
+    db.add(vehicle)
+    db.commit()
+    login(user.username)
+
+    page = client.get("/vehicles")
+    assert page.status_code == 200
+    assert 'class="page-head compact-head vehicle-list-head"' in page.text
+    assert long_model in page.text
+
+    stylesheet = client.get("/static/style.css?v=58").text
+    assert ".vehicle-list-head > div { min-width: 0; }" in stylesheet
+    assert ".vehicle-card span, .vehicle-card small" in stylesheet
+    assert "overflow-wrap: anywhere;" in stylesheet
+    assert ".vehicle-list-head { flex-direction: column; align-items: stretch; }" in stylesheet
+    assert ".vehicle-list-head > .btn { width: 100%; justify-content: center; }" in stylesheet
+    assert "body { overflow-x: hidden" not in stylesheet

@@ -75,7 +75,7 @@ def test_palette_override_uses_element_inline_style_to_beat_theme_selectors(clie
     assert 'data-theme="system"' in opening_tag
     assert 'style="--primary:#3ecfb9;--primary-foreground:#111827"' in opening_tag
 
-    stylesheet = client.get("/static/style.css?v=57").text
+    stylesheet = client.get("/static/style.css?v=58").text
     assert ":root {" in stylesheet
     assert "--primary: #2563eb;" in stylesheet
     assert 'html[data-theme="dark"] {' in stylesheet
