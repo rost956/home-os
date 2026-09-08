@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
-from app.models import User
+from app.models import ExpenseLimit, User
 
 
 def test_gradient_and_palette_are_rendered_globally(client, db, make_user, login):
@@ -75,7 +76,7 @@ def test_palette_override_uses_element_inline_style_to_beat_theme_selectors(clie
     assert 'data-theme="system"' in opening_tag
     assert 'style="--primary:#3ecfb9;--primary-foreground:#111827"' in opening_tag
 
-    stylesheet = client.get("/static/style.css?v=58").text
+    stylesheet = client.get("/static/style.css?v=59").text
     assert ":root {" in stylesheet
     assert "--primary: #2563eb;" in stylesheet
     assert 'html[data-theme="dark"] {' in stylesheet
@@ -92,3 +93,42 @@ def test_palette_form_has_one_submitted_field_per_color_and_syncs_picker_commit(
         assert html.count(f'data-color-hex="color_{key}"') == 1
     assert "picker.addEventListener('input', syncPicker);" in html
     assert "picker.addEventListener('change', syncPicker);" in html
+
+
+def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, db, make_user, login):
+    user = make_user("limit-gradient")
+    db.add(ExpenseLimit(owner_id=user.id, category_name="Food", monthly_limit=Decimal("1000")))
+    db.commit()
+    login(user.username)
+
+    enabled = client.post(
+        "/settings",
+        data={
+            "appearance": "light",
+            "financial_period_start_day": "1",
+            "gradient_enabled": "on",
+            "gradient_start_color": "#123456",
+            "gradient_end_color": "#654321",
+            "gradient_angle": "42",
+        },
+        follow_redirects=False,
+    )
+    assert enabled.status_code == 303
+    gradient_page = client.get("/expenses/analytics").text
+    assert 'class="bar-track limit-track total-limit-track"' in gradient_page
+    assert 'style="--accent-background:linear-gradient(42deg,#123456,#654321)' in gradient_page
+
+    disabled = client.post(
+        "/settings",
+        data={"appearance": "light", "financial_period_start_day": "1"},
+        follow_redirects=False,
+    )
+    assert disabled.status_code == 303
+    disabled_tag = client.get("/expenses/analytics").text.split("<html", 1)[1].split(">", 1)[0]
+    assert "--accent-background" not in disabled_tag
+
+    stylesheet = client.get("/static/style.css?v=59").text
+    assert ".limit-track div { background: var(--accent-background, var(--primary)); }" in stylesheet
+    assert 'html[data-theme="dark"] .limit-track div { background: var(--accent-background, var(--primary)); }' in stylesheet
+    assert ".total-limit-track div" not in stylesheet
+    assert "linear-gradient(90deg, #16a34a, #f97316, #dc2626)" not in stylesheet

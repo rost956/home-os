@@ -111,7 +111,7 @@ def test_vehicle_list_has_a_narrow_screen_layout_without_overflow_masking(client
     assert 'class="page-head compact-head vehicle-list-head"' in page.text
     assert long_model in page.text
 
-    stylesheet = client.get("/static/style.css?v=58").text
+    stylesheet = client.get("/static/style.css?v=59").text
     assert ".vehicle-list-head > div { min-width: 0; }" in stylesheet
     assert ".vehicle-card span, .vehicle-card small" in stylesheet
     assert "overflow-wrap: anywhere;" in stylesheet
