@@ -2929,6 +2929,10 @@ html[data-theme="dark"] .success-alert {
 /* Planner */
 .planner-head { margin-bottom: 14px; }
 .planner-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.planner-push-settings { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; padding: 14px 16px; box-shadow: none; }
+.planner-push-settings h2 { margin: 0 0 3px; font-size: 16px; }
+.planner-push-settings p { margin: 0; }
+.planner-push-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .planner-month-nav, .planner-month-picker { display: flex; align-items: center; gap: 8px; }
 .planner-month-nav h2 { min-width: 190px; margin: 0; text-align: center; font-size: 17px; }
 .planner-next { transform: rotate(180deg); }
@@ -2972,6 +2976,14 @@ html[data-theme="dark"] .success-alert {
 .planner-edit form + form { margin-top: 8px; }
 .planner-form { margin-top: 10px; }
 .planner-color-input { min-width: 100%; height: 40px; padding: 3px; }
+.planner-reminders { display: grid; gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.planner-reminders legend { padding: 0 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.planner-reminder-list { display: grid; gap: 7px; }
+.planner-reminder-row { display: grid; grid-template-columns: minmax(72px, 1fr) minmax(100px, 1.4fr) 40px; gap: 7px; align-items: center; }
+.planner-reminder-row input, .planner-reminder-row select { min-width: 0; }
+.planner-reminders > .btn { justify-self: start; }
+.planner-reminder-summary { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.planner-reminder-summary span { padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 700; }
 .planner-create { box-shadow: none; }
 .planner-empty { min-height: 110px; display: grid; place-items: center; text-align: center; }
 .planner-upcoming { padding: 16px; box-shadow: none; }
@@ -3006,6 +3018,9 @@ html[data-theme="dark"] .success-alert {
     .moment-photo, .moment-photo img { min-height: 0; aspect-ratio: 4 / 3; }
     .moment-card-body { padding: 14px; }
     .planner-toolbar { align-items: stretch; flex-wrap: wrap; }
+    .planner-push-settings { align-items: stretch; flex-direction: column; }
+    .planner-push-actions { justify-content: stretch; }
+    .planner-push-actions .btn { width: 100%; }
     .planner-month-nav { flex: 1 0 100%; justify-content: space-between; }
     .planner-month-picker { flex: 1; }
     .planner-month-picker input { min-width: 0; width: 100%; }

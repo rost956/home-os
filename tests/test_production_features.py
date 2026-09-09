@@ -36,7 +36,22 @@ def test_linkify_text_escapes_url_attributes_and_surrounding_html():
     assert 'href="https://example.test/?q=" onmouseover=' not in rendered
 
 
-def test_push_subscription_rejects_untrusted_endpoint(client, db, make_user, login):
+def test_push_subscription_rejects_untrusted_endpoint(client, db, make_user, login, monkeypatch):
+    from dataclasses import replace
+
+    import app.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        replace(
+            main_module.settings,
+            push_enabled=True,
+            vapid_public_key="B" * 87,
+            vapid_private_key="private-key",
+        ),
+    )
+    monkeypatch.setattr(main_module, "webpush", lambda **kwargs: None)
     make_user("alice")
     login("alice")
 
@@ -54,16 +69,20 @@ def test_push_subscription_rejects_untrusted_endpoint(client, db, make_user, log
     assert db.query(PushSubscription).count() == 1
 
 
-def test_logout_removes_server_push_subscriptions(client, db, make_user, login):
+def test_logout_disables_only_current_browser_push_subscription(client, db, make_user, login):
     user = make_user("alice")
-    db.add(PushSubscription(user_id=user.id, endpoint="https://fcm.googleapis.com/push/device", p256dh="key", auth="auth"))
+    current = PushSubscription(user_id=user.id, endpoint="https://fcm.googleapis.com/push/device", p256dh="key", auth="auth")
+    other = PushSubscription(user_id=user.id, endpoint="https://fcm.googleapis.com/push/phone", p256dh="key", auth="auth")
+    db.add_all([current, other])
     db.commit()
     login("alice")
 
-    response = client.post("/logout", follow_redirects=False)
+    response = client.post("/logout", data={"push_endpoint": current.endpoint}, follow_redirects=False)
 
     assert response.status_code == 303
-    assert db.query(PushSubscription).count() == 0
+    db.expire_all()
+    assert db.get(PushSubscription, current.id).disabled_at is not None
+    assert db.get(PushSubscription, other.id).disabled_at is None
 
 
 def test_chunked_request_body_is_limited():

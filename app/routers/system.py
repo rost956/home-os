@@ -44,9 +44,14 @@ self.addEventListener('push', event => {
         icon: payload.icon || '/static/icon-192.png',
         badge: payload.badge || '/static/icon-192.png',
         tag: payload.tag || 'home-service',
+        timestamp: Number(payload.timestamp) || Date.now(),
         renotify: true,
         requireInteraction: Boolean(payload.requireInteraction),
-        data: {url: payload.url || '/today'}
+        data: {
+            url: payload.url || '/today',
+            planner_item_id: payload.planner_item_id || null,
+            occurrence_key: payload.occurrence_key || null
+        }
     };
     event.waitUntil(self.registration.showNotification(title, options));
 });

@@ -1,6 +1,5 @@
 # ruff: noqa: E701, E702
 import asyncio
-import base64
 import ipaddress
 import json
 import logging
@@ -9,7 +8,7 @@ import re
 import threading
 import uuid
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -49,6 +48,8 @@ from .models import (
     MenuItem,
     Moment,
     PlannerItem,
+    PlannerReminder,
+    PlannerReminderDelivery,
     PushSubscription,
     Recipe,
     RecipeCookingTimer,
@@ -84,6 +85,12 @@ from .services.planner import (
     calendar_occurrences,
     format_planner_date_range,
     iter_occurrences_in_range,
+)
+from .services.planner_push import PyWebPushSender, run_delivery_cycle
+from .services.planner_reminders import (
+    parse_reminder_configs,
+    reminder_label,
+    replace_reminder_configs,
 )
 from .services.preferences import (
     PALETTE_GROUPS,
@@ -124,7 +131,6 @@ from .web import (
     DATA_DIR,
     MEDIA_DIR,
     MOMENT_MEDIA_DIR,
-    PUSH_VAPID_FILE,
     PUSH_VAPID_PRIVATE_KEY_FILE,
     RECIPE_MEDIA_DIR,
     app,
@@ -218,67 +224,35 @@ templates.env.filters["fmt_odometer"] = format_odometer
 templates.env.filters["palette_css"] = palette_css_variables
 templates.env.filters["gradient_css"] = gradient_css_variables
 templates.env.filters["planner_date_range"] = format_planner_date_range
+templates.env.filters["planner_reminder_label"] = reminder_label
 templates.env.globals["presence_info"] = presence_info
 
 
-def _b64url(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
-
-
 def ensure_vapid_keys() -> dict[str, str]:
-    """Return persistent Web Push VAPID keys.
-
-    pywebpush is most reliable when the private key is passed as a PEM file path,
-    not as a multi-line PEM string. Older project versions stored only the PEM
-    text in data/push_vapid.json; here we also materialize it to
-    data/push_vapid_private.pem and use that path for sending.
-    """
-    env_private = os.getenv("VAPID_PRIVATE_KEY", "").strip()
-    env_public = os.getenv("VAPID_PUBLIC_KEY", "").strip()
-    if env_private and env_public:
-        private_text = env_private.replace("\\n", "\n")
+    """Resolve configured VAPID data without exposing or generating private keys."""
+    if not settings.push_enabled:
+        return {"available": "", "reason": "Push-уведомления отключены"}
+    public_key = settings.vapid_public_key
+    private_key = settings.vapid_private_key
+    if not public_key or not private_key:
+        return {"available": "", "reason": "VAPID-конфигурация не заполнена"}
+    if not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", public_key):
+        return {"available": "", "reason": "Некорректный HOME_VAPID_PUBLIC_KEY"}
+    if not (settings.vapid_subject.startswith("mailto:") or settings.vapid_subject.startswith("https://")):
+        return {"available": "", "reason": "Некорректный HOME_VAPID_SUBJECT"}
+    private_value = private_key
+    if "BEGIN" in private_key:
+        private_text = private_key.replace("\\n", "\n")
         PUSH_VAPID_PRIVATE_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
         PUSH_VAPID_PRIVATE_KEY_FILE.write_text(private_text, encoding="utf-8")
         PUSH_VAPID_PRIVATE_KEY_FILE.chmod(0o600)
-        return {"private_key_path": str(PUSH_VAPID_PRIVATE_KEY_FILE), "public_key": env_public}
-
-    if PUSH_VAPID_FILE.exists():
-        try:
-            data = json.loads(PUSH_VAPID_FILE.read_text(encoding="utf-8"))
-            private_text = str(data.get("private_key_pem") or "")
-            public_key = str(data.get("public_key") or "")
-            if private_text and public_key:
-                PUSH_VAPID_PRIVATE_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-                if not PUSH_VAPID_PRIVATE_KEY_FILE.exists() or PUSH_VAPID_PRIVATE_KEY_FILE.read_text(encoding="utf-8", errors="ignore") != private_text:
-                    PUSH_VAPID_PRIVATE_KEY_FILE.write_text(private_text, encoding="utf-8")
-                    PUSH_VAPID_PRIVATE_KEY_FILE.chmod(0o600)
-                return {"private_key_path": str(PUSH_VAPID_PRIVATE_KEY_FILE), "public_key": public_key}
-        except (OSError, TypeError, ValueError) as exc:
-            logger.warning("Ignoring invalid stored VAPID keys: %s", exc)
-
-    try:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-    except Exception:
-        return {"private_key_path": "", "public_key": ""}
-
-    private_key = ec.generate_private_key(ec.SECP256R1())
-    private_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("utf-8")
-    public_bytes = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.X962,
-        format=serialization.PublicFormat.UncompressedPoint,
-    )
-    data = {"private_key_pem": private_pem, "public_key": _b64url(public_bytes)}
-    PUSH_VAPID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PUSH_VAPID_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    PUSH_VAPID_PRIVATE_KEY_FILE.write_text(private_pem, encoding="utf-8")
-    PUSH_VAPID_FILE.chmod(0o600)
-    PUSH_VAPID_PRIVATE_KEY_FILE.chmod(0o600)
-    return {"private_key_path": str(PUSH_VAPID_PRIVATE_KEY_FILE), "public_key": data["public_key"]}
+        private_value = str(PUSH_VAPID_PRIVATE_KEY_FILE)
+    return {
+        "available": "1",
+        "private_key_path": private_value,
+        "public_key": public_key,
+        "subject": settings.vapid_subject,
+    }
 
 
 def send_push_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -288,24 +262,31 @@ def send_push_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> dic
     Broken subscriptions are removed automatically.
     """
     result: dict[str, Any] = {"ok": False, "sent": 0, "failed": 0, "removed": 0, "errors": [], "subscriptions": 0}
+    if not settings.push_enabled:
+        result["errors"].append("Push-уведомления отключены")
+        return result
     if webpush is None:
         result["errors"].append("pywebpush не установлен в контейнере")
         return result
 
     keys = ensure_vapid_keys()
     private_key_path = keys.get("private_key_path")
-    if not private_key_path:
-        result["errors"].append("не удалось создать VAPID-ключи")
+    if not keys.get("available") or not private_key_path:
+        result["errors"].append(keys.get("reason") or "VAPID-конфигурация недоступна")
         return result
 
-    subscriptions = db.scalars(select(PushSubscription).where(PushSubscription.user_id == user_id)).all()
+    subscriptions = db.scalars(
+        select(PushSubscription).where(
+            PushSubscription.user_id == user_id,
+            PushSubscription.disabled_at.is_(None),
+        )
+    ).all()
     result["subscriptions"] = len(subscriptions)
     if not subscriptions:
         result["errors"].append("у пользователя нет push-подписок")
         return result
 
-    claims = {"sub": os.getenv("VAPID_SUBJECT", "mailto:admin@example.com")}
-    dead_ids: list[int] = []
+    claims = {"sub": keys["subject"]}
     for sub in subscriptions:
         info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
         try:
@@ -327,15 +308,10 @@ def send_push_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> dic
                 error_text = f"HTTP {status_code}: {error_text}"
             result["errors"].append(error_text[:500])
             if status_code in (404, 410):
-                dead_ids.append(sub.id)
+                sub.disabled_at = utc_now_naive()
+                result["removed"] += 1
             logger.warning("Web Push failed for user_id=%s status=%s", user_id, status_code or "unknown")
 
-    if dead_ids:
-        for sub_id in dead_ids:
-            sub = db.get(PushSubscription, sub_id)
-            if sub:
-                db.delete(sub)
-                result["removed"] += 1
     result["ok"] = result["sent"] > 0
     db.commit()
     return result
@@ -407,6 +383,7 @@ def schema_change_required() -> bool:
         "chat_threads": {"is_pinned"},
         "chat_thread_messages": {"reply_to_id", "attachment_path"},
         "recipe_cooking_timers": {"last_reminded_at"},
+        "push_subscriptions": {"updated_at", "last_seen_at", "disabled_at"},
         "expense_items": {"include_in_analytics", "include_in_forecast"},
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
@@ -451,6 +428,9 @@ def ensure_runtime_schema() -> None:
     if not engine.url.drivername.startswith("sqlite"):
         return
     with engine.begin() as connection:
+        PlannerReminder.__table__.create(bind=connection, checkfirst=True)
+        PlannerReminderDelivery.__table__.create(bind=connection, checkfirst=True)
+
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
             connection.exec_driver_sql(
@@ -488,6 +468,19 @@ def ensure_runtime_schema() -> None:
         timer_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(recipe_cooking_timers)").fetchall()]
         if timer_columns and "last_reminded_at" not in timer_columns:
             connection.exec_driver_sql("ALTER TABLE recipe_cooking_timers ADD COLUMN last_reminded_at DATETIME")
+
+        push_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(push_subscriptions)").fetchall()]
+        if push_columns and "updated_at" not in push_columns:
+            connection.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN updated_at DATETIME")
+            connection.exec_driver_sql("UPDATE push_subscriptions SET updated_at = COALESCE(last_used_at, created_at)")
+        if push_columns and "last_seen_at" not in push_columns:
+            connection.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN last_seen_at DATETIME")
+        if push_columns and "disabled_at" not in push_columns:
+            connection.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN disabled_at DATETIME")
+        if push_columns:
+            connection.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_push_subscriptions_disabled_at ON push_subscriptions (disabled_at)"
+            )
 
         expense_item_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(expense_items)").fetchall()]
         if expense_item_columns and "include_in_analytics" not in expense_item_columns:
@@ -564,14 +557,53 @@ def on_startup() -> None:
             threading.Thread(target=timer_reminder_loop, name="timer-reminders", daemon=True).start()
 
 
+def run_planner_push_cycle() -> None:
+    keys = ensure_vapid_keys()
+    if webpush is None or not keys.get("available"):
+        return
+    sender = PyWebPushSender(webpush, keys["private_key_path"], keys["subject"])
+    with SessionLocal() as db:
+        run_delivery_cycle(
+            db,
+            sender,
+            catchup=timedelta(minutes=settings.push_catchup_minutes),
+        )
+
+
+async def planner_push_scheduler() -> None:
+    logger.info("Planner push scheduler started interval=%ss", settings.push_poll_seconds)
+    try:
+        while True:
+            try:
+                await asyncio.to_thread(run_planner_push_cycle)
+            except Exception as exc:
+                logger.warning("Planner push scheduler cycle failed: %s", type(exc).__name__)
+            await asyncio.sleep(settings.push_poll_seconds)
+    finally:
+        logger.info("Planner push scheduler stopped")
+
+
 @asynccontextmanager
 async def app_lifespan(_app):
     timer_reminder_stop.clear()
     on_startup()
+    push_task = None
+    if settings.background_jobs_enabled and settings.push_enabled:
+        keys = ensure_vapid_keys()
+        if webpush is None:
+            logger.error("Planner push unavailable: pywebpush is not installed")
+        elif not keys.get("available"):
+            logger.error("Planner push unavailable: %s", keys.get("reason", "invalid configuration"))
+        else:
+            push_task = asyncio.create_task(planner_push_scheduler(), name="planner-push-scheduler")
     try:
         yield
     finally:
         timer_reminder_stop.set()
+        if push_task is not None:
+            push_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await push_task
 
 
 app.router.lifespan_context = app_lifespan
@@ -618,6 +650,10 @@ def render(request: Request, template: str, context: dict):
     context.setdefault("user", None)
     context.setdefault("registration_enabled", settings.registration_enabled)
     context.setdefault("home_ai_enabled", settings.home_ai_enabled)
+    push_keys = ensure_vapid_keys()
+    context.setdefault("push_feature_enabled", settings.push_enabled)
+    context.setdefault("push_available", bool(push_keys.get("available") and webpush is not None))
+    context.setdefault("push_unavailable_reason", push_keys.get("reason") or "Web Push library unavailable")
     user = context["user"]
     raw_palette = load_palette(user.ui_palette_json) if user else {}
     context.setdefault("ui_palette", raw_palette)
@@ -2064,11 +2100,21 @@ def login(
 @app.post("/logout")
 def logout(
     request: Request,
+    push_endpoint: str = Form(""),
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
-    if user:
-        db.execute(sql_delete(PushSubscription).where(PushSubscription.user_id == user.id))
+    if user and push_endpoint:
+        now = utc_now_naive()
+        db.execute(
+            update(PushSubscription)
+            .where(
+                PushSubscription.user_id == user.id,
+                PushSubscription.endpoint == push_endpoint[:600],
+                PushSubscription.disabled_at.is_(None),
+            )
+            .values(disabled_at=now, updated_at=now)
+        )
         db.commit()
     request.session.clear()
     return redirect("/login")
@@ -4075,15 +4121,25 @@ async def chat_socket(websocket: WebSocket, thread_id: int):
 @app.get("/api/push/vapid-public-key")
 def push_vapid_public_key(user: User = Depends(get_current_user)):
     keys = ensure_vapid_keys()
-    return {"public_key": keys.get("public_key", "")}
+    available = bool(keys.get("available") and webpush is not None)
+    return {
+        "enabled": settings.push_enabled,
+        "available": available,
+        "reason": "" if available else keys.get("reason") or "Web Push library unavailable",
+        "public_key": keys.get("public_key", "") if available else "",
+    }
 
 
+@app.post("/api/push/subscriptions")
 @app.post("/api/push/subscribe")
 async def push_subscribe(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    push_keys = ensure_vapid_keys()
+    if webpush is None or not push_keys.get("available"):
+        raise HTTPException(status_code=503, detail=push_keys.get("reason") or "Web Push unavailable")
     try:
         data = await request.json()
     except (ValueError, json.JSONDecodeError):
@@ -4100,18 +4156,29 @@ async def push_subscribe(
         or not push_endpoint_is_allowed(endpoint)
         or not p256dh
         or len(p256dh) > 300
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", p256dh)
         or not auth
         or len(auth) > 120
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", auth)
     ):
         raise HTTPException(status_code=400, detail="Некорректная push-подписка")
 
     subscription = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == endpoint))
     if subscription:
+        if subscription.user_id != user.id:
+            db.execute(
+                sql_delete(PlannerReminderDelivery).where(
+                    PlannerReminderDelivery.push_subscription_id == subscription.id
+                )
+            )
         subscription.user_id = user.id
         subscription.p256dh = p256dh
         subscription.auth = auth
         subscription.user_agent = (request.headers.get("user-agent") or "")[:500] or None
+        subscription.updated_at = utc_now_naive()
+        subscription.last_seen_at = utc_now_naive()
         subscription.last_used_at = utc_now_naive()
+        subscription.disabled_at = None
     else:
         db.add(PushSubscription(
             user_id=user.id,
@@ -4120,11 +4187,13 @@ async def push_subscribe(
             auth=auth,
             user_agent=(request.headers.get("user-agent") or "")[:500] or None,
             last_used_at=utc_now_naive(),
+            last_seen_at=utc_now_naive(),
         ))
     db.commit()
     return {"ok": True}
 
 
+@app.post("/api/push/subscriptions/unsubscribe")
 @app.post("/api/push/unsubscribe")
 async def push_unsubscribe(
     request: Request,
@@ -4141,7 +4210,8 @@ async def push_unsubscribe(
     if endpoint:
         sub = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == endpoint, PushSubscription.user_id == user.id))
         if sub:
-            db.delete(sub)
+            sub.disabled_at = utc_now_naive()
+            sub.updated_at = utc_now_naive()
             db.commit()
     return {"ok": True}
 
@@ -4149,14 +4219,19 @@ async def push_unsubscribe(
 @app.get("/api/push/status")
 def push_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     keys = ensure_vapid_keys()
-    subscriptions = db.scalars(select(PushSubscription).where(PushSubscription.user_id == user.id)).all()
+    subscriptions = db.scalars(
+        select(PushSubscription).where(
+            PushSubscription.user_id == user.id,
+            PushSubscription.disabled_at.is_(None),
+        )
+    ).all()
+    available = bool(keys.get("available") and webpush is not None)
     return {
         "ok": True,
-        "pywebpush_loaded": webpush is not None,
-        "public_key_exists": bool(keys.get("public_key")),
-        "private_key_file_exists": bool(keys.get("private_key_path") and Path(keys["private_key_path"]).exists()),
+        "enabled": settings.push_enabled,
+        "available": available,
+        "reason": "" if available else keys.get("reason") or "Web Push library unavailable",
         "subscriptions": len(subscriptions),
-        "endpoints": [sub.endpoint[:80] + "…" for sub in subscriptions],
     }
 
 
@@ -4855,6 +4930,7 @@ def render_planner_page(
     calendar_end = month_end + timedelta(days=6 - month_end.weekday())
     items = db.scalars(
         select(PlannerItem)
+        .options(selectinload(PlannerItem.reminders))
         .where(
             PlannerItem.owner_id == user.id,
             or_(
@@ -4878,7 +4954,11 @@ def render_planner_page(
         })
         current_day += timedelta(days=1)
     selected_items = [occurrence.item for occurrence in occurrences_by_day.get(selected_day, [])]
-    upcoming_candidates = db.scalars(select(PlannerItem).where(PlannerItem.owner_id == user.id, PlannerItem.is_done.is_(False), PlannerItem.scheduled_for <= msk_today() + timedelta(days=366))).all()
+    upcoming_candidates = db.scalars(
+        select(PlannerItem)
+        .options(selectinload(PlannerItem.reminders))
+        .where(PlannerItem.owner_id == user.id, PlannerItem.is_done.is_(False), PlannerItem.scheduled_for <= msk_today() + timedelta(days=366))
+    ).all()
     upcoming = [occurrence for item in upcoming_candidates for occurrence in iter_occurrences_in_range(item, msk_today(), msk_today() + timedelta(days=366))][:6]
     return render(request, "planner.html", {
         "user": user,
@@ -4895,7 +4975,7 @@ def render_planner_page(
         "month_item_count": sum(1 for item in items for _ in iter_occurrences_in_range(item, month_start, month_end)),
         "planner_create_form": create_form or {
             "title": "", "scheduled_for": selected_day.isoformat(), "end_date": selected_day.isoformat(),
-            "start_time": "", "end_time": "", "description": "", "color": "#2563eb",
+            "start_time": "", "end_time": "", "description": "", "color": "#2563eb", "reminders": [],
         },
         "planner_edit_forms": edit_forms or {},
         "planner_validation_error": validation_error,
@@ -4926,6 +5006,8 @@ def planner_create(
     end_time: str = Form(""),
     description: str = Form(""),
     color: str = Form("#2563eb"),
+    reminder_offset_value: list[str] = Form(default=[]),
+    reminder_offset_unit: list[str] = Form(default=[]),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -4936,11 +5018,13 @@ def planner_create(
     try:
         item_end_date = parse_planner_end_date(end_date, item_day)
         item_frequency, item_interval, item_until = parse_planner_recurrence(recurrence_frequency, recurrence_interval, recurrence_until, item_day)
+        reminder_configs = parse_reminder_configs(reminder_offset_value, reminder_offset_unit)
     except ValueError as exc:
         return render_planner_page(
             request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
             create_form={"title": title, "scheduled_for": scheduled_for, "end_date": end_date,
-                         "start_time": start_time, "end_time": end_time, "description": description, "color": color},
+                         "start_time": start_time, "end_time": end_time, "description": description, "color": color,
+                         "reminders": [{"offset_value": value, "offset_unit": unit} for value, unit in zip(reminder_offset_value, reminder_offset_unit)]},
             validation_error=str(exc),
         )
     item_start_time = parse_planner_time(start_time)
@@ -4950,7 +5034,7 @@ def planner_create(
     item_color = color.strip().lower()
     if not re.fullmatch(r"#[0-9a-f]{6}", item_color):
         item_color = "#2563eb"
-    db.add(PlannerItem(
+    item = PlannerItem(
         owner_id=user.id,
         title=clean_title[:180],
         description=clean_optional_text(description, 10_000),
@@ -4960,7 +5044,9 @@ def planner_create(
         start_time=item_start_time,
         end_time=item_end_time,
         color=item_color,
-    ))
+    )
+    replace_reminder_configs(item, reminder_configs)
+    db.add(item)
     db.commit()
     return redirect_notice(planner_return_url(item_day), "Событие добавлено")
 
@@ -4980,6 +5066,8 @@ def planner_update(
     description: str = Form(""),
     color: str = Form("#2563eb"),
     is_done: str | None = Form(None),
+    reminder_offset_value: list[str] = Form(default=[]),
+    reminder_offset_unit: list[str] = Form(default=[]),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -4993,12 +5081,14 @@ def planner_update(
     try:
         item_end_date = parse_planner_end_date(end_date, item_day)
         item_frequency, item_interval, item_until = parse_planner_recurrence(recurrence_frequency, recurrence_interval, recurrence_until, item_day)
+        reminder_configs = parse_reminder_configs(reminder_offset_value, reminder_offset_unit)
     except ValueError as exc:
         return render_planner_page(
             request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
             edit_forms={item.id: {"title": title, "scheduled_for": scheduled_for, "end_date": end_date,
                                   "start_time": start_time, "end_time": end_time, "description": description,
-                                  "color": color, "is_done": is_done or ""}},
+                                  "color": color, "is_done": is_done or "",
+                                  "reminders": [{"offset_value": value, "offset_unit": unit} for value, unit in zip(reminder_offset_value, reminder_offset_unit)]}},
             validation_error=str(exc),
         )
     item_start_time = parse_planner_time(start_time)
@@ -5016,6 +5106,7 @@ def planner_update(
     item.end_time = item_end_time
     item.color = color.strip().lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", color.strip()) else "#2563eb"
     item.is_done = is_done == "1"
+    replace_reminder_configs(item, reminder_configs)
     db.commit()
     return redirect_notice(planner_return_url(item_day), "Событие обновлено")
 
@@ -5689,7 +5780,12 @@ def export_data_json(user: User = Depends(get_current_user), db: Session = Depen
     recipes = db.scalars(select(Recipe).where(Recipe.owner_id == user.id)).all()
     incomes = db.scalars(select(IncomeItem).where(IncomeItem.owner_id == user.id)).all()
     moments = db.scalars(select(Moment).where(Moment.owner_id == user.id).order_by(Moment.happened_on, Moment.id)).all()
-    planner_items = db.scalars(select(PlannerItem).where(PlannerItem.owner_id == user.id).order_by(PlannerItem.scheduled_for, PlannerItem.start_time, PlannerItem.id)).all()
+    planner_items = db.scalars(
+        select(PlannerItem)
+        .options(selectinload(PlannerItem.reminders))
+        .where(PlannerItem.owner_id == user.id)
+        .order_by(PlannerItem.scheduled_for, PlannerItem.start_time, PlannerItem.id)
+    ).all()
     wishlist = db.scalars(select(WishlistItem).where(WishlistItem.owner_id == user.id)).all()
     watch_items = db.scalars(select(WatchItem).where(WatchItem.owner_id == user.id)).all()
     shopping = db.scalars(select(ShoppingList).options(selectinload(ShoppingList.items)).where(ShoppingList.owner_id == user.id)).all()
@@ -5741,6 +5837,14 @@ def export_data_json(user: User = Depends(get_current_user), db: Session = Depen
                 "end_time": item.end_time,
                 "color": item.color,
                 "is_done": item.is_done,
+                "reminders": [
+                    {
+                        "offset_value": reminder.offset_value,
+                        "offset_unit": reminder.offset_unit,
+                        "relation": reminder.relation,
+                    }
+                    for reminder in item.reminders
+                ],
             }
             for item in planner_items
         ],
@@ -6000,7 +6104,7 @@ def import_data_json(
                 if start_time and end_time and end_time <= start_time:
                     raise ValueError
                 raw_color = str(raw_item.get("color") or "#2563eb").lower()
-                db.add(PlannerItem(
+                item = PlannerItem(
                     owner_id=user.id,
                     title=clean_required_text(str(raw_item.get("title") or ""), "Название", 180),
                     description=clean_optional_text(raw_item.get("description"), 10_000),
@@ -6011,7 +6115,16 @@ def import_data_json(
                     end_time=end_time,
                     color=raw_color if re.fullmatch(r"#[0-9a-f]{6}", raw_color) else "#2563eb",
                     is_done=parse_import_bool(raw_item.get("is_done")),
-                ))
+                )
+                raw_reminders = raw_item.get("reminders") or []
+                if not isinstance(raw_reminders, list) or any(not isinstance(value, dict) for value in raw_reminders):
+                    raise ValueError
+                reminder_configs = parse_reminder_configs(
+                    [str(value.get("offset_value", "")) for value in raw_reminders],
+                    [str(value.get("offset_unit", "")) for value in raw_reminders],
+                )
+                replace_reminder_configs(item, reminder_configs)
+                db.add(item)
                 imported += 1
             except (ValueError, HTTPException, TypeError):
                 skipped += 1

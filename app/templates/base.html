@@ -121,9 +121,10 @@
             </nav>
         </details>
         <button id="themeToggle" class="icon-btn" type="button" title="Тема" aria-label="Сменить тему"><svg class="icon"><use href="{{ '#i-sun' if user.theme == 'dark' else '#i-moon' }}"></use></svg></button>
-        <button id="enableNotifications" class="icon-btn" type="button" title="Уведомления" aria-label="Уведомления"><svg class="icon"><use href="#i-bell"></use></svg></button>
+        <button id="enableNotifications" class="icon-btn" type="button" title="Уведомления" aria-label="Уведомления" data-push-available="{{ '1' if push_available else '0' }}"><svg class="icon"><use href="#i-bell"></use></svg></button>
         <span class="user-chip">@{{ user.username }}</span>
         <form class="logout" method="post" action="/logout">
+            <input id="logoutPushEndpoint" type="hidden" name="push_endpoint" value="">
             <button type="submit" class="icon-btn" title="Выйти" aria-label="Выйти"><svg class="icon"><use href="#i-log-out"></use></svg></button>
         </form>
     </div>
@@ -199,15 +200,14 @@
         if (!('serviceWorker' in navigator)) return null;
         let registration = await navigator.serviceWorker.getRegistration('/');
         if (!registration) {
-            registration = await navigator.serviceWorker.register('/service-worker.js', {scope: '/', updateViaCache: 'none'});
+            registration = await navigator.serviceWorker.register('/service-worker.js?v=2', {scope: '/', updateViaCache: 'none'});
         }
         try { await registration.update(); } catch (e) {}
         await navigator.serviceWorker.ready;
         return registration;
     }
 
-    async function registerPushSubscription(options = {}) {
-        const force = Boolean(options.force);
+    async function registerPushSubscription() {
         if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return {ok:false, error:'Браузер не поддерживает Web Push'};
         if (Notification.permission !== 'granted') return {ok:false, error:'Нет разрешения на уведомления'};
 
@@ -220,17 +220,13 @@
         if (!keyData.public_key) return {ok:false, error:'Сервер не отдал VAPID-ключ'};
 
         let subscription = await registration.pushManager.getSubscription();
-        if (force && subscription) {
-            try { await subscription.unsubscribe(); } catch (e) {}
-            subscription = null;
-        }
         if (!subscription) {
             subscription = await registration.pushManager.subscribe({
                 userVisibleOnly: true,
                 applicationServerKey: urlBase64ToUint8Array(keyData.public_key)
             });
         }
-        const saveResponse = await fetch('/api/push/subscribe', {
+        const saveResponse = await fetch('/api/push/subscriptions', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(subscription)
@@ -239,6 +235,28 @@
         pushNotificationsEnabled = true;
         return {ok:true, registration, subscription};
     }
+
+    async function unregisterPushSubscription() {
+        const registration = await ensureServiceWorkerRegistration();
+        const subscription = registration ? await registration.pushManager.getSubscription() : null;
+        if (!subscription) return {ok:true};
+        const endpoint = subscription.endpoint;
+        await subscription.unsubscribe();
+        const response = await fetch('/api/push/subscriptions/unsubscribe', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({endpoint})
+        });
+        pushNotificationsEnabled = false;
+        return {ok:response.ok};
+    }
+
+    window.homePush = {
+        supported: () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window,
+        ensureServiceWorkerRegistration,
+        registerPushSubscription,
+        unregisterPushSubscription
+    };
 
     async function showLocalNotification(registration) {
         if (!registration || !registration.showNotification) return;
@@ -252,14 +270,15 @@
     }
 
     if (btn) {
-        const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+        const browserPushSupported = window.homePush.supported();
+        const pushAvailable = btn.dataset.pushAvailable === '1';
+        const pushSupported = browserPushSupported && pushAvailable;
         if (!pushSupported) {
             btn.disabled = true;
             btn.innerHTML = '<svg class="icon"><use href="#i-bell-off"></use></svg>';
-            btn.title = 'Push-уведомления не поддерживаются этим браузером';
-        } else if (Notification.permission === 'granted') {
-            btn.classList.add('active');
-            registerPushSubscription().catch(() => {});
+            btn.title = browserPushSupported
+                ? 'Push-уведомления не настроены на сервере'
+                : 'Push-уведомления не поддерживаются этим браузером';
         }
         btn.addEventListener('click', async () => {
             if (!pushSupported) return;
@@ -270,7 +289,7 @@
                 return;
             }
             try {
-                const result = await registerPushSubscription({force: true});
+                const result = await registerPushSubscription();
                 btn.classList.toggle('active', Boolean(result.ok));
                 if (!result.ok) {
                     showToast(result.error || 'Не удалось включить уведомления');
@@ -441,8 +460,11 @@
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
         try {
-            const registration = await navigator.serviceWorker.register('/service-worker.js', {scope: '/', updateViaCache: 'none'});
+            const registration = await navigator.serviceWorker.register('/service-worker.js?v=2', {scope: '/', updateViaCache: 'none'});
             await registration.update().catch(() => {});
+            const subscription = await registration.pushManager.getSubscription();
+            const logoutEndpoint = document.getElementById('logoutPushEndpoint');
+            if (subscription && logoutEndpoint) logoutEndpoint.value = subscription.endpoint;
         } catch (e) {}
     });
 }

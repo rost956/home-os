@@ -330,6 +330,44 @@ class PlannerItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     owner: Mapped[User] = relationship(back_populates="planner_items")
+    reminders: Mapped[list["PlannerReminder"]] = relationship(
+        back_populates="planner_item",
+        cascade="all, delete-orphan",
+        order_by="PlannerReminder.id",
+    )
+
+
+class PlannerReminder(Base):
+    __tablename__ = "planner_reminders"
+    __table_args__ = (
+        UniqueConstraint(
+            "planner_item_id",
+            "offset_value",
+            "offset_unit",
+            "relation",
+            name="uq_planner_reminder_config",
+        ),
+        CheckConstraint("offset_value >= 0", name="ck_planner_reminder_offset_nonnegative"),
+        CheckConstraint("offset_unit IN ('minutes', 'hours', 'days')", name="ck_planner_reminder_unit"),
+        CheckConstraint("relation = 'before_start'", name="ck_planner_reminder_relation"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    planner_item_id: Mapped[int] = mapped_column(
+        ForeignKey("planner_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    offset_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    offset_unit: Mapped[str] = mapped_column(String(10), nullable=False)
+    relation: Mapped[str] = mapped_column(String(20), nullable=False, default="before_start")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+
+    planner_item: Mapped[PlannerItem] = relationship(back_populates="reminders")
+    deliveries: Mapped[list["PlannerReminderDelivery"]] = relationship(
+        back_populates="planner_reminder",
+        cascade="all, delete-orphan",
+    )
 
 
 class ExpenseList(Base):
@@ -601,8 +639,54 @@ class PushSubscription(Base):
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
     last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     user: Mapped[User] = relationship(back_populates="push_subscriptions")
+    reminder_deliveries: Mapped[list["PlannerReminderDelivery"]] = relationship(
+        back_populates="push_subscription",
+        cascade="all, delete-orphan",
+    )
+
+
+class PlannerReminderDelivery(Base):
+    __tablename__ = "planner_reminder_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "planner_reminder_id",
+            "occurrence_key",
+            "push_subscription_id",
+            name="uq_planner_reminder_delivery_identity",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'retry', 'sent', 'failed')",
+            name="ck_planner_reminder_delivery_status",
+        ),
+        Index("ix_planner_reminder_delivery_due_status", "due_at", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    planner_reminder_id: Mapped[int] = mapped_column(
+        ForeignKey("planner_reminders.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    occurrence_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    push_subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    due_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
+
+    planner_reminder: Mapped[PlannerReminder] = relationship(back_populates="deliveries")
+    push_subscription: Mapped[PushSubscription] = relationship(back_populates="reminder_deliveries")
 
 
 class ShoppingCategoryRule(Base):

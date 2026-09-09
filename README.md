@@ -50,15 +50,21 @@ uvicorn app.main:app --reload
 | `APP_ENV` | `development`, `test` или `production` |
 | `SECRET_KEY` | Случайный секрет не короче 32 символов в production |
 | `DATABASE_URL` | URL базы, по умолчанию `sqlite:///./data/app.db` |
-| `DATA_DIR` | Каталог БД, загрузок, VAPID-ключей и бэкапов |
+| `DATA_DIR` | Каталог БД, загрузок и бэкапов |
 | `CADDY_SITE_ADDRESS` | Домен, который обслуживает Caddy |
 | `ALLOWED_HOSTS` | Дополнительные допустимые Host через запятую |
 | `BACKUP_ADMIN_USERNAME` | Пользователь с доступом к импорту и бэкапам |
 | `REGISTRATION_ENABLED` | Разрешает открытую регистрацию |
 | `ENFORCE_SAME_ORIGIN` | Требует Origin/Referer для изменяющих запросов |
 | `SECURE_COOKIES` | Передаёт cookie с флагом Secure |
-| `BACKGROUND_JOBS_ENABLED` | Включает бэкапы и напоминания о таймерах |
+| `BACKGROUND_JOBS_ENABLED` | Включает бэкапы и фоновые напоминания |
 | `TIMER_REMINDER_MINUTES` | Через сколько минут напомнить о таймере, от 30 до 10080 |
+| `HOME_PUSH_ENABLED` | Включает Web Push; по умолчанию `false` |
+| `HOME_PUSH_POLL_SECONDS` | Интервал Planner scheduler, по умолчанию 60 секунд |
+| `HOME_PUSH_CATCHUP_MINUTES` | Grace window после короткого простоя, по умолчанию 60 минут |
+| `HOME_VAPID_PUBLIC_KEY` | Публичный application server key для браузера |
+| `HOME_VAPID_PRIVATE_KEY` | Private key или путь внутри контейнера; значение не коммитить |
+| `HOME_VAPID_SUBJECT` | VAPID contact URI вида `mailto:` или `https://` |
 | `PUSH_ENDPOINT_HOSTS` | Дополнительные доверенные хосты Web Push |
 | `APP_UID`, `APP_GID` | UID/GID пользователя внутри web-контейнера |
 

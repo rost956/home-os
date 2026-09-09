@@ -78,6 +78,12 @@ class Settings:
     background_jobs_enabled: bool
     session_max_age: int
     timer_reminder_minutes: int
+    push_enabled: bool
+    push_poll_seconds: int
+    push_catchup_minutes: int
+    vapid_public_key: str
+    vapid_private_key: str
+    vapid_subject: str
 
     @property
     def is_production(self) -> bool:
@@ -111,6 +117,12 @@ def load_settings() -> Settings:
         background_jobs_enabled=env_bool("BACKGROUND_JOBS_ENABLED", app_env not in {"test", "testing"}),
         session_max_age=session_days * 24 * 60 * 60,
         timer_reminder_minutes=env_int("TIMER_REMINDER_MINUTES", 120, 30, 10_080),
+        push_enabled=env_bool("HOME_PUSH_ENABLED", False),
+        push_poll_seconds=env_int("HOME_PUSH_POLL_SECONDS", 60, 5, 3600),
+        push_catchup_minutes=env_int("HOME_PUSH_CATCHUP_MINUTES", 60, 1, 10_080),
+        vapid_public_key=(os.getenv("HOME_VAPID_PUBLIC_KEY") or os.getenv("VAPID_PUBLIC_KEY") or "").strip(),
+        vapid_private_key=(os.getenv("HOME_VAPID_PRIVATE_KEY") or os.getenv("VAPID_PRIVATE_KEY") or "").strip(),
+        vapid_subject=(os.getenv("HOME_VAPID_SUBJECT") or os.getenv("VAPID_SUBJECT") or "mailto:admin@example.com").strip(),
     )
 
 

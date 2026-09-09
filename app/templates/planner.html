@@ -1,4 +1,30 @@
 {% extends "base.html" %}
+{% macro reminder_fields(reminders) %}
+<fieldset class="planner-reminders">
+    <legend>Напоминания</legend>
+    <div class="planner-reminder-list" data-reminder-list>
+        {% for reminder in reminders %}
+        <div class="planner-reminder-row">
+            <input name="reminder_offset_value" type="number" min="0" max="525600" step="1" value="{{ reminder.offset_value }}" required aria-label="Интервал напоминания">
+            <select name="reminder_offset_unit" aria-label="Единица интервала">
+                <option value="minutes" {% if reminder.offset_unit == 'minutes' %}selected{% endif %}>минут</option>
+                <option value="hours" {% if reminder.offset_unit == 'hours' %}selected{% endif %}>часов</option>
+                <option value="days" {% if reminder.offset_unit == 'days' %}selected{% endif %}>дней</option>
+            </select>
+            <button class="icon-btn" type="button" data-remove-reminder aria-label="Удалить напоминание" title="Удалить напоминание">×</button>
+        </div>
+        {% endfor %}
+    </div>
+    <template data-reminder-template>
+        <div class="planner-reminder-row">
+            <input name="reminder_offset_value" type="number" min="0" max="525600" step="1" value="15" required aria-label="Интервал напоминания">
+            <select name="reminder_offset_unit" aria-label="Единица интервала"><option value="minutes">минут</option><option value="hours">часов</option><option value="days">дней</option></select>
+            <button class="icon-btn" type="button" data-remove-reminder aria-label="Удалить напоминание" title="Удалить напоминание">×</button>
+        </div>
+    </template>
+    <button class="btn secondary compact" type="button" data-add-reminder>+ Напоминание</button>
+</fieldset>
+{% endmacro %}
 {% block title %}Планировщик{% endblock %}
 {% block content %}
 <div class="page-head compact-head planner-head">
@@ -17,6 +43,19 @@
         <button class="icon-btn" type="submit" title="Открыть месяц" aria-label="Открыть месяц"><svg class="icon"><use href="#i-search"></use></svg></button>
     </form>
     <a class="btn secondary" href="/planner?month={{ today.strftime('%Y-%m') }}&day={{ today.isoformat() }}">Сегодня</a>
+</section>
+
+<section class="card planner-push-settings" data-planner-push data-server-available="{{ '1' if push_available else '0' }}">
+    <div>
+        <h2>Уведомления</h2>
+        <p class="subline" data-push-status>
+            {% if push_available %}Проверяем состояние уведомлений на этом устройстве…{% else %}{{ push_unavailable_reason }}{% endif %}
+        </p>
+    </div>
+    <div class="planner-push-actions">
+        <button class="btn" type="button" data-push-enable {% if not push_available %}disabled{% endif %}>Включить уведомления</button>
+        <button class="btn secondary hidden" type="button" data-push-disable>Отключить</button>
+    </div>
 </section>
 
 <div class="planner-layout">
@@ -51,6 +90,7 @@
                         <div class="planner-item-title"><i style="--planner-color: {{ item.color }}"></i><b>{{ item.title }}</b></div>
                         <span class="subline">{{ item|planner_date_range }}</span>
                         {% if item.start_time %}<span class="subline">{{ item.start_time }}{% if item.end_time %}–{{ item.end_time }}{% endif %}</span>{% else %}<span class="subline">На весь день</span>{% endif %}
+                        {% if item.reminders %}<div class="planner-reminder-summary">{% for reminder in item.reminders %}<span>{{ reminder|planner_reminder_label }}</span>{% endfor %}</div>{% endif %}
                         {% if item.description %}<p>{{ item.description|linkify }}</p>{% endif %}
                         <details class="planner-edit">
                             <summary>Изменить</summary>
@@ -61,6 +101,7 @@
                                 <label>Название<input name="title" value="{{ item.title }}" maxlength="180" required></label>
                                 <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ item.scheduled_for.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="{{ item.color }}"></label></div>
                                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time" value="{{ item.start_time or '' }}"></label><label>Конец<input name="end_time" type="time" value="{{ item.end_time or '' }}"></label></div>
+                                {{ reminder_fields(edit.reminders if edit and edit.reminders is defined else item.reminders) }}
                                 <label>Заметка<textarea name="description" rows="3">{{ item.description or '' }}</textarea></label>
                                 <label class="check-row compact-check"><input type="checkbox" name="is_done" value="1" {% if item.is_done %}checked{% endif %}><span>Выполнено</span></label>
                                 <button class="btn" type="submit">Сохранить</button>
@@ -84,6 +125,7 @@
                 <label>Название<input name="title" maxlength="180" required placeholder="Например, прогулка или врач"></label>
                 <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ selected_day.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="#2563eb"></label></div>
                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time"></label><label>Конец<input name="end_time" type="time"></label></div>
+                {{ reminder_fields(planner_create_form.reminders) }}
                 <label>Заметка<textarea name="description" rows="3" placeholder="Необязательно"></textarea></label>
                 <button class="btn" type="submit"><svg class="icon"><use href="#i-plus"></use></svg> Добавить</button>
             </form>
@@ -94,7 +136,7 @@
             <div class="card-head"><div><h2>Ближайшее</h2><div class="subline">Невыполненные события</div></div></div>
             <div class="planner-upcoming-list">
             {% for item in upcoming %}
-                <a href="/planner?month={{ item.scheduled_for.strftime('%Y-%m') }}&day={{ item.scheduled_for.isoformat() }}"><i style="--planner-color: {{ item.color }}"></i><span><b>{{ item.title }}</b><small>{{ item.scheduled_for.strftime('%d.%m') }}{% if item.start_time %} · {{ item.start_time }}{% endif %}</small></span></a>
+                <a href="/planner?month={{ item.scheduled_for.strftime('%Y-%m') }}&day={{ item.scheduled_for.isoformat() }}"><i style="--planner-color: {{ item.color }}"></i><span><b>{{ item.title }}</b><small>{{ item.scheduled_for.strftime('%d.%m') }}{% if item.start_time %} · {{ item.start_time }}{% endif %}{% if item.reminders %} · {{ item.reminders|length }} напомн.{% endif %}</small></span></a>
             {% endfor %}
             </div>
         </section>
@@ -122,6 +164,72 @@ document.querySelectorAll('[data-planner-date-form]').forEach((form) => {
         const field = form.querySelector(`[name="${name}"]`);
         if (field) field.value = values[name] || '';
     });
+    const reminderList = form.querySelector('[data-reminder-list]');
+    const reminderTemplate = form.querySelector('[data-reminder-template]');
+    form.querySelector('[data-add-reminder]').addEventListener('click', () => {
+        reminderList.append(reminderTemplate.content.firstElementChild.cloneNode(true));
+    });
+    reminderList.addEventListener('click', (event) => {
+        const removeButton = event.target.closest('[data-remove-reminder]');
+        if (removeButton) removeButton.closest('.planner-reminder-row').remove();
+    });
 });
+
+const pushPanel = document.querySelector('[data-planner-push]');
+if (pushPanel) {
+    const status = pushPanel.querySelector('[data-push-status]');
+    const enable = pushPanel.querySelector('[data-push-enable]');
+    const disable = pushPanel.querySelector('[data-push-disable]');
+    const setEnabled = (value) => {
+        enable.classList.toggle('hidden', value);
+        disable.classList.toggle('hidden', !value);
+        status.textContent = value
+            ? 'Уведомления включены на этом устройстве'
+            : 'Уведомления не включены';
+    };
+    const refreshPushState = async () => {
+        if (pushPanel.dataset.serverAvailable !== '1') return;
+        if (!window.homePush || !window.homePush.supported()) {
+            status.textContent = 'Этот браузер не поддерживает Web Push';
+            enable.disabled = true;
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            status.textContent = 'Доступ к уведомлениям запрещён в браузере';
+            enable.disabled = true;
+            return;
+        }
+        const registration = await window.homePush.ensureServiceWorkerRegistration();
+        const subscription = registration ? await registration.pushManager.getSubscription() : null;
+        if (subscription && Notification.permission === 'granted') {
+            await window.homePush.registerPushSubscription();
+            setEnabled(true);
+        } else {
+            setEnabled(false);
+        }
+    };
+    enable.addEventListener('click', async () => {
+        if (!window.homePush || !window.homePush.supported()) return;
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            status.textContent = 'Доступ к уведомлениям запрещён в браузере';
+            return;
+        }
+        status.textContent = 'Включаем уведомления…';
+        const result = await window.homePush.registerPushSubscription();
+        if (!result.ok) {
+            status.textContent = result.error || 'Не удалось включить уведомления';
+            return;
+        }
+        setEnabled(true);
+    });
+    disable.addEventListener('click', async () => {
+        status.textContent = 'Отключаем уведомления…';
+        const result = await window.homePush.unregisterPushSubscription();
+        status.textContent = result.ok ? 'Уведомления отключены на этом устройстве' : 'Не удалось отключить уведомления';
+        if (result.ok) setEnabled(false);
+    });
+    refreshPushState().catch(() => { status.textContent = 'Не удалось проверить состояние уведомлений'; });
+}
 </script>
 {% endblock %}
