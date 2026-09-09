@@ -27,8 +27,9 @@
             <a class="planner-day {% if not day.is_current_month %}outside-month{% endif %} {% if day.is_today %}today{% endif %} {% if day.is_selected %}selected{% endif %}" href="/planner?month={{ month }}&day={{ day.day.isoformat() }}" title="{{ day.day.strftime('%d.%m.%Y') }}">
                 <span class="planner-day-number">{{ day.number }}</span>
                 <span class="planner-day-items">
-                {% for item in day["items"][:3] %}
-                    <span class="planner-calendar-item {% if item.is_done %}done{% endif %}"><i style="--planner-color: {{ item.color }}"></i>{% if item.start_time %}<time>{{ item.start_time }}</time>{% endif %}<b>{{ item.title }}</b></span>
+                {% for occurrence in day["items"][:3] %}
+                    {% set item = occurrence.item %}
+                    <span class="planner-calendar-item event-range-{{ occurrence.range_position }} {% if item.is_done %}done{% endif %}"><i style="--planner-color: {{ item.color }}"></i>{% if item.start_time %}<time>{{ item.start_time }}</time>{% endif %}<b>{{ item.title }}</b></span>
                 {% endfor %}
                 {% if day["items"]|length > 3 %}<span class="planner-more">+{{ day["items"]|length - 3 }}</span>{% endif %}
                 </span>
@@ -48,11 +49,14 @@
                     </form>
                     <div class="planner-item-body">
                         <div class="planner-item-title"><i style="--planner-color: {{ item.color }}"></i><b>{{ item.title }}</b></div>
+                        <span class="subline">{{ item|planner_date_range }}</span>
                         {% if item.start_time %}<span class="subline">{{ item.start_time }}{% if item.end_time %}–{{ item.end_time }}{% endif %}</span>{% else %}<span class="subline">На весь день</span>{% endif %}
                         {% if item.description %}<p>{{ item.description|linkify }}</p>{% endif %}
                         <details class="planner-edit">
                             <summary>Изменить</summary>
-                            <form method="post" action="/planner/{{ item.id }}/update" class="form compact-form planner-form">
+                            {% set edit = planner_edit_forms.get(item.id) %}
+                            <form method="post" action="/planner/{{ item.id }}/update" class="form compact-form planner-form" data-planner-date-form data-planner-edit-id="{{ item.id }}">
+                                <label>Дата окончания<input name="end_date" type="date" value="{{ edit.end_date if edit else (item.end_date or item.scheduled_for).isoformat() }}" required data-planner-end></label>
                                 <label>Название<input name="title" value="{{ item.title }}" maxlength="180" required></label>
                                 <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ item.scheduled_for.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="{{ item.color }}"></label></div>
                                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time" value="{{ item.start_time or '' }}"></label><label>Конец<input name="end_time" type="time" value="{{ item.end_time or '' }}"></label></div>
@@ -72,7 +76,9 @@
 
         <details class="card action-panel planner-create" open>
             <summary><svg class="icon"><use href="#i-plus"></use></svg> Добавить событие</summary>
-            <form method="post" action="/planner" class="form planner-form">
+            {% if planner_validation_error %}<div class="notice error" role="alert">{{ planner_validation_error }}</div>{% endif %}
+            <form method="post" action="/planner" class="form planner-form" data-planner-date-form data-planner-create>
+                <label>Дата окончания<input name="end_date" type="date" value="{{ planner_create_form.end_date }}" required data-planner-end></label>
                 <label>Название<input name="title" maxlength="180" required placeholder="Например, прогулка или врач"></label>
                 <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ selected_day.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="#2563eb"></label></div>
                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time"></label><label>Конец<input name="end_time" type="time"></label></div>
@@ -93,4 +99,27 @@
         {% endif %}
     </aside>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('[data-planner-date-form]').forEach((form) => {
+    const start = form.querySelector('[name="scheduled_for"]');
+    const end = form.querySelector('[data-planner-end]');
+    let endChanged = false;
+    end.addEventListener('change', () => { endChanged = true; });
+    start.addEventListener('change', () => {
+        if (!endChanged) end.value = start.value;
+        end.min = start.value;
+    });
+    end.min = start.value;
+    const values = form.dataset.plannerCreate
+        ? {{ planner_create_form|tojson }}
+        : {{ planner_edit_forms|tojson }}[form.dataset.plannerEditId];
+    if (values) ['title', 'scheduled_for', 'start_time', 'end_time', 'description', 'color'].forEach((name) => {
+        const field = form.querySelector(`[name="${name}"]`);
+        if (field) field.value = values[name] || '';
+    });
+});
+</script>
 {% endblock %}

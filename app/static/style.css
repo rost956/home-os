@@ -2951,6 +2951,9 @@ html[data-theme="dark"] .success-alert {
 .planner-calendar-item time { font-size: 10px; font-variant-numeric: tabular-nums; }
 .planner-calendar-item b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .planner-calendar-item.done { opacity: .48; text-decoration: line-through; }
+.planner-calendar-item.event-range-start i { border-radius: 4px 1px 1px 4px; }
+.planner-calendar-item.event-range-middle i { border-radius: 1px; }
+.planner-calendar-item.event-range-end i { border-radius: 1px 4px 4px 1px; }
 .planner-more { color: var(--primary); font-size: 11px; font-weight: 900; }
 .planner-sidebar { display: grid; gap: 14px; }
 .planner-day-panel { padding: 16px; }

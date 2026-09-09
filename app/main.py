@@ -80,6 +80,11 @@ from .services.finance import (
     shifted_month,
     summarize_cashflow,
 )
+from .services.planner import (
+    calendar_occurrences,
+    event_overlaps_range,
+    format_planner_date_range,
+)
 from .services.preferences import (
     PALETTE_GROUPS,
     PALETTE_TOKENS,
@@ -212,6 +217,7 @@ templates.env.filters["msk_datetime"] = format_msk_datetime
 templates.env.filters["fmt_odometer"] = format_odometer
 templates.env.filters["palette_css"] = palette_css_variables
 templates.env.filters["gradient_css"] = gradient_css_variables
+templates.env.filters["planner_date_range"] = format_planner_date_range
 templates.env.globals["presence_info"] = presence_info
 
 
@@ -404,6 +410,7 @@ def schema_change_required() -> bool:
         "expense_items": {"include_in_analytics", "include_in_forecast"},
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
+        "planner_items": {"end_date"},
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
         "ai_user_settings": {
             "user_id",
@@ -495,6 +502,10 @@ def ensure_runtime_schema() -> None:
         shopping_share_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(shopping_list_shares)").fetchall()]
         if shopping_share_columns and "can_edit" not in shopping_share_columns:
             connection.exec_driver_sql("ALTER TABLE shopping_list_shares ADD COLUMN can_edit BOOLEAN NOT NULL DEFAULT 1")
+
+        planner_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(planner_items)").fetchall()]
+        if planner_columns and "end_date" not in planner_columns:
+            connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN end_date DATE")
 
         wishlist_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(wishlist_items)").fetchall()]
         wishlist_defaults = {
@@ -4779,13 +4790,28 @@ def planner_return_url(day: date) -> str:
     return f"/planner?month={day.strftime('%Y-%m')}&day={day.isoformat()}"
 
 
-@app.get("/planner")
-def planner_page(
+def parse_planner_end_date(value: str, start_date: date) -> date | None:
+    clean_value = value.strip()
+    if not clean_value:
+        return None
+    try:
+        end_date = date.fromisoformat(clean_value)
+    except ValueError as exc:
+        raise ValueError("Укажите корректную дату окончания") from exc
+    if end_date < start_date:
+        raise ValueError("Дата окончания не может быть раньше даты начала")
+    return None if end_date == start_date else end_date
+
+
+def render_planner_page(
     request: Request,
+    user: User,
+    db: Session,
     month: str = "",
     day: str = "",
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    create_form: dict[str, str] | None = None,
+    edit_forms: dict[int, dict[str, str]] | None = None,
+    validation_error: str | None = None,
 ):
     try:
         month_start = date.fromisoformat(f"{month.strip()}-01") if month.strip() else msk_today().replace(day=1)
@@ -4797,39 +4823,37 @@ def planner_page(
     if not month_start <= selected_day < next_month_start:
         selected_day = month_start
     previous_year, previous_month = shifted_month(month_start.year, month_start.month, -1)
+    month_end = next_month_start - timedelta(days=1)
+    calendar_start = month_start - timedelta(days=month_start.weekday())
+    calendar_end = month_end + timedelta(days=6 - month_end.weekday())
     items = db.scalars(
         select(PlannerItem)
         .where(
             PlannerItem.owner_id == user.id,
-            PlannerItem.scheduled_for >= month_start,
-            PlannerItem.scheduled_for < next_month_start,
+            PlannerItem.scheduled_for <= calendar_end,
+            func.coalesce(PlannerItem.end_date, PlannerItem.scheduled_for) >= calendar_start,
         )
         .order_by(PlannerItem.scheduled_for, PlannerItem.start_time.is_(None), PlannerItem.start_time, PlannerItem.id)
     ).all()
-    items_by_day: dict[date, list[PlannerItem]] = defaultdict(list)
-    for item in items:
-        items_by_day[item.scheduled_for].append(item)
-    month_end = next_month_start - timedelta(days=1)
-    calendar_start = month_start - timedelta(days=month_start.weekday())
-    calendar_end = month_end + timedelta(days=6 - month_end.weekday())
+    occurrences_by_day = calendar_occurrences(items, calendar_start, calendar_end)
     calendar_days = []
     current_day = calendar_start
     while current_day <= calendar_end:
         calendar_days.append({
             "day": current_day,
             "number": current_day.day,
-            "items": items_by_day.get(current_day, []),
+            "items": occurrences_by_day.get(current_day, []),
             "is_current_month": current_day.month == month_start.month,
             "is_selected": current_day == selected_day,
             "is_today": current_day == msk_today(),
         })
         current_day += timedelta(days=1)
-    selected_items = items_by_day.get(selected_day, [])
+    selected_items = [occurrence.item for occurrence in occurrences_by_day.get(selected_day, [])]
     upcoming = db.scalars(
         select(PlannerItem)
         .where(
             PlannerItem.owner_id == user.id,
-            PlannerItem.scheduled_for >= msk_today(),
+            func.coalesce(PlannerItem.end_date, PlannerItem.scheduled_for) >= msk_today(),
             PlannerItem.is_done.is_(False),
         )
         .order_by(PlannerItem.scheduled_for, PlannerItem.start_time.is_(None), PlannerItem.start_time, PlannerItem.id)
@@ -4847,14 +4871,33 @@ def planner_page(
         "upcoming": upcoming,
         "calendar_days": calendar_days,
         "calendar_weekdays": ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"),
-        "month_item_count": len(items),
+        "month_item_count": sum(event_overlaps_range(item, month_start, month_end) for item in items),
+        "planner_create_form": create_form or {
+            "title": "", "scheduled_for": selected_day.isoformat(), "end_date": selected_day.isoformat(),
+            "start_time": "", "end_time": "", "description": "", "color": "#2563eb",
+        },
+        "planner_edit_forms": edit_forms or {},
+        "planner_validation_error": validation_error,
     })
+
+
+@app.get("/planner")
+def planner_page(
+    request: Request,
+    month: str = "",
+    day: str = "",
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return render_planner_page(request, user, db, month, day)
 
 
 @app.post("/planner")
 def planner_create(
+    request: Request,
     title: str = Form(...),
     scheduled_for: str = Form(""),
+    end_date: str = Form(""),
     start_time: str = Form(""),
     end_time: str = Form(""),
     description: str = Form(""),
@@ -4866,6 +4909,15 @@ def planner_create(
     if not clean_title:
         raise HTTPException(status_code=400, detail="Укажите название")
     item_day = parse_date(scheduled_for, msk_today()) or msk_today()
+    try:
+        item_end_date = parse_planner_end_date(end_date, item_day)
+    except ValueError as exc:
+        return render_planner_page(
+            request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
+            create_form={"title": title, "scheduled_for": scheduled_for, "end_date": end_date,
+                         "start_time": start_time, "end_time": end_time, "description": description, "color": color},
+            validation_error=str(exc),
+        )
     item_start_time = parse_planner_time(start_time)
     item_end_time = parse_planner_time(end_time)
     if item_start_time and item_end_time and item_end_time <= item_start_time:
@@ -4878,6 +4930,7 @@ def planner_create(
         title=clean_title[:180],
         description=clean_optional_text(description, 10_000),
         scheduled_for=item_day,
+        end_date=item_end_date,
         start_time=item_start_time,
         end_time=item_end_time,
         color=item_color,
@@ -4888,9 +4941,11 @@ def planner_create(
 
 @app.post("/planner/{item_id}/update")
 def planner_update(
+    request: Request,
     item_id: int,
     title: str = Form(...),
     scheduled_for: str = Form(""),
+    end_date: str = Form(""),
     start_time: str = Form(""),
     end_time: str = Form(""),
     description: str = Form(""),
@@ -4906,6 +4961,16 @@ def planner_update(
     if not clean_title:
         raise HTTPException(status_code=400, detail="Укажите название")
     item_day = parse_date(scheduled_for, item.scheduled_for) or item.scheduled_for
+    try:
+        item_end_date = parse_planner_end_date(end_date, item_day)
+    except ValueError as exc:
+        return render_planner_page(
+            request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
+            edit_forms={item.id: {"title": title, "scheduled_for": scheduled_for, "end_date": end_date,
+                                  "start_time": start_time, "end_time": end_time, "description": description,
+                                  "color": color, "is_done": is_done or ""}},
+            validation_error=str(exc),
+        )
     item_start_time = parse_planner_time(start_time)
     item_end_time = parse_planner_time(end_time)
     if item_start_time and item_end_time and item_end_time <= item_start_time:
@@ -4913,6 +4978,7 @@ def planner_update(
     item.title = clean_title[:180]
     item.description = clean_optional_text(description, 10_000)
     item.scheduled_for = item_day
+    item.end_date = item_end_date
     item.start_time = item_start_time
     item.end_time = item_end_time
     item.color = color.strip().lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", color.strip()) else "#2563eb"
@@ -5634,6 +5700,7 @@ def export_data_json(user: User = Depends(get_current_user), db: Session = Depen
                 "title": item.title,
                 "description": item.description,
                 "scheduled_for": item.scheduled_for.isoformat(),
+                "end_date": item.end_date.isoformat() if item.end_date else None,
                 "start_time": item.start_time,
                 "end_time": item.end_time,
                 "color": item.color,
@@ -5890,6 +5957,7 @@ def import_data_json(
                 if not isinstance(raw_item, dict):
                     raise ValueError
                 item_day = parse_date(str(raw_item.get("scheduled_for") or ""), msk_today()) or msk_today()
+                item_end_date = parse_planner_end_date(str(raw_item.get("end_date") or ""), item_day)
                 start_time = parse_planner_time(str(raw_item.get("start_time") or ""))
                 end_time = parse_planner_time(str(raw_item.get("end_time") or ""))
                 if start_time and end_time and end_time <= start_time:
@@ -5900,6 +5968,7 @@ def import_data_json(
                     title=clean_required_text(str(raw_item.get("title") or ""), "Название", 180),
                     description=clean_optional_text(raw_item.get("description"), 10_000),
                     scheduled_for=item_day,
+                    end_date=item_end_date,
                     start_time=start_time,
                     end_time=end_time,
                     color=raw_color if re.fullmatch(r"#[0-9a-f]{6}", raw_color) else "#2563eb",
