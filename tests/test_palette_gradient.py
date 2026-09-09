@@ -30,7 +30,16 @@ def test_gradient_post_persists_and_renders_after_new_request(client, db, make_u
     assert stored["gradient_end_color"] == "#00ff00"
     assert stored["gradient_angle"] == 135
     html = client.get("/expenses/analytics").text
-    assert "--accent-background:linear-gradient(135deg,#ffff00,#00ff00)" in html
+    assert "--ui-gradient:linear-gradient(135deg,#ffff00,#00ff00);--accent-background:var(--ui-gradient)" in html
+
+
+def test_configured_gradient_survives_when_actions_are_solid(client, make_user, login):
+    user = make_user("gradient-actions-off")
+    login(user.username)
+    response = client.post("/settings", data={"appearance": "light", "financial_period_start_day": "1", "gradient_start_color": "#ffff00", "gradient_end_color": "#00ff00", "gradient_angle": "135"}, follow_redirects=False)
+    assert response.status_code == 303
+    html = client.get("/expenses/analytics").text
+    assert "--ui-gradient:linear-gradient(135deg,#ffff00,#00ff00);--accent-background:var(--primary)" in html
 
 
 def test_gradient_validation_and_reset(client, db, make_user, login):
@@ -131,7 +140,7 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     assert enabled.status_code == 303
     gradient_page = client.get("/expenses/analytics").text
     assert 'class="bar-track limit-track total-limit-track"><div class="limit-progress-fill" style="width:' in gradient_page
-    assert 'style="--accent-background:linear-gradient(42deg,#123456,#654321)' in gradient_page
+    assert 'style="--ui-gradient:linear-gradient(42deg,#123456,#654321);--accent-background:var(--ui-gradient)' in gradient_page
 
     disabled = client.post(
         "/settings",
@@ -143,7 +152,7 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     assert "--accent-background:var(--primary)" in disabled_tag
 
     stylesheet = client.get("/static/style.css?v=62").text
-    assert ".limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }" in stylesheet
-    assert 'html[data-theme="dark"] .limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }' in stylesheet
+    assert ".limit-track > .limit-progress-fill { background: var(--ui-gradient, var(--primary)); }" in stylesheet
+    assert 'html[data-theme="dark"] .limit-track > .limit-progress-fill { background: var(--ui-gradient, var(--primary)); }' in stylesheet
     assert ".total-limit-track div" not in stylesheet
     assert "linear-gradient(90deg, #16a34a, #f97316, #dc2626)" not in stylesheet

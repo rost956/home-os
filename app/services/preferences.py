@@ -125,15 +125,18 @@ def palette_css_variables(palette: dict[str, str]) -> str:
 
 
 def gradient_css_variables(gradient: dict[str, str | int | bool]) -> str:
-    if not gradient or not gradient.get("gradient_enabled"):
+    """Expose a configured gradient independently from primary-action styling."""
+    if not gradient:
         return "--accent-background:var(--primary)"
     start, end, angle = gradient["gradient_start_color"], gradient["gradient_end_color"], gradient["gradient_angle"]
     foreground = contrast_text_color(str(start)) if contrast_text_color(str(start)) == contrast_text_color(str(end)) else "#ffffff"
-    return f"--accent-background:linear-gradient({angle}deg,{start},{end});--primary-foreground:{foreground}"
+    configured = f"linear-gradient({angle}deg,{start},{end})"
+    accent = "var(--ui-gradient)" if gradient.get("gradient_enabled") else "var(--primary)"
+    return f"--ui-gradient:{configured};--accent-background:{accent};--primary-foreground:{foreground}"
 
 
 def validate_gradient(enabled: bool, start: str, end: str, angle: str) -> tuple[dict[str, str | int | bool], str | None]:
-    if not enabled:
+    if not enabled and not start.strip() and not end.strip():
         return {}, None
     if not HEX_COLOR.fullmatch(start.strip()) or not HEX_COLOR.fullmatch(end.strip()):
         return {}, "Используйте цвета градиента только в формате #RRGGBB."
@@ -143,4 +146,4 @@ def validate_gradient(enabled: bool, start: str, end: str, angle: str) -> tuple[
         return {}, "Угол градиента должен быть числом от 0 до 360."
     if not 0 <= numeric_angle <= 360:
         return {}, "Угол градиента должен быть от 0 до 360."
-    return {"gradient_enabled": True, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": numeric_angle}, None
+    return {"gradient_enabled": enabled, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": numeric_angle}, None
