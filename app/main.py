@@ -82,8 +82,8 @@ from .services.finance import (
 )
 from .services.planner import (
     calendar_occurrences,
-    event_overlaps_range,
     format_planner_date_range,
+    iter_occurrences_in_range,
 )
 from .services.preferences import (
     PALETTE_GROUPS,
@@ -410,7 +410,7 @@ def schema_change_required() -> bool:
         "expense_items": {"include_in_analytics", "include_in_forecast"},
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
-        "planner_items": {"end_date"},
+        "planner_items": {"end_date", "recurrence_frequency", "recurrence_interval", "recurrence_until"},
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
         "ai_user_settings": {
             "user_id",
@@ -506,6 +506,12 @@ def ensure_runtime_schema() -> None:
         planner_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(planner_items)").fetchall()]
         if planner_columns and "end_date" not in planner_columns:
             connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN end_date DATE")
+        if planner_columns and "recurrence_frequency" not in planner_columns:
+            connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN recurrence_frequency VARCHAR(12)")
+        if planner_columns and "recurrence_interval" not in planner_columns:
+            connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN recurrence_interval INTEGER NOT NULL DEFAULT 1")
+        if planner_columns and "recurrence_until" not in planner_columns:
+            connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN recurrence_until DATE")
 
         wishlist_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(wishlist_items)").fetchall()]
         wishlist_defaults = {
@@ -4803,6 +4809,27 @@ def parse_planner_end_date(value: str, start_date: date) -> date | None:
     return None if end_date == start_date else end_date
 
 
+def parse_planner_recurrence(frequency: str, interval: str, until: str, start_date: date) -> tuple[str | None, int, date | None]:
+    clean_frequency = frequency.strip().lower()
+    if not clean_frequency:
+        return None, 1, None
+    if clean_frequency not in {"daily", "weekly", "monthly", "yearly"}:
+        raise ValueError("Выберите допустимую периодичность")
+    try:
+        clean_interval = int(interval)
+    except ValueError as exc:
+        raise ValueError("Интервал повторения должен быть целым числом") from exc
+    if clean_interval < 1:
+        raise ValueError("Интервал повторения должен быть не меньше 1")
+    try:
+        clean_until = date.fromisoformat(until) if until.strip() else None
+    except ValueError as exc:
+        raise ValueError("Укажите корректную дату окончания повторений") from exc
+    if clean_until and clean_until < start_date:
+        raise ValueError("Дата окончания повторений не может быть раньше даты начала")
+    return clean_frequency, clean_interval, clean_until
+
+
 def render_planner_page(
     request: Request,
     user: User,
@@ -4830,8 +4857,10 @@ def render_planner_page(
         select(PlannerItem)
         .where(
             PlannerItem.owner_id == user.id,
-            PlannerItem.scheduled_for <= calendar_end,
-            func.coalesce(PlannerItem.end_date, PlannerItem.scheduled_for) >= calendar_start,
+            or_(
+                and_(PlannerItem.recurrence_frequency.is_(None), PlannerItem.scheduled_for <= calendar_end, func.coalesce(PlannerItem.end_date, PlannerItem.scheduled_for) >= calendar_start),
+                and_(PlannerItem.recurrence_frequency.is_not(None), PlannerItem.scheduled_for <= calendar_end, or_(PlannerItem.recurrence_until.is_(None), PlannerItem.recurrence_until >= calendar_start - timedelta(days=366))),
+            ),
         )
         .order_by(PlannerItem.scheduled_for, PlannerItem.start_time.is_(None), PlannerItem.start_time, PlannerItem.id)
     ).all()
@@ -4849,16 +4878,8 @@ def render_planner_page(
         })
         current_day += timedelta(days=1)
     selected_items = [occurrence.item for occurrence in occurrences_by_day.get(selected_day, [])]
-    upcoming = db.scalars(
-        select(PlannerItem)
-        .where(
-            PlannerItem.owner_id == user.id,
-            func.coalesce(PlannerItem.end_date, PlannerItem.scheduled_for) >= msk_today(),
-            PlannerItem.is_done.is_(False),
-        )
-        .order_by(PlannerItem.scheduled_for, PlannerItem.start_time.is_(None), PlannerItem.start_time, PlannerItem.id)
-        .limit(6)
-    ).all()
+    upcoming_candidates = db.scalars(select(PlannerItem).where(PlannerItem.owner_id == user.id, PlannerItem.is_done.is_(False), PlannerItem.scheduled_for <= msk_today() + timedelta(days=366))).all()
+    upcoming = [occurrence for item in upcoming_candidates for occurrence in iter_occurrences_in_range(item, msk_today(), msk_today() + timedelta(days=366))][:6]
     return render(request, "planner.html", {
         "user": user,
         "today": msk_today(),
@@ -4871,7 +4892,7 @@ def render_planner_page(
         "upcoming": upcoming,
         "calendar_days": calendar_days,
         "calendar_weekdays": ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"),
-        "month_item_count": sum(event_overlaps_range(item, month_start, month_end) for item in items),
+        "month_item_count": sum(1 for item in items for _ in iter_occurrences_in_range(item, month_start, month_end)),
         "planner_create_form": create_form or {
             "title": "", "scheduled_for": selected_day.isoformat(), "end_date": selected_day.isoformat(),
             "start_time": "", "end_time": "", "description": "", "color": "#2563eb",
@@ -4898,6 +4919,9 @@ def planner_create(
     title: str = Form(...),
     scheduled_for: str = Form(""),
     end_date: str = Form(""),
+    recurrence_frequency: str = Form(""),
+    recurrence_interval: str = Form("1"),
+    recurrence_until: str = Form(""),
     start_time: str = Form(""),
     end_time: str = Form(""),
     description: str = Form(""),
@@ -4911,6 +4935,7 @@ def planner_create(
     item_day = parse_date(scheduled_for, msk_today()) or msk_today()
     try:
         item_end_date = parse_planner_end_date(end_date, item_day)
+        item_frequency, item_interval, item_until = parse_planner_recurrence(recurrence_frequency, recurrence_interval, recurrence_until, item_day)
     except ValueError as exc:
         return render_planner_page(
             request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
@@ -4931,6 +4956,7 @@ def planner_create(
         description=clean_optional_text(description, 10_000),
         scheduled_for=item_day,
         end_date=item_end_date,
+        recurrence_frequency=item_frequency, recurrence_interval=item_interval, recurrence_until=item_until,
         start_time=item_start_time,
         end_time=item_end_time,
         color=item_color,
@@ -4946,6 +4972,9 @@ def planner_update(
     title: str = Form(...),
     scheduled_for: str = Form(""),
     end_date: str = Form(""),
+    recurrence_frequency: str = Form(""),
+    recurrence_interval: str = Form("1"),
+    recurrence_until: str = Form(""),
     start_time: str = Form(""),
     end_time: str = Form(""),
     description: str = Form(""),
@@ -4963,6 +4992,7 @@ def planner_update(
     item_day = parse_date(scheduled_for, item.scheduled_for) or item.scheduled_for
     try:
         item_end_date = parse_planner_end_date(end_date, item_day)
+        item_frequency, item_interval, item_until = parse_planner_recurrence(recurrence_frequency, recurrence_interval, recurrence_until, item_day)
     except ValueError as exc:
         return render_planner_page(
             request, user, db, item_day.strftime("%Y-%m"), item_day.isoformat(),
@@ -4979,6 +5009,9 @@ def planner_update(
     item.description = clean_optional_text(description, 10_000)
     item.scheduled_for = item_day
     item.end_date = item_end_date
+    item.recurrence_frequency = item_frequency
+    item.recurrence_interval = item_interval
+    item.recurrence_until = item_until
     item.start_time = item_start_time
     item.end_time = item_end_time
     item.color = color.strip().lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", color.strip()) else "#2563eb"
@@ -5701,6 +5734,9 @@ def export_data_json(user: User = Depends(get_current_user), db: Session = Depen
                 "description": item.description,
                 "scheduled_for": item.scheduled_for.isoformat(),
                 "end_date": item.end_date.isoformat() if item.end_date else None,
+                "recurrence_frequency": item.recurrence_frequency,
+                "recurrence_interval": item.recurrence_interval,
+                "recurrence_until": item.recurrence_until.isoformat() if item.recurrence_until else None,
                 "start_time": item.start_time,
                 "end_time": item.end_time,
                 "color": item.color,
@@ -5958,6 +5994,7 @@ def import_data_json(
                     raise ValueError
                 item_day = parse_date(str(raw_item.get("scheduled_for") or ""), msk_today()) or msk_today()
                 item_end_date = parse_planner_end_date(str(raw_item.get("end_date") or ""), item_day)
+                recurrence_frequency, recurrence_interval, recurrence_until = parse_planner_recurrence(str(raw_item.get("recurrence_frequency") or ""), str(raw_item.get("recurrence_interval") or "1"), str(raw_item.get("recurrence_until") or ""), item_day)
                 start_time = parse_planner_time(str(raw_item.get("start_time") or ""))
                 end_time = parse_planner_time(str(raw_item.get("end_time") or ""))
                 if start_time and end_time and end_time <= start_time:
@@ -5969,6 +6006,7 @@ def import_data_json(
                     description=clean_optional_text(raw_item.get("description"), 10_000),
                     scheduled_for=item_day,
                     end_date=item_end_date,
+                    recurrence_frequency=recurrence_frequency, recurrence_interval=recurrence_interval, recurrence_until=recurrence_until,
                     start_time=start_time,
                     end_time=end_time,
                     color=raw_color if re.fullmatch(r"#[0-9a-f]{6}", raw_color) else "#2563eb",

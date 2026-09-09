@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-theme="{{ user.theme if user else 'system' }}" data-theme-preference="{{ user.theme if user else 'system' }}"{% if ui_palette or ui_gradient %} style="{{ ui_palette|palette_css }}{% if ui_gradient %}{% if ui_palette %};{% endif %}{{ ui_gradient|gradient_css }}{% endif %}"{% endif %}>
+<html lang="ru" data-theme="{{ user.theme if user else 'system' }}" data-theme-preference="{{ user.theme if user else 'system' }}" style="{{ ui_palette|default({})|palette_css }}{% if ui_palette|default({}) %};{% endif %}{{ ui_gradient|default({})|gradient_css }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

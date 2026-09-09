@@ -63,10 +63,17 @@ def load_gradient(raw: str | None) -> dict[str, str | int | bool]:
     start, end = values.get("gradient_start_color"), values.get("gradient_end_color")
     if not (isinstance(start, str) and isinstance(end, str) and HEX_COLOR.fullmatch(start) and HEX_COLOR.fullmatch(end)):
         return {}
-    angle = values.get("gradient_angle", 135)
-    if isinstance(angle, bool) or not isinstance(angle, int) or not 0 <= angle <= 360:
+    raw_angle = values.get("gradient_angle", 135)
+    if isinstance(raw_angle, bool):
         return {}
-    return {"gradient_enabled": values.get("gradient_enabled") is True, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": angle}
+    try:
+        angle = int(raw_angle)
+    except (TypeError, ValueError):
+        return {}
+    if not 0 <= angle <= 360:
+        return {}
+    enabled = values.get("gradient_enabled") in {True, "true", "on", 1}
+    return {"gradient_enabled": enabled, "gradient_start_color": start.lower(), "gradient_end_color": end.lower(), "gradient_angle": angle}
 
 
 def relative_luminance(value: str) -> float:

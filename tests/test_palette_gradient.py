@@ -18,6 +18,21 @@ def test_gradient_and_palette_are_rendered_globally(client, db, make_user, login
     assert "linear-gradient(42deg,#123456,#654321)" in shared
 
 
+def test_gradient_post_persists_and_renders_after_new_request(client, db, make_user, login):
+    user = make_user("gradient-lifecycle")
+    login(user.username)
+    response = client.post("/settings", data={"appearance": "light", "financial_period_start_day": "1", "gradient_enabled": "on", "gradient_start_color": "#ffff00", "gradient_end_color": "#00ff00", "gradient_angle": "135"}, follow_redirects=False)
+    assert response.status_code == 303
+    db.expire_all()
+    stored = json.loads(db.get(User, user.id).ui_palette_json)
+    assert stored["gradient_enabled"] is True
+    assert stored["gradient_start_color"] == "#ffff00"
+    assert stored["gradient_end_color"] == "#00ff00"
+    assert stored["gradient_angle"] == 135
+    html = client.get("/expenses/analytics").text
+    assert "--accent-background:linear-gradient(135deg,#ffff00,#00ff00)" in html
+
+
 def test_gradient_validation_and_reset(client, db, make_user, login):
     user = make_user("gradient-validation")
     login(user.username)
@@ -74,7 +89,7 @@ def test_palette_override_uses_element_inline_style_to_beat_theme_selectors(clie
     html = client.get("/settings").text
     opening_tag = html.split("<html", 1)[1].split(">", 1)[0]
     assert 'data-theme="system"' in opening_tag
-    assert 'style="--primary:#3ecfb9;--primary-foreground:#111827"' in opening_tag
+    assert 'style="--primary:#3ecfb9;--primary-foreground:#111827;--accent-background:var(--primary)"' in opening_tag
 
     stylesheet = client.get("/static/style.css?v=60").text
     assert ":root {" in stylesheet
@@ -125,7 +140,7 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     )
     assert disabled.status_code == 303
     disabled_tag = client.get("/expenses/analytics").text.split("<html", 1)[1].split(">", 1)[0]
-    assert "--accent-background" not in disabled_tag
+    assert "--accent-background:var(--primary)" in disabled_tag
 
     stylesheet = client.get("/static/style.css?v=62").text
     assert ".limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }" in stylesheet
