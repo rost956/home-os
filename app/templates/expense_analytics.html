@@ -42,7 +42,7 @@
     {% if limit_total > 0 %}
     <div class="limit-total-box">
         <div class="bar-title"><b>Всего по лимитам</b><span>{{ limit_spent|fmt_decimal }} / {{ limit_total|fmt_decimal }} ₽</span></div>
-        <div class="bar-track limit-track total-limit-track"><div style="width: {{ limit_percent }}%"></div></div>
+        <div class="bar-track limit-track total-limit-track"><div class="limit-progress-fill" style="width: {{ limit_percent }}%"></div></div>
         <div class="subline">{{ 'Перерасход' if limit_left < 0 else 'Осталось' }}: {{ limit_left|fmt_decimal }} ₽</div>
     </div>
     {% endif %}
@@ -50,7 +50,7 @@
     {% for row in limit_rows %}
         <div class="bar-row">
             <div class="bar-title"><b>{{ row.category }}</b><span>{{ row.spent|fmt_decimal }} / {{ row.limit|fmt_decimal }} ₽</span></div>
-            <div class="bar-track limit-track"><div style="width: {{ row.percent }}%"></div></div>
+            <div class="bar-track limit-track"><div class="limit-progress-fill" style="width: {{ row.percent }}%"></div></div>
             <div class="subline">Осталось: {{ row.left|fmt_decimal }} ₽</div>
         </div>
     {% else %}

@@ -1639,8 +1639,8 @@ html[data-theme="dark"] .ingredient-line.changed {
 .inline-editor { margin-top: 10px; }
 .wishlist-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .split-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.limit-track div { background: var(--accent-background, var(--primary)); }
-html[data-theme="dark"] .limit-track div { background: var(--accent-background, var(--primary)); }
+.limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }
+html[data-theme="dark"] .limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }
 .reply-btn { border: 0; background: transparent; color: inherit; cursor: pointer; opacity: .7; }
 .reply-btn .icon { width: 13px; height: 13px; vertical-align: -2px; }
 .reply-preview, .reply-box {

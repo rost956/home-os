@@ -115,7 +115,7 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     )
     assert enabled.status_code == 303
     gradient_page = client.get("/expenses/analytics").text
-    assert 'class="bar-track limit-track total-limit-track"' in gradient_page
+    assert 'class="bar-track limit-track total-limit-track"><div class="limit-progress-fill" style="width:' in gradient_page
     assert 'style="--accent-background:linear-gradient(42deg,#123456,#654321)' in gradient_page
 
     disabled = client.post(
@@ -127,8 +127,8 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     disabled_tag = client.get("/expenses/analytics").text.split("<html", 1)[1].split(">", 1)[0]
     assert "--accent-background" not in disabled_tag
 
-    stylesheet = client.get("/static/style.css?v=60").text
-    assert ".limit-track div { background: var(--accent-background, var(--primary)); }" in stylesheet
-    assert 'html[data-theme="dark"] .limit-track div { background: var(--accent-background, var(--primary)); }' in stylesheet
+    stylesheet = client.get("/static/style.css?v=62").text
+    assert ".limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }" in stylesheet
+    assert 'html[data-theme="dark"] .limit-track > .limit-progress-fill { background: var(--accent-background, var(--primary)); }' in stylesheet
     assert ".total-limit-track div" not in stylesheet
     assert "linear-gradient(90deg, #16a34a, #f97316, #dc2626)" not in stylesheet
