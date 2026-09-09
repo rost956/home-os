@@ -76,7 +76,7 @@ def test_palette_override_uses_element_inline_style_to_beat_theme_selectors(clie
     assert 'data-theme="system"' in opening_tag
     assert 'style="--primary:#3ecfb9;--primary-foreground:#111827"' in opening_tag
 
-    stylesheet = client.get("/static/style.css?v=59").text
+    stylesheet = client.get("/static/style.css?v=60").text
     assert ":root {" in stylesheet
     assert "--primary: #2563eb;" in stylesheet
     assert 'html[data-theme="dark"] {' in stylesheet
@@ -127,7 +127,7 @@ def test_limit_progress_uses_gradient_accent_and_falls_back_to_primary(client, d
     disabled_tag = client.get("/expenses/analytics").text.split("<html", 1)[1].split(">", 1)[0]
     assert "--accent-background" not in disabled_tag
 
-    stylesheet = client.get("/static/style.css?v=59").text
+    stylesheet = client.get("/static/style.css?v=60").text
     assert ".limit-track div { background: var(--accent-background, var(--primary)); }" in stylesheet
     assert 'html[data-theme="dark"] .limit-track div { background: var(--accent-background, var(--primary)); }' in stylesheet
     assert ".total-limit-track div" not in stylesheet

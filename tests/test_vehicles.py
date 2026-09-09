@@ -111,10 +111,38 @@ def test_vehicle_list_has_a_narrow_screen_layout_without_overflow_masking(client
     assert 'class="page-head compact-head vehicle-list-head"' in page.text
     assert long_model in page.text
 
-    stylesheet = client.get("/static/style.css?v=59").text
+    stylesheet = client.get("/static/style.css?v=60").text
     assert ".vehicle-list-head > div { min-width: 0; }" in stylesheet
     assert ".vehicle-card span, .vehicle-card small" in stylesheet
     assert "overflow-wrap: anywhere;" in stylesheet
     assert ".vehicle-list-head { flex-direction: column; align-items: stretch; }" in stylesheet
     assert ".vehicle-list-head > .btn { width: 100%; justify-content: center; }" in stylesheet
     assert "body { overflow-x: hidden" not in stylesheet
+
+
+def test_vehicle_subpages_use_scoped_mobile_headers_and_semantic_metric_colors(client, db, make_user, login):
+    user = make_user("vehicle-ui-cleanup")
+    vehicle = Vehicle(owner_id=user.id, make="Ford", model="Focus", year=2020, current_odometer=112000)
+    db.add(vehicle)
+    db.commit()
+    login(user.username)
+
+    overview = client.get(f"/vehicles/{vehicle.id}")
+    maintenance = client.get(f"/vehicles/{vehicle.id}/maintenance")
+    logbook = client.get(f"/vehicles/{vehicle.id}/log")
+    fuel = client.get(f"/vehicles/{vehicle.id}/fuel")
+    for page in (overview, maintenance, logbook, fuel):
+        assert page.status_code == 200
+        assert 'class="page-head compact-head vehicle-page-head"' in page.text
+
+    assert "vehicle-card-head" in overview.text
+    assert "Добавить позицию" in maintenance.text
+    assert "Печать" in logbook.text and "Добавить запись" in logbook.text
+    assert "Добавить заправку" in fuel.text
+
+    stylesheet = client.get("/static/style.css?v=60").text
+    assert ".vehicle-odometer b { color: var(--text);" in stylesheet
+    assert ".vehicle-card strong { grid-column: 2; color: var(--text); }" in stylesheet
+    assert ".vehicle-page-head { flex-direction: column; align-items: stretch; }" in stylesheet
+    assert ".vehicle-card-head > .actions { width: 100%; align-items: stretch; flex-direction: column; }" in stylesheet
+    assert ".maintenance-head { flex-direction: column; }" in stylesheet
