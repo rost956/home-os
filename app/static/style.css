@@ -2578,22 +2578,6 @@ html[data-theme="dark"] .success-alert {
     .expense-edit-form .compact-check { min-height: 48px; }
 }
 
-@media (max-width: 720px) {
-    .moments-calendar { margin-inline: -10px; padding: 10px; border-radius: 0; border-inline: 0; }
-    .moments-calendar-toolbar { grid-template-columns: 36px minmax(0, 1fr) 36px; gap: 4px; }
-    .moments-calendar-toolbar h2 { font-size: 16px; }
-    .moments-today-link { grid-column: 1 / -1; justify-self: center; }
-    .moment-calendar-day { min-height: 70px; padding: 4px; }
-    .moment-calendar-date { width: 20px; height: 20px; font-size: 10px; }
-    .moment-thumbnail { min-height: 40px; }
-    .moment-thumbnail-wrap { border-radius: 5px; }
-    .moment-text-preview { display: none; }
-    .moments-day-count { right: 2px; bottom: 2px; min-width: 17px; padding: 2px 4px; font-size: 9px; }
-    .moments-day-view-head { align-items: stretch; flex-direction: column; }
-    .moments-day-view-head .btn { width: 100%; }
-    .moments-day-grid { grid-template-columns: minmax(0, 1fr); }
-}
-
 @media (max-width: 370px) {
     .expense-edit-form { grid-template-columns: 1fr; }
 }
@@ -3061,17 +3045,21 @@ html[data-theme="dark"] .success-alert {
 .moments-calendar-weekdays, .moments-calendar-grid { min-width: 0; width: 100%; }
 .moments-calendar-weekdays { margin: 0 0 6px; }
 .moments-calendar-weekdays span { padding: 0; text-align: center; }
-.moments-calendar-grid { border-radius: 12px; }
-.moment-calendar-day { min-height: 136px; padding: 6px; gap: 5px; text-decoration: none; transition: background .16s ease, box-shadow .16s ease; }
-.moment-calendar-day:not(.outside-month):hover { background: var(--soft); text-decoration: none; }
-.moment-calendar-day.selected { box-shadow: inset 0 0 0 2px var(--primary); z-index: 1; }
-.moment-calendar-day.today .moment-calendar-date { background: var(--accent-background); color: var(--primary-foreground); }
-.moment-thumbnail-wrap { position: relative; min-height: 0; flex: 1; overflow: hidden; border-radius: 8px; background: var(--soft); }
-.moment-thumbnail { display: block; width: 100%; height: 100%; min-height: 82px; object-fit: cover; }
-.moment-text-preview { display: block; padding: 8px; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; font-weight: 800; }
-.moments-day-count { position: absolute; right: 5px; bottom: 5px; min-width: 22px; padding: 3px 6px; border-radius: 999px; background: var(--accent-background); color: var(--primary-foreground); text-align: center; font-size: 11px; line-height: 1; }
+.moments-calendar-grid { gap: 4px; padding: 4px; border: 0; border-radius: 14px; background: var(--soft); }
+.moments-calendar-cell { min-width: 0; min-height: 126px; display: flex; flex-direction: column; gap: 5px; padding: 6px; border-radius: 10px; background: var(--card); color: var(--text); text-decoration: none; transition: background .16s ease, box-shadow .16s ease, transform .16s ease; }
+.moments-calendar-cell:not(.is-outside-month):hover { background: var(--soft); text-decoration: none; transform: translateY(-1px); }
+.moments-calendar-cell.is-outside-month { background: transparent; color: var(--muted); opacity: .48; }
+.moments-calendar-cell.is-selected { background: var(--soft); box-shadow: inset 0 0 0 1px var(--primary); }
+.moments-calendar-date { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; margin-left: auto; border-radius: 50%; font-size: 12px; font-weight: 900; }
+.moments-calendar-cell.is-selected .moments-calendar-date { color: var(--primary); }
+.moments-calendar-cell.is-today .moments-calendar-date { background: var(--accent-background); color: var(--primary-foreground); }
+.moments-calendar-media { position: relative; min-height: 0; flex: 1; display: grid; place-items: center; overflow: hidden; border-radius: 8px; background: var(--soft); }
+.moments-calendar-thumb { display: block; width: 100%; height: 100%; min-height: 78px; aspect-ratio: 4 / 3; object-fit: cover; }
+.moments-calendar-marker { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 5px var(--card); }
+.moments-calendar-count { position: absolute; right: 5px; bottom: 5px; min-width: 22px; padding: 3px 6px; border-radius: 999px; background: var(--accent-background); color: var(--primary-foreground); text-align: center; font-size: 11px; line-height: 1; }
 .moments-month-empty { margin: -6px 0 18px; color: var(--muted); text-align: center; }
-.moments-day-view { display: grid; gap: 12px; margin: 20px 0; }
+.moments-day-view { position: relative; display: grid; gap: 12px; margin: 20px 0; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--soft); }
+.moments-day-view::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; border-radius: 14px 0 0 14px; background: var(--accent-background); }
 .moments-day-view-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .moments-day-view-head h2, .moments-day-view-head p { margin: 0; }
 .moments-day-view-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
@@ -3098,6 +3086,21 @@ html[data-theme="dark"] .success-alert {
 .planner-upcoming-list small { color: var(--muted); font-size: 11px; }
 
 @media (max-width: 720px) {
+    .moments-calendar { margin-inline: -10px; padding: 10px; border-radius: 0; border-inline: 0; }
+    .moments-calendar-toolbar { grid-template-columns: 36px minmax(0, 1fr) 36px; gap: 4px; }
+    .moments-calendar-toolbar h2 { font-size: 16px; }
+    .moments-today-link { grid-column: 1 / -1; justify-self: center; }
+    .moments-calendar-grid { gap: 3px; padding: 3px; border-radius: 10px; }
+    .moments-calendar-cell { min-height: 68px; gap: 3px; padding: 4px; border-radius: 7px; }
+    .moments-calendar-date { width: 20px; height: 20px; font-size: 10px; }
+    .moments-calendar-media { border-radius: 5px; }
+    .moments-calendar-thumb { min-height: 38px; aspect-ratio: 1 / 1; }
+    .moments-calendar-marker { width: 6px; height: 6px; box-shadow: 0 0 0 4px var(--card); }
+    .moments-calendar-count { right: 2px; bottom: 2px; min-width: 17px; padding: 2px 4px; font-size: 9px; }
+    .moments-day-view { margin-inline: -4px; padding: 12px 10px; border-radius: 10px; }
+    .moments-day-view-head { align-items: stretch; flex-direction: column; }
+    .moments-day-view-head .btn { width: 100%; }
+    .moments-day-grid { grid-template-columns: minmax(0, 1fr); }
     .moments-tools { align-items: stretch; flex-direction: column; }
     .moments-month-form { width: 100%; }
     .moments-month-form label { min-width: 0; flex: 1; }

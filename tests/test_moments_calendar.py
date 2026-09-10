@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 
@@ -35,11 +36,11 @@ def test_month_calendar_groups_days_navigates_and_handles_invalid_input(client, 
     january = client.get("/moments?year=2027&month=1")
 
     assert september.status_code == october.status_code == invalid.status_code == january.status_code == 200
-    assert "Сентябрь 2026" in september.text and 'moments-day-count">2<' in september.text
-    assert "October" not in september.text
-    assert "Октябрь 2026" in october.text and "October" in october.text
+    assert "Сентябрь 2026" in september.text and 'moments-calendar-count">2<' in september.text
+    assert "First" not in september.text and "Second" not in september.text and "October" not in september.text
+    assert "Октябрь 2026" in october.text and 'moments-calendar-count">1<' in october.text
     assert "Январь 2027" in january.text
-    assert "moments-calendar" in september.text and "moment-thumbnail" in september.text
+    assert "moments-calendar" in september.text and "moments-calendar-cell" in september.text
 
 
 def test_selected_day_prefills_create_and_excludes_other_dates_and_owners(client, db, make_user, login):
@@ -99,3 +100,19 @@ def test_existing_create_flow_with_photo_generates_thumbnail_lazily(client, db, 
 
     assert created.status_code == 303 and moment.photo_path
     assert client.get(f"/media/moments/thumb/{filename}").status_code == 200
+
+
+def test_calendar_uses_scoped_compact_cell_and_mobile_contract(client, db, make_user, login):
+    user = make_user("compact-calendar")
+    add_moment(db, user, day=date(2026, 9, 10), title="Very long text that must never render inside a narrow calendar cell")
+    login(user.username)
+
+    page = client.get("/moments?year=2026&month=9")
+    css = Path("app/static/style.css").read_text(encoding="utf-8")
+
+    assert "Very long text that must never render" not in page.text
+    assert "moments-calendar-marker" in page.text
+    assert "moments-calendar-cell" in page.text and "moments-calendar-count" in page.text
+    assert "@media (max-width: 720px)" in css
+    assert ".moments-calendar-cell { min-height: 68px" in css
+    assert ".moments-calendar-thumb { min-height: 38px; aspect-ratio: 1 / 1;" in css

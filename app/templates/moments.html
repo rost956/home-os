@@ -8,9 +8,9 @@
     <div class="moments-calendar-weekdays">{% for weekday in calendar_weekdays %}<span>{{ weekday }}</span>{% endfor %}</div>
     <div class="moments-calendar-grid">
     {% for calendar_day in calendar_days %}
-        {% if calendar_day.is_current_month %}<a class="moment-calendar-day {% if calendar_day['items'] %}has-moments{% endif %} {% if calendar_day.is_today %}today{% endif %} {% if selected_day == calendar_day.day %}selected{% endif %}" href="/moments?year={{ year }}&month={{ month }}&day={{ calendar_day.day.isoformat() }}" aria-label="{{ calendar_day.day.strftime('%d.%m.%Y') }}{% if calendar_day['items'] %}, моментов: {{ calendar_day['items']|length }}{% endif %}">{% else %}<div class="moment-calendar-day outside-month">{% endif %}
-            <span class="moment-calendar-date">{{ calendar_day.number }}</span>
-            {% if calendar_day['items'] %}{% set preview = calendar_day['items'] | selectattr('photo_path') | first %}<div class="moment-thumbnail-wrap">{% if preview %}<img class="moment-thumbnail" src="/media/moments/thumb/{{ preview.photo_path.rsplit('/', 1)[-1] }}" alt="" loading="lazy">{% else %}<span class="moment-text-preview">{{ calendar_day['items'][0].title }}</span>{% endif %}<b class="moments-day-count">{{ calendar_day['items']|length }}</b></div>{% endif %}
+        {% if calendar_day.is_current_month %}<a class="moments-calendar-cell {% if calendar_day['items'] %}has-moments{% endif %} {% if calendar_day.is_today %}is-today{% endif %} {% if selected_day == calendar_day.day %}is-selected{% endif %}" href="/moments?year={{ year }}&month={{ month }}&day={{ calendar_day.day.isoformat() }}" aria-label="{{ calendar_day.day.strftime('%d.%m.%Y') }}{% if calendar_day['items'] %}, моментов: {{ calendar_day['items']|length }}{% endif %}">{% else %}<div class="moments-calendar-cell is-outside-month">{% endif %}
+            <span class="moments-calendar-date">{{ calendar_day.number }}</span>
+            {% if calendar_day['items'] %}{% set preview = calendar_day['items'] | selectattr('photo_path') | first %}<div class="moments-calendar-media">{% if preview %}<img class="moments-calendar-thumb" src="/media/moments/thumb/{{ preview.photo_path.rsplit('/', 1)[-1] }}" alt="" loading="lazy">{% else %}<span class="moments-calendar-marker" aria-hidden="true"></span>{% endif %}<b class="moments-calendar-count">{{ calendar_day['items']|length }}</b></div>{% endif %}
         {% if calendar_day.is_current_month %}</a>{% else %}</div>{% endif %}
     {% endfor %}
     </div>
