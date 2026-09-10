@@ -2578,6 +2578,22 @@ html[data-theme="dark"] .success-alert {
     .expense-edit-form .compact-check { min-height: 48px; }
 }
 
+@media (max-width: 720px) {
+    .moments-calendar { margin-inline: -10px; padding: 10px; border-radius: 0; border-inline: 0; }
+    .moments-calendar-toolbar { grid-template-columns: 36px minmax(0, 1fr) 36px; gap: 4px; }
+    .moments-calendar-toolbar h2 { font-size: 16px; }
+    .moments-today-link { grid-column: 1 / -1; justify-self: center; }
+    .moment-calendar-day { min-height: 70px; padding: 4px; }
+    .moment-calendar-date { width: 20px; height: 20px; font-size: 10px; }
+    .moment-thumbnail { min-height: 40px; }
+    .moment-thumbnail-wrap { border-radius: 5px; }
+    .moment-text-preview { display: none; }
+    .moments-day-count { right: 2px; bottom: 2px; min-width: 17px; padding: 2px 4px; font-size: 9px; }
+    .moments-day-view-head { align-items: stretch; flex-direction: column; }
+    .moments-day-view-head .btn { width: 100%; }
+    .moments-day-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 370px) {
     .expense-edit-form { grid-template-columns: 1fr; }
 }
@@ -2975,7 +2991,46 @@ html[data-theme="dark"] .success-alert {
 .planner-edit summary { color: var(--primary); font-size: 12px; font-weight: 800; cursor: pointer; }
 .planner-edit form + form { margin-top: 8px; }
 .planner-form { margin-top: 10px; }
-.planner-color-input { min-width: 100%; height: 40px; padding: 3px; }
+.planner-recurrence { border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+.planner-recurrence summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px; cursor: pointer; list-style: none; }
+.planner-recurrence summary::-webkit-details-marker { display: none; }
+.planner-recurrence summary::after { content: '⌄'; color: var(--muted); font-weight: 900; }
+.planner-recurrence[open] summary::after { transform: rotate(180deg); }
+.planner-recurrence summary span { color: var(--muted); font-size: 12px; font-weight: 800; }
+.planner-recurrence summary b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.planner-recurrence-fields { display: grid; gap: 10px; padding: 0 10px 10px; }
+.planner-color-field { display: grid; grid-template-columns: auto 42px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 40px; }
+.planner-color-field > span { color: var(--muted); font-size: 12px; font-weight: 800; }
+.planner-color-input { width: 40px; min-width: 40px; height: 34px; padding: 2px; }
+.planner-color-field output { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.file-transfer-list, .file-list { display: grid; gap: 12px; }
+.file-transfer-card, .shared-file-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.file-transfer-card-main, .shared-file-row > div { min-width: 0; display: grid; gap: 5px; }
+.file-transfer-card h2, .shared-file-row b { margin: 0; overflow-wrap: anywhere; }
+.file-transfer-card p, .file-transfer-card small, .shared-file-row small, .file-share-link > span { margin: 0; color: var(--muted); font-size: 12px; }
+.file-transfer-status { width: fit-content; padding: 3px 8px; border-radius: 999px; background: var(--success); color: #fff; font-size: 12px; font-weight: 900; }
+.file-transfer-card.expired .file-transfer-status { background: var(--muted); }
+.file-transfer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 0 0 auto; }
+.file-transfer-actions form { margin: 0; }
+.file-transfer-empty { display: grid; gap: 8px; justify-items: start; text-align: left; }
+.file-transfer-empty h2, .file-transfer-empty p { margin: 0; }
+.file-transfer-empty p { color: var(--muted); }
+.file-share-link { display: grid; gap: 8px; box-shadow: none; }
+.file-share-link > div { display: flex; gap: 8px; min-width: 0; }
+.file-share-link input { min-width: 0; flex: 1; }
+.file-storage-summary { display: grid; gap: 10px; box-shadow: none; }
+.file-storage-summary > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 20px; }
+.file-storage-summary span, .file-storage-summary small { color: var(--muted); font-size: 12px; }
+.file-storage-summary strong { font-size: 24px; }
+.file-storage-summary b { font-size: 13px; }
+.file-storage-summary form, .file-owner-tools form { margin: 0; }
+.file-transfer-filters, .file-owner-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.file-transfer-filters label, .file-owner-tools label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.file-owner-tools { margin-top: 4px; }
+.file-owner-tools form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.file-upload-panel { box-shadow: none; }
+.public-file-transfer { max-width: 760px; margin-inline: auto; }
+.public-file-transfer > p { overflow-wrap: anywhere; }
 .planner-reminders { display: grid; gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
 .planner-reminders legend { padding: 0 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
 .planner-reminder-list { display: grid; gap: 7px; }
@@ -2984,6 +3039,40 @@ html[data-theme="dark"] .success-alert {
 .planner-reminders > .btn { justify-self: start; }
 .planner-reminder-summary { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .planner-reminder-summary span { padding: 3px 7px; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: 11px; font-weight: 700; }
+
+/* Moments photo calendar (checkpoint F) */
+.moments-calendar { padding: 14px; overflow: hidden; }
+.moments-calendar-toolbar { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px auto; align-items: center; gap: 8px; margin-bottom: 14px; }
+.moments-calendar-toolbar h2 { margin: 0; text-align: center; font-size: 18px; }
+.moments-next { transform: rotate(180deg); }
+.moments-calendar-weekdays, .moments-calendar-grid { min-width: 0; width: 100%; }
+.moments-calendar-weekdays { margin: 0 0 6px; }
+.moments-calendar-weekdays span { padding: 0; text-align: center; }
+.moments-calendar-grid { border-radius: 12px; }
+.moment-calendar-day { min-height: 136px; padding: 6px; gap: 5px; text-decoration: none; transition: background .16s ease, box-shadow .16s ease; }
+.moment-calendar-day:not(.outside-month):hover { background: var(--soft); text-decoration: none; }
+.moment-calendar-day.selected { box-shadow: inset 0 0 0 2px var(--primary); z-index: 1; }
+.moment-calendar-day.today .moment-calendar-date { background: var(--accent-background); color: var(--primary-foreground); }
+.moment-thumbnail-wrap { position: relative; min-height: 0; flex: 1; overflow: hidden; border-radius: 8px; background: var(--soft); }
+.moment-thumbnail { display: block; width: 100%; height: 100%; min-height: 82px; object-fit: cover; }
+.moment-text-preview { display: block; padding: 8px; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; font-weight: 800; }
+.moments-day-count { position: absolute; right: 5px; bottom: 5px; min-width: 22px; padding: 3px 6px; border-radius: 999px; background: var(--accent-background); color: var(--primary-foreground); text-align: center; font-size: 11px; line-height: 1; }
+.moments-month-empty { margin: -6px 0 18px; color: var(--muted); text-align: center; }
+.moments-day-view { display: grid; gap: 12px; margin: 20px 0; }
+.moments-day-view-head { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.moments-day-view-head h2, .moments-day-view-head p { margin: 0; }
+.moments-day-view-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.moments-day-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+.moment-card { display: flex; flex-direction: column; grid-template-columns: none; }
+.moment-photo { width: 100%; min-height: 0; aspect-ratio: 4 / 3; padding: 0; border: 0; cursor: zoom-in; }
+.moment-photo img { min-height: 0; aspect-ratio: 4 / 3; }
+.moment-card-body { flex: 1; padding: 14px; }
+.moment-card-head h3 { margin: 0; overflow-wrap: anywhere; font-size: 16px; }
+.moments-day-empty { color: var(--muted); text-align: center; }
+.moment-lightbox[hidden] { display: none; }
+.moment-lightbox { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .86); }
+.moment-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.moment-lightbox-close { position: absolute; top: 12px; right: 16px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--card); color: var(--text); font-size: 30px; line-height: 1; cursor: pointer; }
 .planner-create { box-shadow: none; }
 .planner-empty { min-height: 110px; display: grid; place-items: center; text-align: center; }
 .planner-upcoming { padding: 16px; box-shadow: none; }
@@ -3036,6 +3125,13 @@ html[data-theme="dark"] .success-alert {
     .planner-calendar-item i { width: 3px; height: 13px; }
     .planner-calendar-item time { display: none; }
     .planner-more { font-size: 9px; }
+    .file-transfer-card, .shared-file-row { align-items: stretch; flex-direction: column; }
+    .file-transfer-actions { width: 100%; }
+    .file-transfer-actions .btn, .file-transfer-actions form, .file-transfer-actions form .btn { flex: 1; }
+    .file-share-link > div { align-items: stretch; flex-direction: column; }
+    .file-share-link > div .btn { width: 100%; }
+    .file-owner-tools, .file-owner-tools form { align-items: stretch; flex-direction: column; width: 100%; }
+    .file-owner-tools .btn, .file-owner-tools select { width: 100%; }
 }
 .cashflow-label b { font-weight: 900; }
 

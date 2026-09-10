@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import uuid
 from collections import defaultdict
@@ -25,6 +26,7 @@ except Exception:  # pragma: no cover - dependency is installed in Docker, but k
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import inspect as sa_inspect
@@ -59,6 +61,8 @@ from .models import (
     ShoppingList,
     ShoppingListShare,
     ShoppingPriceHistory,
+    TemporaryFileTransfer,
+    TemporarySharedFile,
     User,
     Vehicle,
     VehicleFuelEntry,
@@ -71,6 +75,22 @@ from .models import (
 from .routers.system import router as system_router
 from .services.backups import create_backup_zip, sqlite_database_path
 from .services.exports import build_expenses_csv, build_expenses_xlsx
+from .services.file_sharing import (
+    FileShareValidationError,
+    cleanup_all,
+    close_uploads,
+    ensure_storage_capacity,
+    existing_transfer_size,
+    format_file_size,
+    remove_shared_file,
+    remove_transfer_storage,
+    safe_original_filename,
+    storage_path,
+    storage_usage,
+    transfer_is_expired,
+    validate_uploads,
+    write_uploads,
+)
 from .services.finance import (
     accessible_expense_lists,
     build_finance_snapshot,
@@ -133,6 +153,7 @@ from .web import (
     MOMENT_MEDIA_DIR,
     PUSH_VAPID_PRIVATE_KEY_FILE,
     RECIPE_MEDIA_DIR,
+    SHARED_FILES_DIR,
     app,
     templates,
 )
@@ -141,7 +162,9 @@ ONLINE_WINDOW_SECONDS = 75
 BACKUP_RETENTION_COUNT = 14
 IMPORT_MAX_BYTES = 2 * 1024 * 1024
 IMPORT_MAX_ITEMS = 10_000
-MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MAX_REQUEST_BYTES = max(16 * 1024 * 1024, settings.file_share_max_transfer_bytes + 2 * 1024 * 1024)
+MOMENT_THUMB_DIR = MOMENT_MEDIA_DIR / "thumbs"
+MOMENT_THUMB_SIZE = (480, 360)
 PUSH_ENDPOINT_HOST_SUFFIXES = tuple(
     dict.fromkeys(
         (
@@ -225,6 +248,7 @@ templates.env.filters["palette_css"] = palette_css_variables
 templates.env.filters["gradient_css"] = gradient_css_variables
 templates.env.filters["planner_date_range"] = format_planner_date_range
 templates.env.filters["planner_reminder_label"] = reminder_label
+templates.env.filters["file_size"] = format_file_size
 templates.env.globals["presence_info"] = presence_info
 
 
@@ -430,6 +454,8 @@ def ensure_runtime_schema() -> None:
     with engine.begin() as connection:
         PlannerReminder.__table__.create(bind=connection, checkfirst=True)
         PlannerReminderDelivery.__table__.create(bind=connection, checkfirst=True)
+        TemporaryFileTransfer.__table__.create(bind=connection, checkfirst=True)
+        TemporarySharedFile.__table__.create(bind=connection, checkfirst=True)
 
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
@@ -533,6 +559,8 @@ def on_startup() -> None:
     RECIPE_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     CHAT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     MOMENT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    MOMENT_THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    SHARED_FILES_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     if schema_change_required():
         try:
@@ -583,11 +611,41 @@ async def planner_push_scheduler() -> None:
         logger.info("Planner push scheduler stopped")
 
 
+def run_file_share_cleanup(*, owner_id: int | None = None):
+    with SessionLocal() as db:
+        summary = cleanup_all(
+            db,
+            root=SHARED_FILES_DIR,
+            now=utc_now_naive(),
+            orphan_grace=timedelta(hours=settings.file_share_orphan_grace_hours),
+            owner_id=owner_id,
+        )
+    logger.info(
+        "Temporary file cleanup completed transfers=%s files=%s bytes=%s failures=%s orphans=%s",
+        summary.transfers_removed, summary.files_removed, summary.bytes_freed, summary.failures, summary.orphans_removed,
+    )
+    return summary
+
+
+async def file_share_cleanup_scheduler() -> None:
+    logger.info("Temporary file cleanup scheduler started interval=%ss", settings.file_share_cleanup_seconds)
+    try:
+        while True:
+            try:
+                await asyncio.to_thread(run_file_share_cleanup)
+            except Exception as exc:
+                logger.warning("Temporary file cleanup cycle failed: %s", type(exc).__name__)
+            await asyncio.sleep(settings.file_share_cleanup_seconds)
+    finally:
+        logger.info("Temporary file cleanup scheduler stopped")
+
+
 @asynccontextmanager
 async def app_lifespan(_app):
     timer_reminder_stop.clear()
     on_startup()
     push_task = None
+    file_cleanup_task = None
     if settings.background_jobs_enabled and settings.push_enabled:
         keys = ensure_vapid_keys()
         if webpush is None:
@@ -596,6 +654,9 @@ async def app_lifespan(_app):
             logger.error("Planner push unavailable: %s", keys.get("reason", "invalid configuration"))
         else:
             push_task = asyncio.create_task(planner_push_scheduler(), name="planner-push-scheduler")
+    if settings.background_jobs_enabled:
+        await asyncio.to_thread(run_file_share_cleanup)
+        file_cleanup_task = asyncio.create_task(file_share_cleanup_scheduler(), name="file-share-cleanup-scheduler")
     try:
         yield
     finally:
@@ -604,6 +665,10 @@ async def app_lifespan(_app):
             push_task.cancel()
             with suppress(asyncio.CancelledError):
                 await push_task
+        if file_cleanup_task is not None:
+            file_cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await file_cleanup_task
 
 
 app.router.lifespan_context = app_lifespan
@@ -1290,6 +1355,53 @@ def save_moment_photo(upload: UploadFile | None) -> str | None:
     return save_image_upload(upload, MOMENT_MEDIA_DIR, "/media/moments")
 
 
+def moment_thumbnail_name(photo_path: str) -> str:
+    return f"{Path(photo_path).stem}.jpg"
+
+
+def moment_thumbnail_path(photo_path: str) -> Path:
+    if not photo_path.startswith("/media/moments/"):
+        raise ValueError("Unsafe moment photo path")
+    target = (MOMENT_THUMB_DIR / moment_thumbnail_name(photo_path)).resolve()
+    if target.parent != MOMENT_THUMB_DIR.resolve():
+        raise ValueError("Unsafe moment thumbnail path")
+    return target
+
+
+def ensure_moment_thumbnail(photo_path: str) -> Path:
+    """Create a persistent, EXIF-corrected calendar thumbnail once on demand."""
+    source_name = Path(photo_path).name
+    source = (MOMENT_MEDIA_DIR / source_name).resolve()
+    if source.parent != MOMENT_MEDIA_DIR.resolve() or not source.is_file():
+        raise FileNotFoundError(source_name)
+    target = moment_thumbnail_path(photo_path)
+    if target.is_file():
+        return target
+    MOMENT_THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".tmp")
+    try:
+        with Image.open(source) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail(MOMENT_THUMB_SIZE)
+            if image.mode not in {"RGB", "L"}:
+                image = image.convert("RGB")
+            image.save(temporary, format="JPEG", quality=82, optimize=True)
+        temporary.replace(target)
+    except (OSError, UnidentifiedImageError):
+        temporary.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def delete_moment_photo(photo_path: str | None) -> None:
+    if photo_path:
+        try:
+            moment_thumbnail_path(photo_path).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+    delete_media_file(photo_path)
+
+
 def delete_media_file(image_path: str | None) -> None:
     if not image_path or not image_path.startswith("/media/"):
         return
@@ -1909,6 +2021,20 @@ def recipe_media(filename: str, user: User = Depends(get_current_user), db: Sess
     if not recipe or not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
     return FileResponse(path, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/media/moments/thumb/{filename}")
+def moment_thumbnail_media(filename: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    source_name = Path(filename).name
+    expected_path = f"/media/moments/{source_name}"
+    moment = db.scalar(select(Moment).where(Moment.photo_path == expected_path, Moment.owner_id == user.id))
+    if not moment:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    try:
+        path = ensure_moment_thumbnail(expected_path)
+    except (FileNotFoundError, OSError, UnidentifiedImageError):
+        raise HTTPException(status_code=404, detail="Файл не найден") from None
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/media/moments/{filename}")
@@ -4727,13 +4853,20 @@ def watch_progress(
 @app.get("/moments")
 def moments_page(
     request: Request,
+    year: int | None = None,
     month: str = "",
+    day: str = "",
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        month_start = date.fromisoformat(f"{month.strip()}-01") if month.strip() else msk_today().replace(day=1)
-    except ValueError:
+        if "-" in month:
+            month_start = date.fromisoformat(f"{month.strip()}-01")
+        elif year is not None and month.strip():
+            month_start = date(year, int(month), 1)
+        else:
+            month_start = msk_today().replace(day=1)
+    except (TypeError, ValueError):
         month_start = msk_today().replace(day=1)
     next_year, next_month = shifted_month(month_start.year, month_start.month, 1)
     next_month_start = date(next_year, next_month, 1)
@@ -4744,14 +4877,14 @@ def moments_page(
             Moment.happened_on >= month_start,
             Moment.happened_on < next_month_start,
         )
-        .order_by(desc(Moment.happened_on), desc(Moment.created_at))
+        .order_by(Moment.happened_on, Moment.created_at, Moment.id)
     ).all()
-    day_groups: list[dict[str, Any]] = []
+    moments_by_day: dict[date, list[Moment]] = {}
     for moment in moments:
-        if not day_groups or day_groups[-1]["day"] != moment.happened_on:
-            day_groups.append({"day": moment.happened_on, "label": moment.happened_on.strftime("%d.%m.%Y"), "items": []})
-        day_groups[-1]["items"].append(moment)
-    moments_by_day = {group["day"]: group["items"] for group in day_groups}
+        moments_by_day.setdefault(moment.happened_on, []).append(moment)
+    selected_day = parse_date(day, None)
+    if selected_day and not (month_start <= selected_day < next_month_start):
+        selected_day = None
     month_end = next_month_start - timedelta(days=1)
     calendar_start = month_start - timedelta(days=month_start.weekday())
     calendar_end = month_end + timedelta(days=6 - month_end.weekday())
@@ -4771,13 +4904,19 @@ def moments_page(
         "moments.html",
         {
             "user": user,
-            "month": month_start.strftime("%Y-%m"),
+            "month": month_start.month,
+            "year": month_start.year,
             "today": msk_today(),
-            "day_groups": day_groups,
             "moment_count": len(moments),
             "month_label": f"{RUSSIAN_MONTH_NAMES[month_start.month - 1].capitalize()} {month_start.year}",
             "calendar_days": calendar_days,
             "calendar_weekdays": ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"),
+            "previous_month": (month_start - timedelta(days=1)).replace(day=1),
+            "next_month": next_month_start,
+            "selected_day": selected_day,
+            "selected_moments": moments_by_day.get(selected_day, []) if selected_day else [],
+            "selected_day_label": selected_day.strftime("%d.%m.%Y") if selected_day else "",
+            "new_moment_day": selected_day or msk_today(),
         },
     )
 
@@ -4839,10 +4978,10 @@ def moment_update(
     except Exception:
         db.rollback()
         if new_photo_path:
-            delete_media_file(new_photo_path)
+            delete_moment_photo(new_photo_path)
         raise
     if previous_photo_path and previous_photo_path != moment.photo_path:
-        delete_media_file(previous_photo_path)
+        delete_moment_photo(previous_photo_path)
     return redirect_notice(f"/moments?month={moment.happened_on.strftime('%Y-%m')}", "Момент обновлён")
 
 
@@ -4852,7 +4991,7 @@ def moment_delete(moment_id: int, user: User = Depends(get_current_user), db: Se
     if not moment or moment.owner_id != user.id:
         raise HTTPException(status_code=404, detail="Момент не найден")
     month = moment.happened_on.strftime("%Y-%m")
-    delete_media_file(moment.photo_path)
+    delete_moment_photo(moment.photo_path)
     db.delete(moment)
     db.commit()
     return redirect_notice(f"/moments?month={month}", "Момент удалён")
@@ -5773,6 +5912,243 @@ def expenses_export_xlsx(user: User = Depends(get_current_user), db: Session = D
 def expenses_export_csv(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     content = build_expenses_csv(expense_export_rows(db, user))
     return Response(content=content, media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=expenses.csv"})
+
+
+FILE_SHARE_TTLS = {
+    "1h": (timedelta(hours=1), "1 час"),
+    "24h": (timedelta(days=1), "24 часа"),
+    "3d": (timedelta(days=3), "3 дня"),
+    "7d": (timedelta(days=7), "7 дней"),
+}
+
+
+def new_file_share_token(db: Session) -> str:
+    while True:
+        token = secrets.token_urlsafe(32)
+        if db.scalar(select(TemporaryFileTransfer.id).where(TemporaryFileTransfer.public_token == token)) is None:
+            return token
+
+
+def require_owned_file_transfer(db: Session, transfer_id: int, user: User) -> TemporaryFileTransfer:
+    transfer = db.scalar(
+        select(TemporaryFileTransfer)
+        .options(selectinload(TemporaryFileTransfer.files))
+        .where(TemporaryFileTransfer.id == transfer_id, TemporaryFileTransfer.owner_id == user.id)
+    )
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Передача не найдена")
+    return transfer
+
+
+def file_download_response(shared_file: TemporarySharedFile) -> FileResponse:
+    try:
+        path = storage_path(SHARED_FILES_DIR, shared_file.transfer_id, shared_file.storage_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Файл не найден") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=safe_original_filename(shared_file.original_filename),
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def file_transfer_form_values(title: str = "", description: str = "", ttl: str = "24h") -> dict[str, str]:
+    return {"title": title, "description": description, "ttl": ttl if ttl in FILE_SHARE_TTLS else "24h"}
+
+
+def render_file_transfer_form(request: Request, user: User, form: dict[str, str], error: str | None = None):
+    return render(request, "file_transfer_form.html", {"user": user, "form": form, "ttl_options": FILE_SHARE_TTLS, "error": error, "max_file_mb": settings.file_share_max_file_bytes // 1024 // 1024, "max_transfer_mb": settings.file_share_max_transfer_bytes // 1024 // 1024})
+
+
+@app.get("/files")
+def file_transfers_page(request: Request, status_filter: str = "all", sort: str = "newest", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    now = utc_now_naive()
+    status_filter = status_filter if status_filter in {"all", "active", "expired"} else "all"
+    sort = sort if sort in {"newest", "expires", "largest"} else "newest"
+    filters = [TemporaryFileTransfer.owner_id == user.id]
+    if status_filter == "active":
+        filters.append(TemporaryFileTransfer.expires_at > now)
+    elif status_filter == "expired":
+        filters.append(TemporaryFileTransfer.expires_at <= now)
+    transfers = db.scalars(
+        select(TemporaryFileTransfer)
+        .options(selectinload(TemporaryFileTransfer.files))
+        .where(*filters)
+        .order_by(TemporaryFileTransfer.created_at.desc(), TemporaryFileTransfer.id.desc())
+    ).all()
+    if sort == "expires":
+        transfers.sort(key=lambda transfer: (transfer.expires_at, transfer.id))
+    elif sort == "largest":
+        transfers.sort(key=lambda transfer: (transfer.total_size_bytes, transfer.id), reverse=True)
+    all_transfers = db.scalars(select(TemporaryFileTransfer).options(selectinload(TemporaryFileTransfer.files)).where(TemporaryFileTransfer.owner_id == user.id)).all()
+    summary = {"bytes": sum(transfer.total_size_bytes for transfer in all_transfers), "active": sum(not transfer_is_expired(transfer, now) for transfer in all_transfers), "expired": sum(transfer_is_expired(transfer, now) for transfer in all_transfers)}
+    return render(request, "file_transfers.html", {"user": user, "transfers": transfers, "now": now, "summary": summary, "status_filter": status_filter, "sort": sort, "max_file_mb": settings.file_share_max_file_bytes // 1024 // 1024, "max_transfer_mb": settings.file_share_max_transfer_bytes // 1024 // 1024, "max_storage_mb": settings.file_share_max_storage_bytes // 1024 // 1024, "max_user_storage_mb": settings.file_share_max_user_storage_bytes // 1024 // 1024})
+
+
+@app.get("/files/new")
+def file_transfer_new(request: Request, user: User = Depends(get_current_user)):
+    return render_file_transfer_form(request, user, file_transfer_form_values())
+
+
+@app.post("/files/new")
+def file_transfer_create(request: Request, title: str = Form(""), description: str = Form(""), ttl: str = Form("24h"), files: list[UploadFile] = File([]), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    form = file_transfer_form_values(title=title, description=description, ttl=ttl)
+    try:
+        clean_title, clean_description = title.strip(), description.strip()
+        if not clean_title or len(clean_title) > 160: raise FileShareValidationError("Укажите название передачи до 160 символов.")
+        if len(clean_description) > 4_000: raise FileShareValidationError("Описание слишком длинное.")
+        if ttl not in FILE_SHARE_TTLS: raise FileShareValidationError("Выберите срок действия ссылки.")
+        prepared = validate_uploads(files, max_file_bytes=settings.file_share_max_file_bytes, max_transfer_bytes=settings.file_share_max_transfer_bytes, existing_size_bytes=0)
+        incoming_bytes = sum(item[2] for item in prepared)
+        ensure_storage_capacity(SHARED_FILES_DIR, incoming_bytes=incoming_bytes, current_bytes=storage_usage(db), max_storage_bytes=settings.file_share_max_storage_bytes, max_user_storage_bytes=settings.file_share_max_user_storage_bytes, current_user_bytes=storage_usage(db, owner_id=user.id), min_free_bytes=settings.file_share_min_free_bytes)
+        transfer = TemporaryFileTransfer(owner_id=user.id, title=clean_title, description=clean_description or None, public_token=new_file_share_token(db), expires_at=utc_now_naive() + FILE_SHARE_TTLS[ttl][0])
+        db.add(transfer); db.flush()
+        write_uploads(db, transfer, prepared, root=SHARED_FILES_DIR, max_file_bytes=settings.file_share_max_file_bytes, max_transfer_bytes=settings.file_share_max_transfer_bytes, existing_size_bytes=0)
+        db.commit()
+    except FileShareValidationError as exc:
+        db.rollback()
+        return render_file_transfer_form(request, user, form, str(exc))
+    except Exception:
+        db.rollback()
+        if "transfer" in locals() and transfer.id:
+            try: remove_transfer_storage(SHARED_FILES_DIR, transfer.id)
+            except FileShareValidationError: pass
+        logger.exception("Temporary file transfer creation failed owner_id=%s", user.id)
+        return render_file_transfer_form(request, user, form, "Не удалось создать передачу. Попробуйте ещё раз.")
+    finally:
+        close_uploads(files)
+    logger.info("Temporary file transfer created transfer_id=%s owner_id=%s", transfer.id, user.id)
+    return redirect_notice(f"/files/{transfer.id}", "Передача создана")
+
+
+@app.get("/files/{transfer_id}")
+def file_transfer_detail(request: Request, transfer_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    share_url = f"{str(request.base_url).rstrip('/')}/share/{transfer.public_token}"
+    return render(request, "file_transfer_detail.html", {"user": user, "transfer": transfer, "share_url": share_url, "now": utc_now_naive(), "ttl_options": FILE_SHARE_TTLS, "max_file_mb": settings.file_share_max_file_bytes // 1024 // 1024, "max_transfer_mb": settings.file_share_max_transfer_bytes // 1024 // 1024})
+
+
+@app.post("/files/{transfer_id}/upload")
+def file_transfer_upload(transfer_id: int, files: list[UploadFile] = File([]), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    uploaded_files: list[TemporarySharedFile] = []
+    try:
+        existing_size = existing_transfer_size(db, transfer.id)
+        prepared = validate_uploads(files, max_file_bytes=settings.file_share_max_file_bytes, max_transfer_bytes=settings.file_share_max_transfer_bytes, existing_size_bytes=existing_size)
+        if not prepared: raise FileShareValidationError("Выберите хотя бы один файл.")
+        incoming_bytes = sum(item[2] for item in prepared)
+        ensure_storage_capacity(SHARED_FILES_DIR, incoming_bytes=incoming_bytes, current_bytes=storage_usage(db), max_storage_bytes=settings.file_share_max_storage_bytes, max_user_storage_bytes=settings.file_share_max_user_storage_bytes, current_user_bytes=storage_usage(db, owner_id=user.id), min_free_bytes=settings.file_share_min_free_bytes)
+        uploaded_files = write_uploads(db, transfer, prepared, root=SHARED_FILES_DIR, max_file_bytes=settings.file_share_max_file_bytes, max_transfer_bytes=settings.file_share_max_transfer_bytes, existing_size_bytes=existing_size)
+        db.commit()
+    except FileShareValidationError as exc:
+        db.rollback()
+        return redirect_notice(f"/files/{transfer.id}", str(exc))
+    except Exception:
+        db.rollback()
+        for shared_file in uploaded_files:
+            try: remove_shared_file(SHARED_FILES_DIR, shared_file)
+            except FileShareValidationError: pass
+        logger.exception("Temporary file upload failed transfer_id=%s", transfer.id)
+        return redirect_notice(f"/files/{transfer.id}", "Не удалось загрузить файлы. Попробуйте ещё раз.")
+    finally:
+        close_uploads(files)
+    logger.info("Temporary shared files uploaded transfer_id=%s count=%s", transfer.id, len(prepared))
+    return redirect_notice(f"/files/{transfer.id}", "Файлы добавлены")
+
+
+@app.get("/files/{transfer_id}/download/{file_id}")
+def file_transfer_owner_download(transfer_id: int, file_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    shared_file = next((item for item in transfer.files if item.id == file_id), None)
+    if not shared_file: raise HTTPException(status_code=404, detail="Файл не найден")
+    return file_download_response(shared_file)
+
+
+@app.post("/files/{transfer_id}/files/{file_id}/delete")
+def file_transfer_file_delete(transfer_id: int, file_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    shared_file = next((item for item in transfer.files if item.id == file_id), None)
+    if not shared_file: raise HTTPException(status_code=404, detail="Файл не найден")
+    try:
+        remove_shared_file(SHARED_FILES_DIR, shared_file)
+        db.delete(shared_file); db.commit()
+    except FileShareValidationError as exc:
+        db.rollback()
+        return redirect_notice(f"/files/{transfer.id}", str(exc))
+    logger.info("Temporary shared file deleted transfer_id=%s file_id=%s", transfer.id, file_id)
+    return redirect_notice(f"/files/{transfer.id}", "Файл удалён")
+
+
+@app.post("/files/{transfer_id}/delete")
+def file_transfer_delete(transfer_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    try:
+        remove_transfer_storage(SHARED_FILES_DIR, transfer.id)
+        db.delete(transfer); db.commit()
+    except FileShareValidationError as exc:
+        db.rollback()
+        return redirect_notice(f"/files/{transfer.id}", str(exc))
+    logger.info("Temporary file transfer deleted transfer_id=%s owner_id=%s", transfer.id, user.id)
+    return redirect_notice("/files", "Передача удалена")
+
+
+@app.post("/files/cleanup-expired")
+def file_transfer_cleanup_expired(user: User = Depends(get_current_user)):
+    summary = run_file_share_cleanup(owner_id=user.id)
+    return redirect_notice("/files?status_filter=expired", f"Удалено истёкших передач: {summary.transfers_removed}")
+
+
+@app.post("/files/{transfer_id}/extend")
+def file_transfer_extend(transfer_id: int, ttl: str = Form("24h"), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    if ttl not in FILE_SHARE_TTLS:
+        return redirect_notice(f"/files/{transfer.id}", "Выберите корректный срок продления.")
+    transfer.expires_at = utc_now_naive() + FILE_SHARE_TTLS[ttl][0]
+    db.commit()
+    logger.info("Temporary file transfer extended transfer_id=%s owner_id=%s", transfer.id, user.id)
+    return redirect_notice(f"/files/{transfer.id}", "Срок действия ссылки продлён")
+
+
+@app.post("/files/{transfer_id}/rotate-link")
+def file_transfer_rotate_link(transfer_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    transfer = require_owned_file_transfer(db, transfer_id, user)
+    transfer.public_token = new_file_share_token(db)
+    db.commit()
+    logger.info("Temporary file transfer link rotated transfer_id=%s owner_id=%s", transfer.id, user.id)
+    return redirect_notice(f"/files/{transfer.id}", "Ссылка заменена; старая больше не работает")
+
+
+def public_file_transfer(token: str, db: Session) -> TemporaryFileTransfer:
+    transfer = db.scalar(select(TemporaryFileTransfer).options(selectinload(TemporaryFileTransfer.files)).where(TemporaryFileTransfer.public_token == token))
+    if not transfer: raise HTTPException(status_code=404, detail="Передача не найдена")
+    return transfer
+
+
+@app.get("/share/{token}")
+def public_file_transfer_page(request: Request, token: str, db: Session = Depends(get_db)):
+    transfer = public_file_transfer(token, db)
+    expired = transfer_is_expired(transfer, utc_now_naive())
+    response = render(request, "public_file_transfer.html", {"transfer": transfer, "expired": expired})
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    if expired:
+        response.status_code = status.HTTP_410_GONE
+        logger.info("Expired public transfer access transfer_id=%s", transfer.id)
+    return response
+
+
+@app.get("/share/{token}/files/{file_id}/download")
+def public_file_transfer_download(token: str, file_id: int, db: Session = Depends(get_db)):
+    transfer = public_file_transfer(token, db)
+    if transfer_is_expired(transfer, utc_now_naive()):
+        logger.info("Expired public transfer download transfer_id=%s", transfer.id)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Срок действия ссылки истёк")
+    shared_file = next((item for item in transfer.files if item.id == file_id), None)
+    if not shared_file: raise HTTPException(status_code=404, detail="Файл не найден")
+    return file_download_response(shared_file)
 
 
 @app.get("/export/data.json")

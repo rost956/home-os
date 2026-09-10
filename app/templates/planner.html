@@ -25,6 +25,27 @@
     <button class="btn secondary compact" type="button" data-add-reminder>+ Напоминание</button>
 </fieldset>
 {% endmacro %}
+{% macro recurrence_summary(frequency, interval, until) %}
+    {% set every = interval or 1 %}
+    {% if not frequency %}Не повторяется
+    {% elif frequency == 'daily' %}{{ 'Каждый день' if every == 1 else 'Каждые ' ~ every ~ ' дня' }}
+    {% elif frequency == 'weekly' %}{{ 'Каждую неделю' if every == 1 else 'Каждые ' ~ every ~ ' недели' }}
+    {% elif frequency == 'monthly' %}{{ 'Каждый месяц' if every == 1 else 'Каждые ' ~ every ~ ' месяца' }}
+    {% elif frequency == 'yearly' %}{{ 'Каждый год' if every == 1 else 'Каждые ' ~ every ~ ' года' }}
+    {% endif %}{% if until %} · до {{ until.strftime('%d.%m.%Y') }}{% endif %}
+{% endmacro %}
+{% macro recurrence_fields(frequency, interval, until) %}
+<details class="planner-recurrence">
+    <summary><span>Повторение</span><b>{{ recurrence_summary(frequency, interval, until) }}</b></summary>
+    <div class="planner-recurrence-fields">
+        <div class="form-row two-cols"><label>Как часто<select name="recurrence_frequency"><option value="" {% if not frequency %}selected{% endif %}>Не повторять</option><option value="daily" {% if frequency == 'daily' %}selected{% endif %}>Каждый день</option><option value="weekly" {% if frequency == 'weekly' %}selected{% endif %}>Каждую неделю</option><option value="monthly" {% if frequency == 'monthly' %}selected{% endif %}>Каждый месяц</option><option value="yearly" {% if frequency == 'yearly' %}selected{% endif %}>Каждый год</option></select></label><label>Интервал<input name="recurrence_interval" type="number" min="1" value="{{ interval or 1 }}"></label></div>
+        <label>Повторять до<input name="recurrence_until" type="date" value="{{ until.isoformat() if until else '' }}"></label>
+    </div>
+</details>
+{% endmacro %}
+{% macro color_field(color) %}
+<label class="planner-color-field"><span>Цвет</span><input class="planner-color-input" name="color" type="color" value="{{ color }}" data-planner-color><output data-planner-color-value>{{ color|upper }}</output></label>
+{% endmacro %}
 {% block title %}Планировщик{% endblock %}
 {% block content %}
 <div class="page-head compact-head planner-head">
@@ -96,12 +117,12 @@
                             <summary>Изменить</summary>
                             {% set edit = planner_edit_forms.get(item.id) %}
                             <form method="post" action="/planner/{{ item.id }}/update" class="form compact-form planner-form" data-planner-date-form data-planner-edit-id="{{ item.id }}">
-                                <div class="form-row two-cols"><label>Повторение<select name="recurrence_frequency"><option value="" {% if not item.recurrence_frequency %}selected{% endif %}>Не повторять</option><option value="daily" {% if item.recurrence_frequency == 'daily' %}selected{% endif %}>Каждый день</option><option value="weekly" {% if item.recurrence_frequency == 'weekly' %}selected{% endif %}>Каждую неделю</option><option value="monthly" {% if item.recurrence_frequency == 'monthly' %}selected{% endif %}>Каждый месяц</option><option value="yearly" {% if item.recurrence_frequency == 'yearly' %}selected{% endif %}>Каждый год</option></select></label><label>Интервал<input name="recurrence_interval" type="number" min="1" value="{{ item.recurrence_interval or 1 }}"></label></div><label>Повторять до<input name="recurrence_until" type="date" value="{{ item.recurrence_until.isoformat() if item.recurrence_until else '' }}"></label>
-                                <label>Дата окончания<input name="end_date" type="date" value="{{ edit.end_date if edit else (item.end_date or item.scheduled_for).isoformat() }}" required data-planner-end></label>
                                 <label>Название<input name="title" value="{{ item.title }}" maxlength="180" required></label>
-                                <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ item.scheduled_for.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="{{ item.color }}"></label></div>
+                                {{ recurrence_fields(item.recurrence_frequency, item.recurrence_interval, item.recurrence_until) }}
+                                <div class="form-row two-cols"><label>Дата начала<input name="scheduled_for" type="date" value="{{ item.scheduled_for.isoformat() }}" required></label><label>Дата окончания<input name="end_date" type="date" value="{{ edit.end_date if edit else (item.end_date or item.scheduled_for).isoformat() }}" required data-planner-end></label></div>
                                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time" value="{{ item.start_time or '' }}"></label><label>Конец<input name="end_time" type="time" value="{{ item.end_time or '' }}"></label></div>
                                 {{ reminder_fields(edit.reminders if edit and edit.reminders is defined else item.reminders) }}
+                                {{ color_field(item.color) }}
                                 <label>Заметка<textarea name="description" rows="3">{{ item.description or '' }}</textarea></label>
                                 <label class="check-row compact-check"><input type="checkbox" name="is_done" value="1" {% if item.is_done %}checked{% endif %}><span>Выполнено</span></label>
                                 <button class="btn" type="submit">Сохранить</button>
@@ -120,12 +141,12 @@
             <summary><svg class="icon"><use href="#i-plus"></use></svg> Добавить событие</summary>
             {% if planner_validation_error %}<div class="notice error" role="alert">{{ planner_validation_error }}</div>{% endif %}
             <form method="post" action="/planner" class="form planner-form" data-planner-date-form data-planner-create>
-                <div class="form-row two-cols"><label>Повторение<select name="recurrence_frequency"><option value="">Не повторять</option><option value="daily">Каждый день</option><option value="weekly">Каждую неделю</option><option value="monthly">Каждый месяц</option><option value="yearly">Каждый год</option></select></label><label>Интервал<input name="recurrence_interval" type="number" min="1" value="1"></label></div><label>Повторять до<input name="recurrence_until" type="date"></label>
-                <label>Дата окончания<input name="end_date" type="date" value="{{ planner_create_form.end_date }}" required data-planner-end></label>
                 <label>Название<input name="title" maxlength="180" required placeholder="Например, прогулка или врач"></label>
-                <div class="form-row two-cols"><label>Дата<input name="scheduled_for" type="date" value="{{ selected_day.isoformat() }}" required></label><label>Цвет<input class="planner-color-input" name="color" type="color" value="#2563eb"></label></div>
+                {{ recurrence_fields('', 1, none) }}
+                <div class="form-row two-cols"><label>Дата начала<input name="scheduled_for" type="date" value="{{ selected_day.isoformat() }}" required></label><label>Дата окончания<input name="end_date" type="date" value="{{ planner_create_form.end_date }}" required data-planner-end></label></div>
                 <div class="form-row two-cols"><label>Начало<input name="start_time" type="time"></label><label>Конец<input name="end_time" type="time"></label></div>
                 {{ reminder_fields(planner_create_form.reminders) }}
+                {{ color_field('#2563eb') }}
                 <label>Заметка<textarea name="description" rows="3" placeholder="Необязательно"></textarea></label>
                 <button class="btn" type="submit"><svg class="icon"><use href="#i-plus"></use></svg> Добавить</button>
             </form>
@@ -172,6 +193,14 @@ document.querySelectorAll('[data-planner-date-form]').forEach((form) => {
     reminderList.addEventListener('click', (event) => {
         const removeButton = event.target.closest('[data-remove-reminder]');
         if (removeButton) removeButton.closest('.planner-reminder-row').remove();
+    });
+});
+
+document.querySelectorAll('[data-planner-color]').forEach((input) => {
+    const value = input.closest('.planner-color-field').querySelector('[data-planner-color-value]');
+    input.addEventListener('input', () => {
+        value.value = input.value.toUpperCase();
+        value.textContent = input.value.toUpperCase();
     });
 });
 

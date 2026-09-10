@@ -84,6 +84,14 @@ class Settings:
     vapid_public_key: str
     vapid_private_key: str
     vapid_subject: str
+    file_share_dir: Path
+    file_share_max_file_bytes: int
+    file_share_max_transfer_bytes: int
+    file_share_cleanup_seconds: int
+    file_share_orphan_grace_hours: int
+    file_share_max_storage_bytes: int
+    file_share_max_user_storage_bytes: int
+    file_share_min_free_bytes: int
 
     @property
     def is_production(self) -> bool:
@@ -102,6 +110,12 @@ def load_settings() -> Settings:
         secret_key = secrets.token_urlsafe(48)
 
     data_dir = Path(os.getenv("DATA_DIR", "data")).expanduser()
+    configured_share_dir = os.getenv("HOME_FILE_SHARE_DIR", "").strip()
+    file_share_dir = Path(configured_share_dir).expanduser() if configured_share_dir else data_dir / "shared_files"
+    try:
+        file_share_dir.resolve().relative_to(data_dir.resolve())
+    except ValueError as exc:
+        raise RuntimeError("HOME_FILE_SHARE_DIR must be inside DATA_DIR") from exc
     database_url = os.getenv("DATABASE_URL", f"sqlite:///{(data_dir / 'app.db').as_posix()}").strip()
     session_days = env_int("SESSION_MAX_AGE_DAYS", 30, 1, 365)
     return Settings(
@@ -123,6 +137,14 @@ def load_settings() -> Settings:
         vapid_public_key=(os.getenv("HOME_VAPID_PUBLIC_KEY") or os.getenv("VAPID_PUBLIC_KEY") or "").strip(),
         vapid_private_key=(os.getenv("HOME_VAPID_PRIVATE_KEY") or os.getenv("VAPID_PRIVATE_KEY") or "").strip(),
         vapid_subject=(os.getenv("HOME_VAPID_SUBJECT") or os.getenv("VAPID_SUBJECT") or "mailto:admin@example.com").strip(),
+        file_share_dir=file_share_dir,
+        file_share_max_file_bytes=env_int("HOME_FILE_SHARE_MAX_FILE_MB", 100, 1, 1_024) * 1024 * 1024,
+        file_share_max_transfer_bytes=env_int("HOME_FILE_SHARE_MAX_TRANSFER_MB", 500, 1, 10_240) * 1024 * 1024,
+        file_share_cleanup_seconds=env_int("HOME_FILE_SHARE_CLEANUP_SECONDS", 3600, 60, 86_400),
+        file_share_orphan_grace_hours=env_int("HOME_FILE_SHARE_ORPHAN_GRACE_HOURS", 24, 1, 720),
+        file_share_max_storage_bytes=env_int("HOME_FILE_SHARE_MAX_STORAGE_MB", 0, 0, 102_400) * 1024 * 1024,
+        file_share_max_user_storage_bytes=env_int("HOME_FILE_SHARE_MAX_USER_STORAGE_MB", 0, 0, 102_400) * 1024 * 1024,
+        file_share_min_free_bytes=env_int("HOME_FILE_SHARE_MIN_FREE_MB", 512, 0, 102_400) * 1024 * 1024,
     )
 
 

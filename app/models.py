@@ -53,6 +53,51 @@ class User(Base):
         uselist=False,
     )
     ai_actions: Mapped[list["AIAction"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    temporary_file_transfers: Mapped[list["TemporaryFileTransfer"]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+
+
+class TemporaryFileTransfer(Base):
+    __tablename__ = "temporary_file_transfers"
+    __table_args__ = (Index("ix_temporary_file_transfers_owner_expires", "owner_id", "expires_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    public_token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
+    )
+
+    owner: Mapped[User] = relationship(back_populates="temporary_file_transfers")
+    files: Mapped[list["TemporarySharedFile"]] = relationship(
+        back_populates="transfer", cascade="all, delete-orphan", order_by="TemporarySharedFile.id"
+    )
+
+    @property
+    def total_size_bytes(self) -> int:
+        return sum(item.size_bytes for item in self.files)
+
+
+class TemporarySharedFile(Base):
+    __tablename__ = "temporary_shared_files"
+    __table_args__ = (Index("ix_temporary_shared_files_transfer", "transfer_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    transfer_id: Mapped[int] = mapped_column(
+        ForeignKey("temporary_file_transfers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+    transfer: Mapped[TemporaryFileTransfer] = relationship(back_populates="files")
 
 
 class Vehicle(Base):

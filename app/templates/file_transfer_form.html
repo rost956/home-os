@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Новая передача{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Новая передача</h1><div class="subline">Файлы будут доступны только до окончания срока ссылки</div></div><a class="icon-btn" href="/files" aria-label="Назад"><svg class="icon"><use href="#i-arrow-left"></use></svg></a></div>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+<form method="post" action="/files/new" enctype="multipart/form-data" class="card form file-transfer-form"><label>Название *<input name="title" maxlength="160" value="{{ form.title }}" required placeholder="Например, Фото с машины"></label><label>Описание<textarea name="description" rows="3" maxlength="4000" placeholder="Необязательно">{{ form.description }}</textarea></label><label>Срок действия<select name="ttl">{% for value, option in ttl_options.items() %}<option value="{{ value }}" {% if form.ttl == value %}selected{% endif %}>{{ option[1] }}</option>{% endfor %}</select></label><label>Файлы<input name="files" type="file" multiple></label><p class="form-hint">До {{ max_file_mb }} МБ на файл и {{ max_transfer_mb }} МБ на передачу.</p><button class="btn" type="submit">Создать передачу</button></form>
+{% endblock %}

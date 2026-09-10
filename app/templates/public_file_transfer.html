@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}{{ transfer.title }} — общая передача{% endblock %}
+{% block content %}
+<section class="card public-file-transfer"><h1>{{ transfer.title }}</h1>{% if transfer.description %}<p>{{ transfer.description }}</p>{% endif %}{% if expired %}<div class="alert">Срок действия ссылки истёк.</div>{% else %}<p class="subline">Доступна до {{ transfer.expires_at|msk_datetime }}</p>{% if transfer.files %}<section class="file-list">{% for file in transfer.files %}<article class="shared-file-row"><div title="{{ file.original_filename }}"><b>{{ file.original_filename }}</b><small>{{ file.size_bytes|file_size }}</small></div><a class="btn" href="/share/{{ transfer.public_token }}/files/{{ file.id }}/download">Скачать</a></article>{% endfor %}</section>{% else %}<p class="subline">В этой передаче пока нет файлов.</p>{% endif %}{% endif %}</section>
+{% endblock %}

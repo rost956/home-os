@@ -1,7 +1,7 @@
 {$CADDY_SITE_ADDRESS:localhost} {
     encode zstd gzip
     request_body {
-        max_size 16MB
+        max_size {$HOME_FILE_SHARE_MAX_TRANSFER_MB:500}MB
     }
     header {
         -Server

@@ -66,6 +66,14 @@ uvicorn app.main:app --reload
 | `HOME_VAPID_PRIVATE_KEY` | Private key или путь внутри контейнера; значение не коммитить |
 | `HOME_VAPID_SUBJECT` | VAPID contact URI вида `mailto:` или `https://` |
 | `PUSH_ENDPOINT_HOSTS` | Дополнительные доверенные хосты Web Push |
+| `HOME_FILE_SHARE_DIR` | Каталог временных передач внутри `DATA_DIR` |
+| `HOME_FILE_SHARE_MAX_FILE_MB` | Максимальный размер одного файла, по умолчанию 100 МБ |
+| `HOME_FILE_SHARE_MAX_TRANSFER_MB` | Максимальный общий размер передачи, по умолчанию 500 МБ |
+| `HOME_FILE_SHARE_CLEANUP_SECONDS` | Интервал очистки истёкших передач, по умолчанию 3600 секунд |
+| `HOME_FILE_SHARE_ORPHAN_GRACE_HOURS` | Grace period для orphan/partial файлов, по умолчанию 24 часа |
+| `HOME_FILE_SHARE_MAX_STORAGE_MB` | Общий safety cap хранилища, `0` = без лимита |
+| `HOME_FILE_SHARE_MAX_USER_STORAGE_MB` | Личный safety cap, `0` = без лимита |
+| `HOME_FILE_SHARE_MIN_FREE_MB` | Минимальный свободный резерв диска, по умолчанию 512 МБ |
 | `APP_UID`, `APP_GID` | UID/GID пользователя внутри web-контейнера |
 
 Секрет можно создать командой:

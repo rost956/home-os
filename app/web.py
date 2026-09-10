@@ -73,8 +73,9 @@ MOMENT_MEDIA_DIR = MEDIA_DIR / "moments"
 BACKUP_DIR = DATA_DIR / "backups"
 PUSH_VAPID_FILE = DATA_DIR / "push_vapid.json"
 PUSH_VAPID_PRIVATE_KEY_FILE = DATA_DIR / "push_vapid_private.pem"
+SHARED_FILES_DIR = settings.file_share_dir
 
-for path in (MEDIA_DIR, RECIPE_MEDIA_DIR, CHAT_MEDIA_DIR, MOMENT_MEDIA_DIR, BACKUP_DIR):
+for path in (MEDIA_DIR, RECIPE_MEDIA_DIR, CHAT_MEDIA_DIR, MOMENT_MEDIA_DIR, BACKUP_DIR, SHARED_FILES_DIR):
     path.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Дом", docs_url=None if settings.is_production else "/docs", redoc_url=None)
