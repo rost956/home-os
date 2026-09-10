@@ -7,7 +7,7 @@ python-multipart==0.0.32
 itsdangerous==2.2.0
 MarkupSafe==3.0.2
 Pillow==11.1.0
-pywebpush==2.0.3
+pywebpush==2.5.0
 cryptography==50.0.1
 tzdata==2025.2
 httpx==0.28.1
