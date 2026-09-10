@@ -79,9 +79,11 @@ from .services.file_sharing import (
     FileShareValidationError,
     cleanup_all,
     close_uploads,
+    ensure_image_preview,
     ensure_storage_capacity,
     existing_transfer_size,
     format_file_size,
+    is_previewable_image,
     remove_shared_file,
     remove_transfer_storage,
     safe_original_filename,
@@ -5929,6 +5931,14 @@ def new_file_share_token(db: Session) -> str:
             return token
 
 
+def public_share_base_url(request: Request) -> str:
+    """Preserve HTTPS when the app is reached through Caddy's TLS proxy."""
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip().lower()
+    if scheme not in {"http", "https"}:
+        scheme = request.url.scheme
+    return str(request.base_url.replace(scheme=scheme)).rstrip("/")
+
+
 def require_owned_file_transfer(db: Session, transfer_id: int, user: User) -> TemporaryFileTransfer:
     transfer = db.scalar(
         select(TemporaryFileTransfer)
@@ -6027,7 +6037,7 @@ def file_transfer_create(request: Request, title: str = Form(""), description: s
 @app.get("/files/{transfer_id}")
 def file_transfer_detail(request: Request, transfer_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     transfer = require_owned_file_transfer(db, transfer_id, user)
-    share_url = f"{str(request.base_url).rstrip('/')}/share/{transfer.public_token}"
+    share_url = f"{public_share_base_url(request)}/share/{transfer.public_token}"
     return render(request, "file_transfer_detail.html", {"user": user, "transfer": transfer, "share_url": share_url, "now": utc_now_naive(), "ttl_options": FILE_SHARE_TTLS, "max_file_mb": settings.file_share_max_file_bytes // 1024 // 1024, "max_transfer_mb": settings.file_share_max_transfer_bytes // 1024 // 1024})
 
 
@@ -6131,7 +6141,8 @@ def public_file_transfer(token: str, db: Session) -> TemporaryFileTransfer:
 def public_file_transfer_page(request: Request, token: str, db: Session = Depends(get_db)):
     transfer = public_file_transfer(token, db)
     expired = transfer_is_expired(transfer, utc_now_naive())
-    response = render(request, "public_file_transfer.html", {"transfer": transfer, "expired": expired})
+    preview_file_ids = set() if expired else {shared_file.id for shared_file in transfer.files if is_previewable_image(SHARED_FILES_DIR, shared_file)}
+    response = render(request, "public_file_transfer.html", {"transfer": transfer, "expired": expired, "preview_file_ids": preview_file_ids})
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     if expired:
@@ -6149,6 +6160,20 @@ def public_file_transfer_download(token: str, file_id: int, db: Session = Depend
     shared_file = next((item for item in transfer.files if item.id == file_id), None)
     if not shared_file: raise HTTPException(status_code=404, detail="Файл не найден")
     return file_download_response(shared_file)
+
+
+@app.get("/share/{token}/files/{file_id}/preview")
+def public_file_transfer_preview(token: str, file_id: int, db: Session = Depends(get_db)):
+    transfer = public_file_transfer(token, db)
+    if transfer_is_expired(transfer, utc_now_naive()):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Срок действия ссылки истёк")
+    shared_file = next((item for item in transfer.files if item.id == file_id), None)
+    if not shared_file:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    preview = ensure_image_preview(SHARED_FILES_DIR, shared_file)
+    if preview is None or not preview.is_file():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return FileResponse(preview, media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/export/data.json")

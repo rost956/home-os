@@ -6,12 +6,14 @@ import os
 import re
 import secrets
 import shutil
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
 from fastapi import UploadFile
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,7 @@ from app.models import TemporaryFileTransfer, TemporarySharedFile
 logger = logging.getLogger("home_service.file_sharing")
 COPY_CHUNK_SIZE = 1024 * 1024
 STORAGE_KEY_RE = re.compile(r"[a-f0-9]{32}")
+PREVIEW_SIZE = (1200, 1200)
 
 
 class FileShareValidationError(ValueError):
@@ -111,6 +114,51 @@ def storage_path(root: Path, transfer_id: int, storage_key: str) -> Path:
     return target
 
 
+def preview_path(root: Path, transfer_id: int, storage_key: str) -> Path:
+    source = storage_path(root, transfer_id, storage_key)
+    directory = storage_directory(root, transfer_id) / "previews"
+    target = (directory / f"{source.name}.jpg").resolve()
+    if target.parent != directory.resolve():
+        raise ValueError("Unsafe shared preview path")
+    return target
+
+
+def is_previewable_image(root: Path, shared_file: TemporarySharedFile) -> bool:
+    """Decode-validate an image; filename and client MIME never determine previewability."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(storage_path(root, shared_file.transfer_id, shared_file.storage_key)) as image:
+                image.verify()
+        return True
+    except (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError):
+        return False
+
+
+def ensure_image_preview(root: Path, shared_file: TemporarySharedFile) -> Path | None:
+    if not is_previewable_image(root, shared_file):
+        return None
+    target = preview_path(root, shared_file.transfer_id, shared_file.storage_key)
+    if target.is_file():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".tmp")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(storage_path(root, shared_file.transfer_id, shared_file.storage_key)) as image:
+                image = ImageOps.exif_transpose(image)
+                image.thumbnail(PREVIEW_SIZE)
+                if image.mode not in {"RGB", "L"}:
+                    image = image.convert("RGB")
+                image.save(temporary, format="JPEG", quality=82, optimize=True)
+        os.replace(temporary, target)
+    except (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError):
+        temporary.unlink(missing_ok=True)
+        return None
+    return target
+
+
 def existing_transfer_size(db: Session, transfer_id: int) -> int:
     return int(db.scalar(select(func.coalesce(func.sum(TemporarySharedFile.size_bytes), 0)).where(TemporarySharedFile.transfer_id == transfer_id)) or 0)
 
@@ -182,6 +230,7 @@ def write_uploads(db: Session, transfer: TemporaryFileTransfer, prepared: list[t
 def remove_shared_file(root: Path, shared_file: TemporarySharedFile) -> None:
     try:
         storage_path(root, shared_file.transfer_id, shared_file.storage_key).unlink(missing_ok=True)
+        preview_path(root, shared_file.transfer_id, shared_file.storage_key).unlink(missing_ok=True)
     except OSError as exc:
         raise FileShareValidationError("Не удалось удалить файл с диска.") from exc
 

@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import timedelta
 from io import BytesIO
 
+from PIL import Image
 from sqlalchemy import create_engine, inspect
 
 import app.main as main_module
@@ -23,6 +24,12 @@ def create_transfer(client, title="Photos", files=None, ttl="24h"):
         files=files or [],
         follow_redirects=False,
     )
+
+
+def image_payload(image_format: str) -> bytes:
+    output = BytesIO()
+    Image.new("RGBA" if image_format == "PNG" else "RGB", (1600, 1200), "blue").save(output, format=image_format)
+    return output.getvalue()
 
 
 def test_create_transfer_uploads_multiple_unicode_duplicate_files_and_ttl(client, db, make_user, login):
@@ -202,3 +209,63 @@ def test_expiry_boundaries_and_runtime_migration(tmp_path, monkeypatch):
     assert main_module.schema_change_required() is True
     main_module.ensure_runtime_schema()
     assert {"temporary_file_transfers", "temporary_shared_files"} <= set(inspect(legacy_engine).get_table_names())
+
+
+def test_public_image_previews_validate_content_cache_and_preserve_original(client, db, make_user, login):
+    user = make_user("preview-owner")
+    login(user.username)
+    jpeg = image_payload("JPEG")
+    png = image_payload("PNG")
+    created = create_transfer(client, files=[("files", ("photo.jpg", BytesIO(jpeg), "application/octet-stream")), ("files", ("drawing.png", BytesIO(png), "application/octet-stream")), ("files", ("evil.jpg", BytesIO(b"not an image"), "image/jpeg")), ("files", ("manual.pdf", BytesIO(b"%PDF-1.7"), "application/pdf"))])
+    assert created.status_code == 303
+    transfer = db.query(TemporaryFileTransfer).one()
+    jpeg_file, png_file, evil_file, pdf_file = transfer.files
+    original = storage_path(SHARED_FILES_DIR, transfer.id, jpeg_file.storage_key).read_bytes()
+    client.post("/logout")
+
+    page = client.get(f"/share/{transfer.public_token}")
+    jpeg_preview = client.get(f"/share/{transfer.public_token}/files/{jpeg_file.id}/preview")
+    cached_preview = client.get(f"/share/{transfer.public_token}/files/{jpeg_file.id}/preview")
+    png_preview = client.get(f"/share/{transfer.public_token}/files/{png_file.id}/preview")
+    evil_preview = client.get(f"/share/{transfer.public_token}/files/{evil_file.id}/preview")
+    pdf_preview = client.get(f"/share/{transfer.public_token}/files/{pdf_file.id}/preview")
+
+    assert page.status_code == 200 and "share-gallery" in page.text and "share-file-card" in page.text
+    assert f'/files/{jpeg_file.id}/preview' in page.text and f'/files/{png_file.id}/preview' in page.text
+    assert f'/files/{evil_file.id}/preview' not in page.text and f'/files/{pdf_file.id}/preview' not in page.text
+    assert jpeg_preview.status_code == cached_preview.status_code == png_preview.status_code == 200
+    assert jpeg_preview.headers["cache-control"] == "no-store" and jpeg_preview.headers["content-type"].startswith("image/jpeg")
+    assert evil_preview.status_code == pdf_preview.status_code == 404
+    assert storage_path(SHARED_FILES_DIR, transfer.id, jpeg_file.storage_key).read_bytes() == original
+    preview_path = SHARED_FILES_DIR / str(transfer.id) / "previews" / f"{jpeg_file.storage_key}.jpg"
+    assert preview_path.is_file()
+
+
+def test_public_preview_enforces_token_expiry_paths_cleanup_and_https_share_url(client, db, make_user, login):
+    alice = make_user("preview-alice")
+    bob = make_user("preview-bob")
+    login(alice.username)
+    create_transfer(client, title="Alice", files=[("files", ("photo.jpg", BytesIO(image_payload("JPEG")), "image/jpeg"))])
+    alice_transfer = db.query(TemporaryFileTransfer).filter_by(owner_id=alice.id).one()
+    alice_file = alice_transfer.files[0]
+    assert client.get(f"/files/{alice_transfer.id}", headers={"x-forwarded-proto": "https"}).text.find(f"https://testserver/share/{alice_transfer.public_token}") >= 0
+    client.post("/logout")
+    login(bob.username)
+    create_transfer(client, title="Bob", files=[("files", ("photo.jpg", BytesIO(image_payload("JPEG")), "image/jpeg"))])
+    bob_transfer = db.query(TemporaryFileTransfer).filter_by(owner_id=bob.id).one()
+    client.post("/logout")
+
+    assert client.get(f"/share/{alice_transfer.public_token}/files/{bob_transfer.files[0].id}/preview").status_code == 404
+    assert client.get(f"/share/{alice_transfer.public_token}/files/{alice_file.id}/preview").status_code == 200
+    preview_dir = SHARED_FILES_DIR / str(alice_transfer.id) / "previews"
+    login(alice.username)
+    assert client.post(f"/files/{alice_transfer.id}/delete", follow_redirects=False).status_code == 303
+    assert not preview_dir.exists()
+
+    create_transfer(client, title="Expired", files=[("files", ("photo.jpg", BytesIO(image_payload("JPEG")), "image/jpeg"))])
+    expired = db.query(TemporaryFileTransfer).filter_by(owner_id=alice.id).one()
+    expired.expires_at = now_utc() - timedelta(seconds=1)
+    db.commit()
+    client.post("/logout")
+    assert client.get(f"/share/{expired.public_token}/files/{expired.files[0].id}/preview").status_code == 410
+    assert str(SHARED_FILES_DIR) not in client.get(f"/share/{expired.public_token}/files/{expired.files[0].id}/preview").text

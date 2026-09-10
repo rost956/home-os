@@ -118,3 +118,23 @@ def test_global_storage_cap_rejects_overflow(client, db, make_user, login, monke
     response = client.post("/files/new", data={"title": "No room", "ttl": "24h"}, files=[("files", ("large.txt", BytesIO(b"123"), "text/plain"))])
     assert response.status_code == 200
     assert db.query(TemporaryFileTransfer).count() == 0
+
+
+def test_expired_cleanup_removes_derived_preview_directory(client, db, make_user, login):
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new("RGB", (80, 60), "green").save(output, format="JPEG")
+    user = make_user("preview-cleanup")
+    login(user.username)
+    client.post("/files/new", data={"title": "Preview", "ttl": "24h"}, files=[("files", ("photo.jpg", BytesIO(output.getvalue()), "image/jpeg"))])
+    transfer = db.query(TemporaryFileTransfer).one()
+    shared_file = transfer.files[0]
+    client.post("/logout")
+    assert client.get(f"/share/{transfer.public_token}/files/{shared_file.id}/preview").status_code == 200
+    preview_dir = SHARED_FILES_DIR / str(transfer.id) / "previews"
+    transfer.expires_at = now_utc() - timedelta(seconds=1)
+    db.commit()
+
+    assert cleanup_expired_transfers(db, root=SHARED_FILES_DIR, now=now_utc()).transfers_removed == 1
+    assert not preview_dir.exists()

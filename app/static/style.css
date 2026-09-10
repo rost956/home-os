@@ -3031,6 +3031,19 @@ html[data-theme="dark"] .success-alert {
 .file-upload-panel { box-shadow: none; }
 .public-file-transfer { max-width: 760px; margin-inline: auto; }
 .public-file-transfer > p { overflow-wrap: anywhere; }
+.share-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; margin-top: 14px; }
+.share-image-card { min-width: 0; overflow: hidden; padding: 0; box-shadow: none; }
+.share-image-preview { display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; background: var(--soft); cursor: zoom-in; }
+.share-image-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.share-image-meta, .share-file-card { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; }
+.share-image-meta > div, .share-file-card > div { min-width: 0; display: grid; gap: 4px; }
+.share-image-meta b, .share-file-card b { overflow-wrap: anywhere; }
+.share-image-meta small, .share-file-card small { color: var(--muted); font-size: 12px; }
+.share-file-list { display: grid; gap: 8px; margin-top: 14px; }
+.share-lightbox[hidden] { display: none; }
+.share-lightbox { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0, 0, 0, .86); }
+.share-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.share-lightbox-close { position: absolute; top: 12px; right: 16px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--card); color: var(--text); font-size: 30px; line-height: 1; cursor: pointer; }
 .planner-reminders { display: grid; gap: 8px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
 .planner-reminders legend { padding: 0 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
 .planner-reminder-list { display: grid; gap: 7px; }
@@ -3132,6 +3145,8 @@ html[data-theme="dark"] .success-alert {
     .file-share-link > div .btn { width: 100%; }
     .file-owner-tools, .file-owner-tools form { align-items: stretch; flex-direction: column; width: 100%; }
     .file-owner-tools .btn, .file-owner-tools select { width: 100%; }
+    .share-image-meta, .share-file-card { align-items: stretch; flex-direction: column; }
+    .share-image-meta .btn, .share-file-card .btn { width: 100%; }
 }
 .cashflow-label b { font-weight: 900; }
 
