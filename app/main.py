@@ -2050,6 +2050,19 @@ def moment_media(filename: str, user: User = Depends(get_current_user), db: Sess
     return FileResponse(path, headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
+@app.get("/moments/{moment_id}/photo/download")
+def moment_photo_download(moment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    moment = db.get(Moment, moment_id)
+    if not moment or moment.owner_id != user.id or not moment.photo_path:
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    safe_name = Path(moment.photo_path).name
+    path = MOMENT_MEDIA_DIR / safe_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", moment.title).strip()[:120] or f"moment-{moment.id}"
+    return FileResponse(path, filename=f"{title}{path.suffix.lower()}", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/media/chats/{filename}")
 def chat_media(filename: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     safe_name = Path(filename).name

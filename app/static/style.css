@@ -3065,8 +3065,9 @@ html[data-theme="dark"] .success-alert {
 .moments-day-view-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
 .moments-day-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; }
 .moment-card { display: flex; flex-direction: column; grid-template-columns: none; }
-.moment-photo { width: 100%; min-height: 0; aspect-ratio: 4 / 3; padding: 0; border: 0; cursor: zoom-in; }
-.moment-photo img { min-height: 0; aspect-ratio: 4 / 3; }
+.moment-photo { width: 100%; min-height: 0; padding: 0; border: 0; background: var(--soft); cursor: zoom-in; }
+.moment-photo img { width: 100%; height: auto; min-height: 0; max-height: 70vh; object-fit: contain; }
+.moment-photo-download { justify-self: start; }
 .moment-card-body { flex: 1; padding: 14px; }
 .moment-card-head h3 { margin: 0; overflow-wrap: anywhere; font-size: 16px; }
 .moments-day-empty { color: var(--muted); text-align: center; }
@@ -3120,7 +3121,8 @@ html[data-theme="dark"] .success-alert {
     .moment-form-footer .btn { width: 100%; }
     .photo-picker { width: 100%; }
     .moment-card { grid-template-columns: minmax(0, 1fr); }
-    .moment-photo, .moment-photo img { min-height: 0; aspect-ratio: 4 / 3; }
+    .moment-photo, .moment-photo img { height: auto; min-height: 0; aspect-ratio: auto; }
+    .moment-photo-download { width: 100%; }
     .moment-card-body { padding: 14px; }
     .planner-toolbar { align-items: stretch; flex-wrap: wrap; }
     .planner-push-settings { align-items: stretch; flex-direction: column; }

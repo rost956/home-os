@@ -74,17 +74,21 @@ def test_edit_moves_calendar_day_delete_removes_it_and_thumbnail_is_private_cach
     first = client.get(f"/media/moments/thumb/{filename}")
     thumbnail = MOMENT_THUMB_DIR / "photo-calendar.jpg"
     second = client.get(f"/media/moments/thumb/{filename}")
+    download = client.get(f"/moments/{moment.id}/photo/download")
     moved = client.post(f"/moments/{moment.id}/update", data={"title": "Photo", "description": "", "happened_on": "2026-09-11"}, follow_redirects=False)
     old_day = client.get("/moments?year=2026&month=9&day=2026-09-10")
     new_day = client.get("/moments?year=2026&month=9&day=2026-09-11")
 
     assert first.status_code == second.status_code == 200
     assert first.headers["content-type"].startswith("image/jpeg") and thumbnail.is_file()
+    assert download.status_code == 200 and download.content == image_bytes()
+    assert "attachment" in download.headers["content-disposition"]
     assert (MOMENT_MEDIA_DIR / filename).is_file()  # original remains untouched
     assert moved.status_code == 303 and "Photo" not in old_day.text and "Photo" in new_day.text
     client.post("/logout")
     login(bob.username)
     assert client.get(f"/media/moments/thumb/{filename}").status_code == 404
+    assert client.get(f"/moments/{moment.id}/photo/download").status_code == 404
     client.post("/logout")
     login(alice.username)
     deleted = client.post(f"/moments/{moment.id}/delete", follow_redirects=False)
@@ -116,3 +120,5 @@ def test_calendar_uses_scoped_compact_cell_and_mobile_contract(client, db, make_
     assert "@media (max-width: 720px)" in css
     assert ".moments-calendar-cell { min-height: 68px" in css
     assert ".moments-calendar-thumb { min-height: 38px; aspect-ratio: 1 / 1;" in css
+    assert ".moments-calendar-thumb { display: block;" in css and "object-fit: cover;" in css
+    assert ".moment-photo img { width: 100%; height: auto;" in css and "object-fit: contain;" in css
