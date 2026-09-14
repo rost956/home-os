@@ -14,10 +14,13 @@ from app.models import (
     FuelMonitorSettings,
     FuelObservation,
     FuelStation,
-    FuelStationComment,
+    FuelStationChatMessage,
     FuelStationFuel,
+    FuelStationMark,
 )
 from app.services.fuel import (
+    FuelChatFeed,
+    FuelMarksFeed,
     FuelStationCandidate,
     GdeBenzProvider,
     ProviderUnavailable,
@@ -27,14 +30,17 @@ from app.services.fuel import (
     source_is_stale,
 )
 from app.services.fuel_analytics import (
+    FORECAST_VERSION,
     backfill_delivery_events,
     build_forecast,
-    comment_signal,
+    chat_delivery_signal,
     correlate_event_series,
     detect_delivery_events,
+    mark_evidence_weight,
     station_correlations,
 )
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
+from app.timezone import format_msk
 
 
 def test_gdebenz_normalization_per_fuel():
@@ -115,7 +121,7 @@ def test_fuel_dashboard_renders_forecast_stale_and_collector_error(client, login
             range_from=now + timedelta(hours=1),
             range_to=now + timedelta(hours=3),
             confidence=0.72,
-            model_version="test",
+            model_version=FORECAST_VERSION,
             reason_json={},
         )
     )
@@ -350,6 +356,66 @@ def test_gdebenz_provider_follows_redirects_sends_headers_and_parses_stations():
     assert requests[0].headers["referer"] == "https://gdebenz.ru/"
 
 
+def test_gdebenz_marks_use_persistent_frontend_client_id_and_fresh_request(tmp_path):
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/recent"):
+            created_at = "2026-09-14 21:17:35" if request.url.params.get("fp") else "2026-09-14 20:23:33"
+            return httpx.Response(200, json=[{"status": "queue", "detail": "92, 95, ДТ", "created_at": created_at}], request=request)
+        return httpx.Response(200, json={"cvt": "station-token"}, request=request)
+
+    client_id_path = tmp_path / "gdebenz_client_id"
+    provider = GdeBenzProvider(transport=httpx.MockTransport(handler), client_id_path=client_id_path)
+    feed = asyncio.run(provider.get_station_marks("1947395383"))
+    first_client_id = client_id_path.read_text(encoding="ascii")
+    recreated = GdeBenzProvider(transport=httpx.MockTransport(handler), client_id_path=client_id_path)
+    asyncio.run(recreated.get_station_marks("1947395383"))
+
+    recent = next(request for request in requests if request.url.path.endswith("/recent"))
+    assert feed.latest_source_at == datetime(2026, 9, 14, 21, 17, 35)
+    assert len(first_client_id) == 32
+    assert recent.url.params["fp"] == first_client_id
+    assert recent.url.params["cvt"] == "station-token"
+    assert recent.url.params["_"].isdigit()
+    assert all(request.url.params.get("fp") == first_client_id for request in requests if request.url.path.endswith("/recent"))
+
+
+def test_gdebenz_marks_flag_degraded_when_client_id_cannot_be_persisted(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/recent"):
+            return httpx.Response(200, json=[], request=request)
+        return httpx.Response(200, json={"cvt": ""}, request=request)
+
+    provider = GdeBenzProvider(
+        transport=httpx.MockTransport(handler),
+        client_id_path=tmp_path,
+    )
+    feed = asyncio.run(provider.get_station_marks("1947395383"))
+    assert feed.freshness_degraded is True
+
+
+def test_gdebenz_chat_parses_messages_and_merges_badges():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/comments-badges":
+            return httpx.Response(200, json={"reliable": [540191], "onsite": [534095], "tiers": {"540191": 2}}, request=request)
+        return httpx.Response(200, json={"comments": [{"id": 534095, "author_id": 540191, "author_name": "Владимир В.",
+            "body": "бензовоз слился, привез 95 и 92", "created_at": "2026-09-14T14:42:15.297916Z", "reactions": {}}], "next_cursor": None}, request=request)
+
+    provider = GdeBenzProvider(transport=httpx.MockTransport(handler))
+    feed = asyncio.run(provider.get_station_chat("1947395383"))
+    assert feed.items[0]["author_reliable"] is True
+    assert feed.items[0]["author_tier"] == 2
+    assert feed.items[0]["on_site"] is True
+    assert requests[0].url.host == "api.gdebenz.ru"
+    assert requests[1].method == "POST"
+    assert requests[1].url.path == "/api/comments-badges"
+
+
 def test_gdebenz_http_status_error_logs_response_context(monkeypatch, caplog):
     async def no_sleep(_delay):
         return None
@@ -375,8 +441,12 @@ class FakeProvider:
         return [FuelStationCandidate(provider="gdebenz", provider_station_id="station", latitude=latitude, longitude=longitude,
                                      raw={"status": "yes", "fuels_now": "95,100", "last_at": "2026-09-14 12:00:00", "confirmations": 4, "confidence_base": 0.7})]
 
-    async def get_station_comments(self, provider_station_id, limit=12):
-        return [{"status": "yes", "detail": "95", "created_at": "2026-09-14 12:00:00"}]
+    async def get_station_marks(self, provider_station_id, limit=12):
+        item = {"status": "yes", "detail": "95", "created_at": "2026-09-14 12:00:00"}
+        return FuelMarksFeed(items=[item], latest_source_at=datetime(2026, 9, 14, 12))
+
+    async def get_station_chat(self, provider_station_id, limit=20):
+        return FuelChatFeed()
 
 
 def test_collector_persists_only_selected_fuels_and_skips_disabled(make_user):
@@ -390,17 +460,158 @@ def test_collector_persists_only_selected_fuels_and_skips_disabled(make_user):
         db.commit()
         station_id = enabled.id
     provider = FakeProvider()
-    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, nearby_radius_km=3, comments_due=True))
+    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
     with SessionLocal() as db:
         observations = db.query(FuelObservation).filter_by(station_id=station_id).all()
-        comments = db.query(FuelStationComment).filter_by(station_id=station_id).all()
+        marks = db.query(FuelStationMark).filter_by(station_id=station_id).all()
         station = db.get(FuelStation, station_id)
     assert summary == {"stations": 1, "success": 1, "failed": 0, "observations": 2}
     assert {item.fuel_type for item in observations} == {"95", "100"}
     assert station.last_successful_poll_at is not None
-    assert len(comments) == 1
+    assert len(marks) == 1
     assert len(provider.calls) == 1
     assert provider.calls[0] == (59.9, 30.2)
+
+
+def _create_polled_station(make_user, username):
+    user = make_user(username)
+    with SessionLocal() as db:
+        station = FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id=username,
+            latitude=59.9, longitude=30.2)
+        db.add(station)
+        db.flush()
+        db.add(FuelStationFuel(station_id=station.id, fuel_type="95", enabled=True))
+        db.commit()
+        return station.id
+
+
+def test_mark_ingestion_is_idempotent_and_keeps_identical_content_at_different_times(make_user):
+    station_id = _create_polled_station(make_user, "mark-dedupe")
+
+    class MarkProvider:
+        poll = 0
+
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [FuelStationCandidate(provider="gdebenz", provider_station_id="mark-dedupe",
+                latitude=latitude, longitude=longitude,
+                raw={"status": "queue", "fuelsNow": "95", "updated": "2026-09-14 21:20:00"})]
+
+        async def get_station_marks(self, provider_station_id, limit=12):
+            self.poll += 1
+            marks = [{"status": "queue", "detail": "92,95,ДТ", "created_at": "2026-09-14 21:15:00"}]
+            if self.poll > 1:
+                marks += [
+                    {"status": "queue", "detail": "92,95,ДТ", "created_at": "2026-09-14 21:17:00"},
+                    {"status": "queue", "detail": "92,95,ДТ", "created_at": "2026-09-14 21:20:00"},
+                ]
+            return FuelMarksFeed(items=marks, latest_source_at=parse_source_datetime(marks[-1]["created_at"]))
+
+        async def get_station_chat(self, provider_station_id, limit=20):
+            return FuelChatFeed()
+
+    provider = MarkProvider()
+    first = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+        stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+    second = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+        stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+    with SessionLocal() as db:
+        marks = db.query(FuelStationMark).filter_by(station_id=station_id).order_by(FuelStationMark.source_created_at).all()
+    assert first["failed"] == second["failed"] == 0
+    assert [mark.source_created_at.minute for mark in marks] == [15, 17, 20]
+
+
+def test_chat_ingestion_deduplicates_stable_provider_message_id(make_user):
+    station_id = _create_polled_station(make_user, "chat-dedupe")
+
+    class ChatProvider:
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [FuelStationCandidate(provider="gdebenz", provider_station_id="chat-dedupe",
+                latitude=latitude, longitude=longitude,
+                raw={"status": "yes", "fuelsNow": "95", "updated": "2026-09-14 14:42:15"})]
+
+        async def get_station_marks(self, provider_station_id, limit=12):
+            return FuelMarksFeed()
+
+        async def get_station_chat(self, provider_station_id, limit=20):
+            item = {"id": 534095, "author_id": 540191, "author_name": "Владимир В.",
+                "body": "бензовоз слился, привез 95 и 92", "created_at": "2026-09-14T14:42:15Z",
+                "reactions": {}, "author_reliable": True, "on_site": True}
+            return FuelChatFeed(items=[item], latest_source_at=parse_source_datetime(item["created_at"]))
+
+    provider = ChatProvider()
+    for _ in range(2):
+        summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+            stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+        assert summary["failed"] == 0
+    with SessionLocal() as db:
+        messages = db.query(FuelStationChatMessage).filter_by(station_id=station_id).all()
+    assert len(messages) == 1
+    assert messages[0].provider_message_id == "534095"
+
+
+def test_chat_initial_backfill_is_bounded_and_later_polls_only_latest_page(make_user):
+    station_id = _create_polled_station(make_user, "chat-pages")
+
+    class PagedChatProvider:
+        cursors = []
+
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [FuelStationCandidate(provider="gdebenz", provider_station_id="chat-pages",
+                latitude=latitude, longitude=longitude,
+                raw={"status": "yes", "fuelsNow": "95", "updated": "2026-09-14 15:00:00"})]
+
+        async def get_station_marks(self, provider_station_id, limit=12):
+            return FuelMarksFeed()
+
+        async def get_station_chat(self, provider_station_id, limit=20, cursor=None):
+            self.cursors.append(cursor)
+            page = 0 if cursor is None else int(cursor)
+            item = {"id": page + 1, "author_id": page + 10, "body": f"message {page}",
+                "created_at": f"2026-09-14T14:{40 + page:02d}:00Z"}
+            return FuelChatFeed(items=[item], next_cursor=page + 1)
+
+    provider = PagedChatProvider()
+    asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+        stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+    asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+        stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+    with SessionLocal() as db:
+        assert db.query(FuelStationChatMessage).filter_by(station_id=station_id).count() == 3
+    assert provider.cursors == [None, 1, 2, None]
+
+
+def test_marks_and_chat_timestamps_are_utc_and_render_once_in_moscow():
+    chat_at = parse_source_datetime("2026-09-14T14:42:15Z")
+    mark_at = parse_source_datetime("2026-09-14 21:15:13")
+    assert chat_at == datetime(2026, 9, 14, 14, 42, 15)
+    assert mark_at == datetime(2026, 9, 14, 21, 15, 13)
+    assert format_msk(chat_at, "%d.%m %H:%M") == "14.09 17:42"
+    assert format_msk(mark_at, "%d.%m %H:%M") == "15.09 00:15"
+
+
+def test_stale_marks_feed_does_not_turn_available_aggregate_into_unavailable(make_user):
+    station_id = _create_polled_station(make_user, "stale-marks")
+
+    class StaleMarksProvider:
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [FuelStationCandidate(provider="gdebenz", provider_station_id="stale-marks",
+                latitude=latitude, longitude=longitude,
+                raw={"status": "yes", "fuelsNow": "95", "updated": "2026-09-14 21:15:00"})]
+
+        async def get_station_marks(self, provider_station_id, limit=12):
+            item = {"status": "yes", "detail": "92,95,ДТ", "created_at": "2026-09-14 20:23:00"}
+            return FuelMarksFeed(items=[item], latest_source_at=parse_source_datetime(item["created_at"]))
+
+        async def get_station_chat(self, provider_station_id, limit=20):
+            return FuelChatFeed()
+
+    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=StaleMarksProvider(),
+        stale_after_minutes=120, nearby_radius_km=3, marks_chat_due=True))
+    with SessionLocal() as db:
+        observed = db.query(FuelObservation).filter_by(station_id=station_id).one()
+    assert summary["failed"] == 0
+    assert observed.state == "available"
+    assert main_module.collector_health.last_marks_feed_stale is True
 
 
 def test_collector_uses_configured_radius_and_matches_station_id(make_user):
@@ -423,8 +634,11 @@ def test_collector_uses_configured_radius_and_matches_station_id(make_user):
             return [FuelStationCandidate(provider="gdebenz", provider_station_id="usr_-yN7-ZKW2RA", latitude=latitude, longitude=longitude, distance_meters=2100,
                                          raw={"status": "queue", "fuels_now": "95", "last_at": "2026-09-14 12:00:00"})]
 
-        async def get_station_comments(self, provider_station_id, limit=12):
-            return []
+        async def get_station_marks(self, provider_station_id, limit=12):
+            return FuelMarksFeed()
+
+        async def get_station_chat(self, provider_station_id, limit=20):
+            return FuelChatFeed()
 
     provider = RadiusProvider()
     summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, nearby_radius_km=3))
@@ -436,9 +650,9 @@ def test_collector_uses_configured_radius_and_matches_station_id(make_user):
     assert observation.state == "low"
 
 
-def observation(identifier, state, minute, *, stale=False, confidence=0.8, confirmations=5):
-    return FuelObservation(id=identifier, station_id=1, fuel_type="95", state=state,
-        observed_at=datetime(2026, 9, 14, 15, minute), is_stale=stale,
+def observation(identifier, state, minute, *, fuel_type="95", stale=False, confidence=0.8, confirmations=5):
+    return FuelObservation(id=identifier, station_id=1, fuel_type=fuel_type, state=state,
+        observed_at=datetime(2026, 9, 14, 15) + timedelta(minutes=minute), is_stale=stale,
         confidence=confidence, confirmations=confirmations)
 
 
@@ -466,14 +680,88 @@ def test_delivery_detector_rejects_noise_unknown_large_gap_and_stale():
                                    observation(3, "available", 20), observation(4, "available", 25)]) == []
 
 
-def test_comment_rules_are_fuel_specific_and_metadata_weighted():
-    positive = FuelStationComment(station_id=1, provider="gdebenz", source_key="p", text="Привезли 95",
-        fetched_at=datetime(2026, 9, 14, 15), raw_data={"on_site": True, "author_reliable": True, "author_tier": 3})
-    waiting = FuelStationComment(station_id=1, provider="gdebenz", source_key="n", text="Ждут бензовоз, не привезли 95",
-        fetched_at=datetime(2026, 9, 14, 15), raw_data={})
-    assert comment_signal(positive, "95") > 0.05
-    assert comment_signal(positive, "100") == 0
-    assert comment_signal(waiting, "95") < 0
+def chat_message(message_id, body, *, minute=20, on_site=False, reliable=False, tier=0):
+    return FuelStationChatMessage(station_id=1, provider="gdebenz", provider_message_id=str(message_id),
+        author_id=str(message_id), body=body, source_created_at=datetime(2026, 9, 14, 15) + timedelta(minutes=minute),
+        on_site=on_site, author_reliable=reliable, author_tier=tier)
+
+
+def test_chat_rules_are_fuel_specific_and_metadata_weighted():
+    positive = chat_message(1, "Бензовоз слился, привез 95 и 92", on_site=True, reliable=True, tier=3)
+    waiting = chat_message(2, "Говорят, скоро привезут бензин")
+    assert chat_delivery_signal(positive, "95") > 0.4
+    assert chat_delivery_signal(positive, "100") == 0
+    assert chat_delivery_signal(waiting, "95", allow_station_level=True) < 0
+
+
+def test_short_appearance_is_not_a_delivery_or_forecast_training_event():
+    events = detect_delivery_events([
+        observation(1, "unavailable", 0), observation(2, "unavailable", 5),
+        observation(3, "low", 10), observation(4, "low", 15), observation(5, "unavailable", 20),
+    ])
+    assert len(events) == 1
+    assert events[0]["event_type"] == "availability_appearance"
+    assert events[0]["appearance_confidence"] > 0.8
+    assert events[0]["delivery_confidence"] < 0.6
+    assert events[0]["availability_duration_minutes"] == 10
+
+
+def test_direct_delivery_chat_confirms_only_matching_fuel():
+    observations = []
+    identifier = 1
+    for fuel in ("95", "98"):
+        for state, minute in (("unavailable", 0), ("unavailable", 5), ("available", 10), ("available", 15)):
+            item = observation(identifier, state, minute, fuel_type=fuel)
+            item.fuel_type = fuel
+            observations.append(item)
+            identifier += 1
+    message = chat_message(20, "бензовоз слился, привез 95 и 92", minute=8, on_site=True, reliable=True)
+    events = {event["fuel_type"]: event for event in detect_delivery_events(observations, chat_messages=[message])}
+    assert events["95"]["event_type"] == "confirmed_delivery"
+    assert events["98"]["event_type"] != "confirmed_delivery"
+    assert events["95"]["estimated_at"] == message.source_created_at
+    assert events["95"]["evidence_json"]["availability_started_at"] != events["95"]["evidence_json"]["delivery_window_start"]
+
+
+def test_waiting_chat_never_confirms_delivery():
+    observations = [
+        observation(1, "unavailable", 0), observation(2, "unavailable", 5),
+        observation(3, "available", 10), observation(4, "available", 15),
+    ]
+    message = chat_message(21, "говорят скоро привезут бензин", minute=8)
+    event = detect_delivery_events(observations, chat_messages=[message])[0]
+    assert event["event_type"] != "confirmed_delivery"
+    assert event["evidence_json"]["chat_score"] < 0
+
+
+def test_durable_and_multi_fuel_appearances_raise_delivery_confidence():
+    short = detect_delivery_events([
+        observation(1, "unavailable", 0), observation(2, "unavailable", 5),
+        observation(3, "available", 10), observation(4, "available", 15), observation(5, "unavailable", 20),
+    ])[0]
+    durable_observations = []
+    identifier = 10
+    for fuel in ("95", "98", "100"):
+        for state, minute in (("unavailable", 0), ("unavailable", 5), ("available", 10),
+                              ("available", 20), ("available", 35), ("available", 60)):
+            item = observation(identifier, state, minute, fuel_type=fuel)
+            item.fuel_type = fuel
+            durable_observations.append(item)
+            identifier += 1
+    durable = detect_delivery_events(durable_observations)
+    assert all(event["delivery_confidence"] > short["delivery_confidence"] for event in durable)
+    assert all(event["event_type"] == "probable_delivery" for event in durable)
+
+
+def test_fresh_trusted_mark_has_more_weight_than_old_untrusted_mark():
+    transition = datetime(2026, 9, 14, 15, 20)
+    fresh = FuelStationMark(station_id=1, provider="gdebenz", source_key="fresh", text="92, 95, ДТ",
+        source_created_at=transition - timedelta(minutes=2), fetched_at=transition,
+        raw_data={"status": "queue", "on_site": True, "author_reliable": True, "author_tier": 2, "acct_ok": True})
+    old = FuelStationMark(station_id=1, provider="gdebenz", source_key="old", text="92, 95, ДТ",
+        source_created_at=transition - timedelta(minutes=45), fetched_at=transition,
+        raw_data={"status": "queue", "on_site": False, "author_reliable": False, "author_tier": 0, "acct_ok": False})
+    assert mark_evidence_weight(fresh, "95", transition) > mark_evidence_weight(old, "95", transition)
 
 
 def test_delivery_backfill_is_idempotent(db, make_user):
@@ -492,6 +780,31 @@ def test_delivery_backfill_is_idempotent(db, make_user):
     assert db.query(FuelDeliveryEvent).count() == 1
 
 
+def test_backfill_upgrades_existing_appearance_when_direct_chat_arrives(db, make_user):
+    user = make_user("backfill-chat-upgrade")
+    station = FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="backfill-chat",
+        latitude=59.9, longitude=30.2)
+    db.add(station)
+    db.flush()
+    for item in [observation(None, "unavailable", 0), observation(None, "unavailable", 5),
+                 observation(None, "available", 10), observation(None, "available", 15)]:
+        item.station_id = station.id
+        db.add(item)
+    db.commit()
+    assert backfill_delivery_events(db, station.id) == 1
+    db.commit()
+    event = db.query(FuelDeliveryEvent).one()
+    assert event.event_type == "availability_appearance"
+    db.add(FuelStationChatMessage(station_id=station.id, provider="gdebenz", provider_message_id="upgrade",
+        author_id="trusted", body="бензовоз слился, привез 95 и 92",
+        source_created_at=datetime(2026, 9, 14, 15, 8), on_site=True, author_reliable=True, author_tier=1))
+    db.commit()
+    assert backfill_delivery_events(db, station.id) == 1
+    db.commit()
+    assert db.query(FuelDeliveryEvent).one().event_type == "confirmed_delivery"
+    assert backfill_delivery_events(db, station.id) == 0
+
+
 def add_delivery(db, station_id, when, confidence=0.9, fuel_type="95"):
     before = FuelObservation(station_id=station_id, fuel_type=fuel_type, state="unavailable", observed_at=when - timedelta(minutes=5), is_stale=False)
     after = FuelObservation(station_id=station_id, fuel_type=fuel_type, state="available", observed_at=when, is_stale=False)
@@ -499,7 +812,9 @@ def add_delivery(db, station_id, when, confidence=0.9, fuel_type="95"):
     db.flush()
     event = FuelDeliveryEvent(station_id=station_id, fuel_type=fuel_type, window_start=before.observed_at,
         window_end=after.observed_at, estimated_at=when, confidence=confidence, before_observation_id=before.id,
-        after_observation_id=after.id, detection_reason="test", evidence_json={}, detector_version="test")
+        after_observation_id=after.id, event_type="confirmed_delivery", appearance_confidence=confidence,
+        delivery_confidence=confidence, detection_reason="test", evidence_json={}, detector_version="test",
+        classifier_version="test")
     db.add(event)
     return event
 
@@ -521,6 +836,20 @@ def test_forecast_needs_three_events_and_resists_night_outlier(db, make_user):
     assert 13 <= forecast["expected_at"].hour <= 16
     assert forecast["range_from"] < forecast["expected_at"] < forecast["range_to"]
     assert forecast["reason_json"]["event_count"] == 5
+
+
+def test_forecast_excludes_high_confidence_appearance_only_events(db, make_user):
+    user = make_user("appearance-only-forecast")
+    station = FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="appearance-only",
+        latitude=59.9, longitude=30.2)
+    db.add(station)
+    db.flush()
+    for day in range(10, 13):
+        event = add_delivery(db, station.id, datetime(2026, 9, day, 12), confidence=0.99)
+        event.event_type = "availability_appearance"
+        event.delivery_confidence = 0.2
+    db.flush()
+    assert build_forecast(db, station, "95") is None
 
 
 def test_cross_station_lag_requires_three_matching_pairs():
@@ -566,12 +895,25 @@ def test_fuel_detail_renders_delivery_forecast_and_technical_history(client, log
     db.flush()
     db.add(FuelForecast(station_id=station.id, fuel_type="95", generated_at=datetime(2026, 9, 14, 16),
         expected_at=datetime(2026, 9, 15, 15), range_from=datetime(2026, 9, 15, 14), range_to=datetime(2026, 9, 15, 16),
-        confidence=0.74, model_version="test", reason_json={"event_count": 3, "typical_time": "18:00", "median_interval_minutes": 1440}))
+        confidence=0.74, model_version=FORECAST_VERSION, reason_json={"event_count": 3, "typical_time": "18:00", "median_interval_minutes": 1440}))
+    db.add(FuelForecast(station_id=station.id, fuel_type="95", generated_at=datetime(2026, 9, 14, 17),
+        expected_at=datetime(2026, 9, 16, 0, 33), range_from=datetime(2026, 9, 16, 0, 3),
+        range_to=datetime(2026, 9, 16, 1, 3), confidence=0.13, model_version="median-v1", reason_json={}))
+    db.add(FuelStationMark(station_id=station.id, provider="gdebenz", source_key="detail-mark", text="92, 95, ДТ",
+        source_created_at=datetime(2026, 9, 14, 21, 15), fetched_at=datetime(2026, 9, 14, 21, 16),
+        raw_data={"on_site": True, "author_reliable": True}))
+    db.add(FuelStationChatMessage(station_id=station.id, provider="gdebenz", provider_message_id="detail-chat",
+        author_id="42", author_name="Владимир В.", body="бензовоз слился, привез 95 и 92",
+        source_created_at=datetime(2026, 9, 14, 14, 42), on_site=True, author_reliable=True, author_tier=2))
     db.commit()
     login("fuel-detail")
     response = client.get(f"/fuel/{station.id}")
     assert response.status_code == 200
-    assert "История поставок" in response.text
+    assert "История появления топлива" in response.text
     assert "Почему такой прогноз?" in response.text
     assert "Техническая история" in response.text
+    assert "Последние отметки GdeBenz" in response.text
+    assert "Чат GdeBenz" in response.text
+    assert "Владимир В." in response.text
+    assert "00:33" not in response.text
     assert str(round(event.confidence * 100)) in response.text

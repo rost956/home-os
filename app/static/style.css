@@ -2636,6 +2636,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-detail-card dl div { display: grid; gap: 2px; }
 .fuel-detail-card dt, .fuel-next span { color: var(--muted); font-size: 12px; }
 .fuel-detail-card dd { margin: 0; }
+.fuel-appearance-summary { display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .fuel-next { display: grid; gap: 4px; padding: 12px; border-radius: var(--radius); background: var(--soft); }
 .fuel-next b { font-size: 17px; }
 .fuel-next small { color: var(--muted); }
@@ -2658,6 +2659,11 @@ html[data-theme="dark"] .success-alert {
 .delivery-dot { position: absolute; left: var(--x); top: var(--y); width: 9px; height: 9px; border: 2px solid var(--card); border-radius: 50%; background: #2563eb; transform: translate(-50%, -50%); }
 .delivery-dot.fuel-98 { background: #7c3aed; }
 .delivery-dot.fuel-100 { background: #db2777; }
+.delivery-dot.probable_delivery { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 35%, transparent); }
+.delivery-dot.confirmed_delivery { box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 40%, transparent); }
+.fuel-event-evidence { grid-column: 1 / -1; }
+.fuel-event-evidence summary { width: fit-content; cursor: pointer; color: var(--primary); font-size: 12px; font-weight: 800; }
+.fuel-event-evidence div { display: grid; gap: 3px; margin-top: 7px; color: var(--muted); font-size: 12px; }
 .fuel-secondary summary { display: flex; justify-content: space-between; }
 .fuel-comments { display: grid; gap: 0; margin-top: 12px; }
 .fuel-comments p { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; margin: 0; padding: 9px 0; border-top: 1px solid var(--line); }

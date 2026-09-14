@@ -50,8 +50,9 @@ from .models import (
     FuelForecast,
     FuelObservation,
     FuelStation,
-    FuelStationComment,
+    FuelStationChatMessage,
     FuelStationFuel,
+    FuelStationMark,
     IncomeItem,
     MenuItem,
     Moment,
@@ -118,7 +119,12 @@ from .services.fuel import (
     fuel_poll_lock,
     run_fuel_poll_cycle,
 )
-from .services.fuel_analytics import station_correlations
+from .services.fuel_analytics import (
+    DELIVERY_EVENT_TYPES,
+    FORECAST_VERSION,
+    MIN_DELIVERY_CONFIDENCE,
+    station_correlations,
+)
 from .services.fuel_settings import (
     FuelRuntimeSettings,
     get_fuel_runtime_settings,
@@ -213,6 +219,7 @@ logger = logging.getLogger("home_service")
 fuel_scheduler_wakeup = asyncio.Event()
 fuel_manual_poll_gate = asyncio.Lock()
 FUEL_MANUAL_POLL_DEBOUNCE_SECONDS = 30
+GDEBENZ_CLIENT_ID_PATH = DATA_DIR / "gdebenz_client_id"
 RUSSIAN_MONTH_NAMES = (
     "январь", "февраль", "март", "апрель", "май", "июнь",
     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
@@ -287,6 +294,14 @@ def fuel_age(value: datetime | None) -> str:
 
 
 templates.env.filters["fuel_age"] = fuel_age
+
+
+def make_gdebenz_provider() -> GdeBenzProvider:
+    return GdeBenzProvider(
+        timeout_seconds=settings.fuel_http_timeout_seconds,
+        user_agent=settings.fuel_http_user_agent,
+        client_id_path=GDEBENZ_CLIENT_ID_PATH,
+    )
 
 
 def msk_hour_percent(value: datetime | None) -> float:
@@ -464,6 +479,14 @@ def schema_change_required() -> bool:
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
         "planner_items": {"end_date", "recurrence_frequency", "recurrence_interval", "recurrence_until"},
+        "fuel_delivery_events": {
+            "event_type",
+            "appearance_confidence",
+            "delivery_confidence",
+            "availability_duration_minutes",
+            "disappeared_at",
+            "classifier_version",
+        },
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
         "ai_user_settings": {
             "user_id",
@@ -508,6 +531,7 @@ def ensure_runtime_schema() -> None:
         PlannerReminderDelivery.__table__.create(bind=connection, checkfirst=True)
         TemporaryFileTransfer.__table__.create(bind=connection, checkfirst=True)
         TemporarySharedFile.__table__.create(bind=connection, checkfirst=True)
+        FuelStationChatMessage.__table__.create(bind=connection, checkfirst=True)
 
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
@@ -583,6 +607,29 @@ def ensure_runtime_schema() -> None:
             connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN recurrence_interval INTEGER NOT NULL DEFAULT 1")
         if planner_columns and "recurrence_until" not in planner_columns:
             connection.exec_driver_sql("ALTER TABLE planner_items ADD COLUMN recurrence_until DATE")
+
+        fuel_event_columns = [
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(fuel_delivery_events)").fetchall()
+        ]
+        fuel_event_defaults = {
+            "event_type": "VARCHAR(32) NOT NULL DEFAULT 'availability_appearance'",
+            "appearance_confidence": "FLOAT",
+            "delivery_confidence": "FLOAT",
+            "availability_duration_minutes": "FLOAT",
+            "disappeared_at": "DATETIME",
+            "classifier_version": "VARCHAR(32)",
+        }
+        for column_name, column_sql in fuel_event_defaults.items():
+            if fuel_event_columns and column_name not in fuel_event_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE fuel_delivery_events ADD COLUMN {column_name} {column_sql}"
+                )
+        if fuel_event_columns:
+            connection.exec_driver_sql(
+                "UPDATE fuel_delivery_events "
+                "SET event_type = COALESCE(event_type, 'availability_appearance'), "
+                "appearance_confidence = COALESCE(appearance_confidence, confidence)"
+            )
 
         wishlist_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(wishlist_items)").fetchall()]
         wishlist_defaults = {
@@ -694,7 +741,7 @@ async def file_share_cleanup_scheduler() -> None:
 
 async def fuel_poll_scheduler() -> None:
     logger.info("Fuel poll scheduler started")
-    comments_at = datetime.min
+    marks_chat_at = datetime.min
     try:
         while True:
             with SessionLocal() as db:
@@ -709,14 +756,14 @@ async def fuel_poll_scheduler() -> None:
                     fuel_scheduler_wakeup.clear()
                 continue
             try:
-                due = utc_now_naive() - comments_at >= timedelta(seconds=runtime.comments_poll_interval_seconds)
-                provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+                due = utc_now_naive() - marks_chat_at >= timedelta(seconds=runtime.comments_poll_interval_seconds)
+                provider = make_gdebenz_provider()
                 async with fuel_poll_lock:
                     summary = await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
                         stale_after_minutes=runtime.stale_after_minutes,
-                        nearby_radius_km=runtime.nearby_radius_km, comments_due=due)
+                        nearby_radius_km=runtime.nearby_radius_km, marks_chat_due=due)
                 if due:
-                    comments_at = utc_now_naive()
+                    marks_chat_at = utc_now_naive()
                 logger.info("Fuel poll completed stations=%s success=%s failed=%s observations=%s", *summary.values())
             except Exception as exc:
                 logger.warning("Fuel poll cycle failed error=%s", type(exc).__name__)
@@ -736,7 +783,7 @@ async def fuel_poll_once() -> None:
     """Serialized early poll after a user adds a station."""
     with SessionLocal() as db:
         runtime = get_fuel_runtime_settings(db)
-    provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+    provider = make_gdebenz_provider()
     async with fuel_poll_lock:
         try:
             await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
@@ -2538,7 +2585,10 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
             FuelForecast.station_id,
             FuelForecast.fuel_type,
             func.max(FuelForecast.generated_at).label("latest_at"),
-        ).where(FuelForecast.station_id.in_(station_ids)).group_by(
+        ).where(
+            FuelForecast.station_id.in_(station_ids),
+            FuelForecast.model_version == FORECAST_VERSION,
+        ).group_by(
             FuelForecast.station_id, FuelForecast.fuel_type
         ).subquery()
         current_forecasts = db.scalars(
@@ -2640,17 +2690,14 @@ async def fuel_poll_now(user: User = Depends(get_current_user), db: Session = De
             return redirect_notice("/fuel/settings", "Повторная проверка будет доступна через несколько секунд")
         collector_health.last_manual_poll_started_at = now
         runtime = get_fuel_runtime_settings(db)
-        provider = GdeBenzProvider(
-            timeout_seconds=settings.fuel_http_timeout_seconds,
-            user_agent=settings.fuel_http_user_agent,
-        )
+        provider = make_gdebenz_provider()
         async with fuel_poll_lock:
             summary = await run_fuel_poll_cycle(
                 session_factory=SessionLocal,
                 provider=provider,
                 stale_after_minutes=runtime.stale_after_minutes,
                 nearby_radius_km=runtime.nearby_radius_km,
-                comments_due=True,
+                marks_chat_due=True,
             )
     if summary["failed"]:
         return redirect_notice(
@@ -2729,7 +2776,7 @@ async def fuel_search(
             return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": "Адрес не найден"})
         place = places[0]
         runtime = get_fuel_runtime_settings(db)
-        provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+        provider = make_gdebenz_provider()
         candidates = await provider.get_stations_near(place.latitude, place.longitude, runtime.nearby_radius_km)
     except ProviderUnavailable as exc:
         return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": str(exc)})
@@ -2821,7 +2868,10 @@ def fuel_deliveries_api(station_id: int, user: User = Depends(get_current_user),
         raise HTTPException(status_code=404, detail="АЗС не найдена")
     items = db.scalars(select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id).order_by(
         FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
-    return [{"id": item.id, "fuel_type": item.fuel_type, "window_start": item.window_start,
+    return [{"id": item.id, "fuel_type": item.fuel_type, "event_type": item.event_type,
+             "appearance_confidence": item.appearance_confidence, "delivery_confidence": item.delivery_confidence,
+             "availability_duration_minutes": item.availability_duration_minutes, "disappeared_at": item.disappeared_at,
+             "window_start": item.window_start,
              "window_end": item.window_end, "estimated_at": item.estimated_at, "confidence": item.confidence,
              "reason": item.detection_reason, "evidence": item.evidence_json} for item in items]
 
@@ -2833,8 +2883,11 @@ def fuel_forecast_api(station_id: int, user: User = Depends(get_current_user), d
         raise HTTPException(status_code=404, detail="АЗС не найдена")
     items = []
     for fuel_type in FUEL_TYPES:
-        item = db.scalar(select(FuelForecast).where(FuelForecast.station_id == station.id,
-            FuelForecast.fuel_type == fuel_type).order_by(FuelForecast.generated_at.desc()).limit(1))
+        item = db.scalar(select(FuelForecast).where(
+            FuelForecast.station_id == station.id,
+            FuelForecast.fuel_type == fuel_type,
+            FuelForecast.model_version == FORECAST_VERSION,
+        ).order_by(FuelForecast.generated_at.desc()).limit(1))
         if item:
             items.append({"fuel_type": fuel_type, "expected_at": item.expected_at, "range_from": item.range_from,
                           "range_to": item.range_to, "confidence": item.confidence, "reason": item.reason_json})
@@ -2844,7 +2897,9 @@ def fuel_forecast_api(station_id: int, user: User = Depends(get_current_user), d
 @app.get("/api/fuel/forecasts")
 def fuel_forecasts_api(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     station_ids = select(FuelStation.id).where(FuelStation.owner_id == user.id, FuelStation.enabled.is_(True))
-    items = db.scalars(select(FuelForecast).where(FuelForecast.station_id.in_(station_ids)).order_by(
+    items = db.scalars(select(FuelForecast).where(
+        FuelForecast.station_id.in_(station_ids), FuelForecast.model_version == FORECAST_VERSION
+    ).order_by(
         FuelForecast.generated_at.desc()).limit(200)).all()
     latest = {}
     for item in items:
@@ -2869,19 +2924,44 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
     if fuel_type in FUEL_TYPES:
         delivery_query = delivery_query.where(FuelDeliveryEvent.fuel_type == fuel_type)
     deliveries = db.scalars(delivery_query.order_by(FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
-    latest_deliveries = {fuel: db.scalar(select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id,
-        FuelDeliveryEvent.fuel_type == fuel).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    latest_appearances = {fuel: db.scalar(select(FuelDeliveryEvent).where(
+        FuelDeliveryEvent.station_id == station.id, FuelDeliveryEvent.fuel_type == fuel
+    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    latest_deliveries = {fuel: db.scalar(select(FuelDeliveryEvent).where(
+        FuelDeliveryEvent.station_id == station.id,
+        FuelDeliveryEvent.fuel_type == fuel,
+        FuelDeliveryEvent.event_type.in_(DELIVERY_EVENT_TYPES),
+        FuelDeliveryEvent.delivery_confidence >= MIN_DELIVERY_CONFIDENCE,
+    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
     forecasts = {fuel: db.scalar(select(FuelForecast).where(FuelForecast.station_id == station.id,
-        FuelForecast.fuel_type == fuel).order_by(FuelForecast.generated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+        FuelForecast.fuel_type == fuel, FuelForecast.model_version == FORECAST_VERSION
+    ).order_by(FuelForecast.generated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    event_counts = {
+        fuel: {
+            "appearances": sum(item.fuel_type == fuel for item in deliveries),
+            "deliveries": sum(
+                item.fuel_type == fuel
+                and item.event_type in DELIVERY_EVENT_TYPES
+                and (item.delivery_confidence or 0) >= MIN_DELIVERY_CONFIDENCE
+                for item in deliveries
+            ),
+        }
+        for fuel in FUEL_TYPES
+    }
     correlations = {fuel: station_correlations(db, station, fuel) for fuel in FUEL_TYPES}
     station_names = {item.id: (item.address or item.brand or item.name or "АЗС") for item in db.scalars(
         select(FuelStation).where(FuelStation.owner_id == user.id)).all()}
-    comments = db.scalars(select(FuelStationComment).where(FuelStationComment.station_id == station.id).order_by(
-        FuelStationComment.source_created_at.desc(), FuelStationComment.id.desc()
+    marks = db.scalars(select(FuelStationMark).where(FuelStationMark.station_id == station.id).order_by(
+        FuelStationMark.source_created_at.desc(), FuelStationMark.id.desc()
     ).limit(30)).all()
+    chat_messages = db.scalars(select(FuelStationChatMessage).where(
+        FuelStationChatMessage.station_id == station.id
+    ).order_by(FuelStationChatMessage.source_created_at.desc(), FuelStationChatMessage.id.desc()).limit(12)).all()
     return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
-        "comments": comments, "fuel_type": fuel_type, "latest": latest, "deliveries": deliveries,
-        "latest_deliveries": latest_deliveries, "forecasts": forecasts, "correlations": correlations,
+        "marks": marks, "chat_messages": chat_messages, "fuel_type": fuel_type, "latest": latest,
+        "deliveries": deliveries,
+        "latest_appearances": latest_appearances, "latest_deliveries": latest_deliveries,
+        "event_counts": event_counts, "forecasts": forecasts, "correlations": correlations,
         "station_names": station_names})
 
 

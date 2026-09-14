@@ -827,7 +827,9 @@ class FuelObservation(Base):
     station: Mapped[FuelStation] = relationship(back_populates="observations")
 
 
-class FuelStationComment(Base):
+class FuelStationMark(Base):
+    """A GdeBenz station mark (the legacy table name is kept for existing data)."""
+
     __tablename__ = "fuel_station_comments"
     __table_args__ = (UniqueConstraint("station_id", "source_key", name="uq_fuel_station_comment_source"),)
 
@@ -839,6 +841,36 @@ class FuelStationComment(Base):
     source_created_at: Mapped[datetime | None] = mapped_column(DateTime)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
     raw_data: Mapped[dict | None] = mapped_column(JSON)
+
+
+FuelStationComment = FuelStationMark
+
+
+class FuelStationChatMessage(Base):
+    __tablename__ = "fuel_station_chat_messages"
+    __table_args__ = (
+        UniqueConstraint("station_id", "provider_message_id", name="uq_fuel_station_chat_message"),
+        Index("ix_fuel_station_chat_station_at", "station_id", "source_created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(
+        ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    author_id: Mapped[str | None] = mapped_column(String(64))
+    author_name: Mapped[str | None] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    source_created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reactions_json: Mapped[dict | None] = mapped_column(JSON)
+    reply_to_id: Mapped[str | None] = mapped_column(String(64))
+    reply_to_name: Mapped[str | None] = mapped_column(String(160))
+    reply_to_excerpt: Mapped[str | None] = mapped_column(Text)
+    author_reliable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    author_tier: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    on_site: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
 
 
 class FuelDeliveryEvent(Base):
@@ -854,12 +886,18 @@ class FuelDeliveryEvent(Base):
     window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     window_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     estimated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), default="availability_appearance", nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
+    appearance_confidence: Mapped[float | None] = mapped_column()
+    delivery_confidence: Mapped[float | None] = mapped_column()
+    availability_duration_minutes: Mapped[float | None] = mapped_column()
+    disappeared_at: Mapped[datetime | None] = mapped_column(DateTime)
     before_observation_id: Mapped[int] = mapped_column(ForeignKey("fuel_observations.id"), nullable=False)
     after_observation_id: Mapped[int] = mapped_column(ForeignKey("fuel_observations.id"), nullable=False)
     detection_reason: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     detector_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    classifier_version: Mapped[str | None] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
 
