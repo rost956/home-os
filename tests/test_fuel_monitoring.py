@@ -48,6 +48,14 @@ def test_fuel_station_api_and_soft_disable(client, login, make_user):
     assert client.get("/api/fuel/stations").json()[0]["enabled"] is False
 
 
+def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login, make_user):
+    make_user("fuel-page")
+    login("fuel-page")
+    response = client.get("/fuel")
+    assert response.status_code == 200
+    assert "АЗС пока не выбраны" in response.text
+
+
 class FakeProvider:
     def __init__(self):
         self.calls = []
