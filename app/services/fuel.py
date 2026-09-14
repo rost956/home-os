@@ -24,6 +24,12 @@ class ProviderUnavailable(RuntimeError):
     pass
 
 
+class StationNotFound(RuntimeError):
+    """The provider answered, but did not return the saved stable station ID."""
+
+    pass
+
+
 class FuelStationCandidate(BaseModel):
     provider: str
     provider_station_id: str
@@ -250,7 +256,7 @@ def _save_comments(db: Session, station: FuelStation, comments: list[dict[str, A
 
 
 async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvider, stale_after_minutes: int,
-                              comments_due: bool = False) -> dict[str, int]:
+                              nearby_radius_km: int, comments_due: bool = False) -> dict[str, int]:
     """Fetch sequentially: SQLite gets one bounded writer transaction per station."""
     collector_health.running = True
     collector_health.last_poll_started_at = now_utc()
@@ -261,10 +267,15 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
         summary["stations"] = len(stations)
         for saved in stations:
             try:
-                candidates = await provider.get_stations_near(saved.latitude, saved.longitude, 1)
+                candidates = await provider.get_stations_near(saved.latitude, saved.longitude, nearby_radius_km)
                 candidate = next((item for item in candidates if item.provider_station_id == saved.provider_station_id), None)
                 if candidate is None:
-                    raise ProviderUnavailable("Станция не найдена в ответе источника")
+                    candidate_ids = [item.provider_station_id for item in candidates]
+                    logger.warning(
+                        "Fuel station not found saved_station_id=%s provider_station_id=%s lat=%s lon=%s radius_km=%s candidates=%s",
+                        saved.id, saved.provider_station_id, saved.latitude, saved.longitude, nearby_radius_km, candidate_ids,
+                    )
+                    raise StationNotFound("Станция не найдена в ответе источника")
                 observed_at = now_utc()
                 raw = candidate.raw
                 source_updated_at = parse_source_datetime(raw.get("last_at"))

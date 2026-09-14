@@ -665,7 +665,8 @@ async def fuel_poll_scheduler() -> None:
                 provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
                 async with fuel_poll_lock:
                     summary = await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
-                        stale_after_minutes=settings.fuel_data_stale_after_minutes, comments_due=due)
+                        stale_after_minutes=settings.fuel_data_stale_after_minutes,
+                        nearby_radius_km=settings.fuel_nearby_radius_km, comments_due=due)
                 if due:
                     comments_at = utc_now_naive()
                 logger.info("Fuel poll completed stations=%s success=%s failed=%s observations=%s", *summary.values())
@@ -682,7 +683,8 @@ async def fuel_poll_once() -> None:
     async with fuel_poll_lock:
         try:
             await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
-                stale_after_minutes=settings.fuel_data_stale_after_minutes)
+                stale_after_minutes=settings.fuel_data_stale_after_minutes,
+                nearby_radius_km=settings.fuel_nearby_radius_km)
         except Exception as exc:
             logger.warning("Initial fuel poll failed error=%s", type(exc).__name__)
 

@@ -120,7 +120,7 @@ def test_collector_persists_only_selected_fuels_and_skips_disabled(make_user):
         db.commit()
         station_id = enabled.id
     provider = FakeProvider()
-    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, comments_due=True))
+    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, nearby_radius_km=3, comments_due=True))
     with SessionLocal() as db:
         observations = db.query(FuelObservation).filter_by(station_id=station_id).all()
         comments = db.query(FuelStationComment).filter_by(station_id=station_id).all()
@@ -130,3 +130,37 @@ def test_collector_persists_only_selected_fuels_and_skips_disabled(make_user):
     assert station.last_successful_poll_at is not None
     assert len(comments) == 1
     assert len(provider.calls) == 1
+    assert provider.calls[0] == (59.9, 30.2)
+
+
+def test_collector_uses_configured_radius_and_matches_station_id(make_user):
+    user = make_user("radius-poller")
+    with SessionLocal() as db:
+        station = FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="usr_-yN7-ZKW2RA", latitude=59.834818865764575, longitude=30.12108201831411)
+        db.add(station)
+        db.flush()
+        db.add(FuelStationFuel(station_id=station.id, fuel_type="95", enabled=True))
+        db.commit()
+        station_id = station.id
+
+    class RadiusProvider:
+        radius = None
+
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            self.radius = radius_km
+            if radius_km < 3:
+                return []
+            return [FuelStationCandidate(provider="gdebenz", provider_station_id="usr_-yN7-ZKW2RA", latitude=latitude, longitude=longitude, distance_meters=2100,
+                                         raw={"status": "queue", "fuels_now": "95", "last_at": "2026-09-14 12:00:00"})]
+
+        async def get_station_comments(self, provider_station_id, limit=12):
+            return []
+
+    provider = RadiusProvider()
+    summary = asyncio.run(run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider, stale_after_minutes=120, nearby_radius_km=3))
+    assert provider.radius == 3
+    assert summary["success"] == 1
+    with SessionLocal() as db:
+        observation = db.query(FuelObservation).one()
+    assert observation.station_id == station_id
+    assert observation.state == "low"

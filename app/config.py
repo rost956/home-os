@@ -99,6 +99,7 @@ class Settings:
     geocoder_user_agent: str
     fuel_poll_interval_seconds: int
     fuel_comments_poll_interval_seconds: int
+    fuel_nearby_radius_km: int
 
     @property
     def is_production(self) -> bool:
@@ -159,6 +160,7 @@ def load_settings() -> Settings:
         geocoder_user_agent=os.getenv("GEOCODER_USER_AGENT", "HomeOS-FuelMonitor/1.0").strip() or "HomeOS-FuelMonitor/1.0",
         fuel_poll_interval_seconds=env_int("FUEL_POLL_INTERVAL_SECONDS", 300, 30, 3600),
         fuel_comments_poll_interval_seconds=env_int("FUEL_COMMENTS_POLL_INTERVAL_SECONDS", 900, 60, 86_400),
+        fuel_nearby_radius_km=env_int("FUEL_NEARBY_RADIUS_KM", 3, 1, 20),
     )
 
 
