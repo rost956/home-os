@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Бензин{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Бензин</h1><div class="subline">Выбранные АЗС и отслеживаемые марки топлива</div></div><a class="btn" href="/fuel/add">+ Добавить АЗС</a></div>
+{% if stations %}<div class="vehicle-grid">{% for station in stations %}
+<section class="card vehicle-card"><div class="vehicle-card-icon">⛽</div><div class="vehicle-card-main"><h2>{{ station.brand or station.name or 'АЗС' }}</h2><span>{{ station.address or 'Адрес не указан источником' }}</span>{% for fuel in station.fuels if fuel.enabled %}{% set item = latest.get((station.id, fuel.fuel_type)) %}<small>АИ-{{ fuel.fuel_type }} — {% if item %}{{ {'available':'Есть','low':'Мало','unavailable':'Нет','unknown':'Нет данных'}[item.state] }}{% if item.is_stale %} · ⚠ данные устарели{% endif %} · {{ item.observed_at|fmt_msk }}{% else %}Нет данных{% endif %}</small>{% endfor %}<small>Последний успешный опрос: {{ station.last_successful_poll_at|fmt_msk or 'ещё не выполнялся' }}</small></div><a class="btn secondary" href="/fuel/{{ station.id }}">История</a><form method="post" action="/fuel/stations/{{ station.id }}/delete"><button class="btn secondary" type="submit">Отключить</button></form></section>
+{% endfor %}</div>{% else %}<section class="card vehicle-empty"><div><h2>АЗС пока не выбраны</h2><p>Найдите адрес, вручную выберите станцию и марки топлива. Данные GdeBenz — отметки водителей, а не гарантия наличия.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
+{% endblock %}

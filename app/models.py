@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Date,
@@ -745,6 +746,80 @@ class ShoppingCategoryRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive)
 
     owner: Mapped[User] = relationship(back_populates="shopping_category_rules")
+
+
+class FuelStation(Base):
+    """A station selected explicitly by a household user."""
+
+    __tablename__ = "fuel_stations"
+    __table_args__ = (UniqueConstraint("owner_id", "provider", "provider_station_id", name="uq_fuel_station_provider"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_station_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    brand: Mapped[str | None] = mapped_column(String(120))
+    name: Mapped[str | None] = mapped_column(String(180))
+    address: Mapped[str | None] = mapped_column(String(300))
+    latitude: Mapped[float] = mapped_column(nullable=False)
+    longitude: Mapped[float] = mapped_column(nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    last_successful_poll_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    fuels: Mapped[list["FuelStationFuel"]] = relationship(back_populates="station", cascade="all, delete-orphan")
+    observations: Mapped[list["FuelObservation"]] = relationship(back_populates="station", cascade="all, delete-orphan")
+
+
+class FuelStationFuel(Base):
+    __tablename__ = "fuel_station_fuels"
+    __table_args__ = (UniqueConstraint("station_id", "fuel_type", name="uq_fuel_station_fuel"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+    station: Mapped[FuelStation] = relationship(back_populates="fuels")
+
+
+class FuelObservation(Base):
+    __tablename__ = "fuel_observations"
+    __table_args__ = (
+        CheckConstraint("state IN ('available', 'low', 'unavailable', 'unknown')", name="ck_fuel_observation_state"),
+        Index("ix_fuel_observation_station_fuel_at", "station_id", "fuel_type", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    source_status: Mapped[str | None] = mapped_column(String(32))
+    confirmations: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[float | None] = mapped_column()
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+
+    station: Mapped[FuelStation] = relationship(back_populates="observations")
+
+
+class FuelStationComment(Base):
+    __tablename__ = "fuel_station_comments"
+    __table_args__ = (UniqueConstraint("station_id", "source_key", name="uq_fuel_station_comment_source"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    source_created_at: Mapped[datetime | None] = mapped_column(DateTime)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
 
 
 class ShoppingList(Base):

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}История АЗС{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>{{ station.brand or station.name or 'АЗС' }}</h1><div class="subline">{{ station.address or '' }}</div></div><a class="btn secondary" href="/fuel">Назад</a></div>
+<p><a href="/fuel/{{ station.id }}">Все</a> · {% for fuel in ('95','98','100') %}<a href="/fuel/{{ station.id }}?fuel_type={{ fuel }}">АИ-{{ fuel }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+<section class="card"><table><thead><tr><th>Время</th><th>Топливо</th><th>Состояние</th><th>Источник</th><th>Stale</th></tr></thead><tbody>{% for item in observations %}<tr><td>{{ item.observed_at|fmt_msk }}</td><td>АИ-{{ item.fuel_type }}</td><td>{{ {'available':'Есть','low':'Мало','unavailable':'Нет','unknown':'Нет данных'}[item.state] }}</td><td>{{ item.source_updated_at|fmt_msk or '—' }}</td><td>{{ 'да' if item.is_stale else 'нет' }}</td></tr>{% else %}<tr><td colspan="5">История пока пуста.</td></tr>{% endfor %}</tbody></table></section>
+{% if comments %}<section class="card"><h2>Последние комментарии</h2>{% for comment in comments %}<p>{{ comment.text or 'Отметка без текста' }}<br><small>{{ comment.source_created_at|fmt_msk or comment.fetched_at|fmt_msk }}</small></p>{% endfor %}</section>{% endif %}
+{% endblock %}

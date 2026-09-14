@@ -46,6 +46,10 @@ from .models import (
     ExpenseLimit,
     ExpenseList,
     ExpenseListShare,
+    FuelObservation,
+    FuelStation,
+    FuelStationComment,
+    FuelStationFuel,
     IncomeItem,
     MenuItem,
     Moment,
@@ -102,6 +106,15 @@ from .services.finance import (
     format_period_range,
     shifted_month,
     summarize_cashflow,
+)
+from .services.fuel import (
+    FUEL_TYPES,
+    GdeBenzProvider,
+    NominatimGeocoder,
+    ProviderUnavailable,
+    collector_health,
+    fuel_poll_lock,
+    run_fuel_poll_cycle,
 )
 from .services.planner import (
     calendar_occurrences,
@@ -642,12 +655,45 @@ async def file_share_cleanup_scheduler() -> None:
         logger.info("Temporary file cleanup scheduler stopped")
 
 
+async def fuel_poll_scheduler() -> None:
+    logger.info("Fuel poll scheduler started interval=%ss", settings.fuel_poll_interval_seconds)
+    comments_at = datetime.min
+    try:
+        while True:
+            try:
+                due = utc_now_naive() - comments_at >= timedelta(seconds=settings.fuel_comments_poll_interval_seconds)
+                provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+                async with fuel_poll_lock:
+                    summary = await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+                        stale_after_minutes=settings.fuel_data_stale_after_minutes, comments_due=due)
+                if due:
+                    comments_at = utc_now_naive()
+                logger.info("Fuel poll completed stations=%s success=%s failed=%s observations=%s", *summary.values())
+            except Exception as exc:
+                logger.warning("Fuel poll cycle failed error=%s", type(exc).__name__)
+            await asyncio.sleep(settings.fuel_poll_interval_seconds)
+    finally:
+        logger.info("Fuel poll scheduler stopped")
+
+
+async def fuel_poll_once() -> None:
+    """Serialized early poll after a user adds a station."""
+    provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+    async with fuel_poll_lock:
+        try:
+            await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
+                stale_after_minutes=settings.fuel_data_stale_after_minutes)
+        except Exception as exc:
+            logger.warning("Initial fuel poll failed error=%s", type(exc).__name__)
+
+
 @asynccontextmanager
 async def app_lifespan(_app):
     timer_reminder_stop.clear()
     on_startup()
     push_task = None
     file_cleanup_task = None
+    fuel_task = None
     if settings.background_jobs_enabled and settings.push_enabled:
         keys = ensure_vapid_keys()
         if webpush is None:
@@ -659,6 +705,8 @@ async def app_lifespan(_app):
     if settings.background_jobs_enabled:
         await asyncio.to_thread(run_file_share_cleanup)
         file_cleanup_task = asyncio.create_task(file_share_cleanup_scheduler(), name="file-share-cleanup-scheduler")
+    if settings.background_jobs_enabled and settings.fuel_monitor_enabled:
+        fuel_task = asyncio.create_task(fuel_poll_scheduler(), name="fuel-poll-scheduler")
     try:
         yield
     finally:
@@ -671,6 +719,10 @@ async def app_lifespan(_app):
             file_cleanup_task.cancel()
             with suppress(asyncio.CancelledError):
                 await file_cleanup_task
+        if fuel_task is not None:
+            fuel_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await fuel_task
 
 
 app.router.lifespan_context = app_lifespan
@@ -2391,6 +2443,138 @@ def require_owned_vehicle(db: Session, vehicle_id: int, user: User) -> Vehicle:
 
 def render_vehicle_form(request: Request, *, user: User, form: dict[str, str], vehicle: Vehicle | None = None, error: str | None = None):
     return render(request, "vehicle_form.html", {"user": user, "form": form, "vehicle": vehicle, "error": error})
+
+
+@app.get("/fuel")
+def fuel_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    stations = db.scalars(
+        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
+            FuelStation.owner_id == user.id, FuelStation.enabled.is_(True)
+        ).order_by(FuelStation.updated_at.desc())
+    ).all()
+    latest = {}
+    for station in stations:
+        for fuel in station.fuels:
+            if fuel.enabled:
+                latest[(station.id, fuel.fuel_type)] = db.scalar(select(FuelObservation).where(
+                    FuelObservation.station_id == station.id, FuelObservation.fuel_type == fuel.fuel_type
+                ).order_by(FuelObservation.observed_at.desc()).limit(1))
+    return render(request, "fuel.html", {"user": user, "stations": stations, "latest": latest})
+
+
+@app.get("/fuel/add")
+def fuel_add_page(request: Request, user: User = Depends(get_current_user)):
+    return render(request, "fuel_add.html", {"user": user, "candidates": []})
+
+
+@app.post("/fuel/search")
+async def fuel_search(
+    request: Request, address: str = Form(...), user: User = Depends(get_current_user)
+):
+    query = clean_required_text(address, "Адрес", 300)
+    try:
+        geocoder = NominatimGeocoder(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.geocoder_user_agent)
+        places = await geocoder.search(query)
+        if not places:
+            return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": "Адрес не найден"})
+        place = places[0]
+        provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
+        candidates = await provider.get_stations_near(place.latitude, place.longitude, 3)
+    except ProviderUnavailable as exc:
+        return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": str(exc)})
+    return render(request, "fuel_add.html", {"user": user, "candidates": candidates[:12], "query": query})
+
+
+@app.post("/fuel/stations")
+async def fuel_station_add(
+    provider: str = Form(...), provider_station_id: str = Form(...), latitude: float = Form(...), longitude: float = Form(...),
+    brand: str = Form(""), name: str = Form(""), address: str = Form(""), fuel_types: list[str] = Form([]),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    if provider != "gdebenz" or not provider_station_id.strip() or len(provider_station_id) > 128:
+        raise HTTPException(status_code=400, detail="Некорректная станция")
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        raise HTTPException(status_code=400, detail="Некорректные координаты")
+    chosen = sorted(set(fuel_types).intersection(FUEL_TYPES))
+    if not chosen:
+        raise HTTPException(status_code=400, detail="Выберите хотя бы один вид топлива")
+    station = db.scalar(select(FuelStation).where(
+        FuelStation.owner_id == user.id, FuelStation.provider == provider, FuelStation.provider_station_id == provider_station_id.strip()
+    ))
+    if station is None:
+        station = FuelStation(owner_id=user.id, provider=provider, provider_station_id=provider_station_id.strip(), latitude=latitude, longitude=longitude)
+        db.add(station)
+    station.brand, station.name, station.address, station.enabled = clean_optional_text(brand, 120), clean_optional_text(name, 180), clean_optional_text(address, 300), True
+    db.flush()
+    existing = {item.fuel_type: item for item in station.fuels}
+    for fuel in FUEL_TYPES:
+        item = existing.get(fuel)
+        if item is None:
+            db.add(FuelStationFuel(station_id=station.id, fuel_type=fuel, enabled=fuel in chosen))
+        else:
+            item.enabled = fuel in chosen
+    db.commit()
+    if settings.background_jobs_enabled and settings.fuel_monitor_enabled:
+        asyncio.create_task(fuel_poll_once(), name="fuel-first-poll")
+    return redirect_notice("/fuel", "АЗС добавлена")
+
+
+@app.post("/fuel/stations/{station_id}/delete")
+def fuel_station_disable(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    station.enabled = False
+    db.commit()
+    return redirect_notice("/fuel", "Мониторинг АЗС отключён; история сохранена")
+
+
+@app.get("/api/fuel/stations")
+def fuel_stations_api(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    stations = db.scalars(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.owner_id == user.id)).all()
+    return [{"id": item.id, "provider_station_id": item.provider_station_id, "brand": item.brand, "name": item.name,
+             "address": item.address, "latitude": item.latitude, "longitude": item.longitude, "enabled": item.enabled,
+             "fuel_types": [fuel.fuel_type for fuel in item.fuels if fuel.enabled]} for item in stations]
+
+
+@app.get("/api/fuel/status")
+def fuel_collector_status(user: User = Depends(get_current_user)):
+    return collector_health.as_dict(enabled=settings.fuel_monitor_enabled)
+
+
+@app.get("/api/fuel/stations/{station_id}/observations")
+def fuel_observations_api(
+    station_id: int, fuel_type: str | None = None, limit: int = 100, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    if fuel_type is not None and fuel_type not in FUEL_TYPES:
+        raise HTTPException(status_code=400, detail="Некорректный вид топлива")
+    limit = max(1, min(limit, 500))
+    query = select(FuelObservation).where(FuelObservation.station_id == station.id)
+    if fuel_type:
+        query = query.where(FuelObservation.fuel_type == fuel_type)
+    items = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(limit)).all()
+    return [{"fuel_type": item.fuel_type, "state": item.state, "observed_at": item.observed_at,
+             "source_updated_at": item.source_updated_at, "source_status": item.source_status,
+             "confirmations": item.confirmations, "confidence": item.confidence, "is_stale": item.is_stale} for item in items]
+
+
+@app.get("/fuel/{station_id}")
+def fuel_station_history(request: Request, station_id: int, fuel_type: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    station = db.scalar(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    query = select(FuelObservation).where(FuelObservation.station_id == station.id)
+    if fuel_type in FUEL_TYPES:
+        query = query.where(FuelObservation.fuel_type == fuel_type)
+    observations = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(200)).all()
+    comments = db.scalars(select(FuelStationComment).where(FuelStationComment.station_id == station.id).order_by(
+        FuelStationComment.source_created_at.desc(), FuelStationComment.id.desc()
+    ).limit(30)).all()
+    return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
+                                                  "comments": comments, "fuel_type": fuel_type})
 
 
 @app.get("/vehicles")

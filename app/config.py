@@ -92,6 +92,13 @@ class Settings:
     file_share_max_storage_bytes: int
     file_share_max_user_storage_bytes: int
     file_share_min_free_bytes: int
+    fuel_monitor_enabled: bool
+    fuel_http_timeout_seconds: int
+    fuel_data_stale_after_minutes: int
+    fuel_http_user_agent: str
+    geocoder_user_agent: str
+    fuel_poll_interval_seconds: int
+    fuel_comments_poll_interval_seconds: int
 
     @property
     def is_production(self) -> bool:
@@ -145,6 +152,13 @@ def load_settings() -> Settings:
         file_share_max_storage_bytes=env_int("HOME_FILE_SHARE_MAX_STORAGE_MB", 0, 0, 102_400) * 1024 * 1024,
         file_share_max_user_storage_bytes=env_int("HOME_FILE_SHARE_MAX_USER_STORAGE_MB", 0, 0, 102_400) * 1024 * 1024,
         file_share_min_free_bytes=env_int("HOME_FILE_SHARE_MIN_FREE_MB", 512, 0, 102_400) * 1024 * 1024,
+        fuel_monitor_enabled=env_bool("FUEL_MONITOR_ENABLED", True),
+        fuel_http_timeout_seconds=env_int("FUEL_HTTP_TIMEOUT_SECONDS", 10, 1, 60),
+        fuel_data_stale_after_minutes=env_int("FUEL_DATA_STALE_AFTER_MINUTES", 120, 1, 10_080),
+        fuel_http_user_agent=os.getenv("FUEL_HTTP_USER_AGENT", "HomeOS-FuelMonitor/1.0").strip() or "HomeOS-FuelMonitor/1.0",
+        geocoder_user_agent=os.getenv("GEOCODER_USER_AGENT", "HomeOS-FuelMonitor/1.0").strip() or "HomeOS-FuelMonitor/1.0",
+        fuel_poll_interval_seconds=env_int("FUEL_POLL_INTERVAL_SECONDS", 300, 30, 3600),
+        fuel_comments_poll_interval_seconds=env_int("FUEL_COMMENTS_POLL_INTERVAL_SECONDS", 900, 60, 86_400),
     )
 
 
