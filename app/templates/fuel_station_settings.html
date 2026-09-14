@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Настройки АЗС{% endblock %}
+{% block body_class %}fuel-page{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Настройки АЗС</h1><div class="subline">{{ station.brand or station.name or 'АЗС' }} · {{ station.address or 'Адрес не указан' }}</div></div><a class="btn secondary" href="{{ '/fuel/' ~ station.id if station.enabled else '/fuel/settings' }}">Назад</a></div>
+<section class="card fuel-station-settings-card"><form class="form" method="post" action="/fuel/{{ station.id }}/settings">
+    <label class="check-row fuel-toggle"><input type="checkbox" name="enabled" {% if station.enabled %}checked{% endif %}><span><b>Отслеживать эту АЗС</b><small>Глобальный мониторинг настраивается отдельно</small></span></label>
+    <fieldset class="fuel-choice-fieldset"><legend>Виды топлива</legend>{% for fuel_type in ('95', '98', '100') %}<label class="check-row"><input type="checkbox" name="fuel_types" value="{{ fuel_type }}" {% if station.fuels|selectattr('fuel_type', 'equalto', fuel_type)|selectattr('enabled')|list %}checked{% endif %}> АИ-{{ fuel_type }}</label>{% endfor %}</fieldset>
+    <p class="subline">Изменение настроек не удаляет наблюдения, поставки и прогнозы.</p><button class="btn" type="submit">Сохранить</button>
+</form></section>
+{% endblock %}

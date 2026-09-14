@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Настройки бензина{% endblock %}
+{% block body_class %}fuel-page{% endblock %}
+{% block content %}
+<div class="page-head compact-head"><div><h1>Настройки бензина</h1><div class="subline">Сбор данных и отслеживаемые станции</div></div><a class="btn secondary" href="/fuel">Назад</a></div>
+<form class="form wide fuel-settings-form" method="post" action="/fuel/settings">
+    <section class="card">
+        <div class="card-head"><div><h2>Мониторинг</h2><p class="subline">Настройки применяются без перезапуска HomeOS.</p></div><span class="pill">{{ 'БД' if runtime.source == 'database' else 'ENV' }}</span></div>
+        <label class="check-row fuel-toggle"><input type="checkbox" name="monitor_enabled" {% if runtime.monitor_enabled %}checked{% endif %}><span><b>Мониторинг топлива</b><small>Автоматически проверять включённые АЗС</small></span></label>
+        <div class="form-row two-cols">
+            <label>Проверять наличие топлива<select name="poll_interval_seconds">{% if runtime.poll_interval_seconds not in poll_options %}<option value="{{ runtime.poll_interval_seconds }}" selected>Каждые {{ runtime.poll_interval_seconds // 60 }} мин</option>{% endif %}{% for seconds in poll_options %}<option value="{{ seconds }}" {% if runtime.poll_interval_seconds == seconds %}selected{% endif %}>Каждые {{ seconds // 60 }} мин</option>{% endfor %}</select></label>
+            <label>Проверять сообщения GdeBenz<select name="comments_poll_interval_seconds">{% if runtime.comments_poll_interval_seconds not in comments_options %}<option value="{{ runtime.comments_poll_interval_seconds }}" selected>Каждые {{ runtime.comments_poll_interval_seconds // 60 }} мин</option>{% endif %}{% for seconds in comments_options %}<option value="{{ seconds }}" {% if runtime.comments_poll_interval_seconds == seconds %}selected{% endif %}>Каждые {{ seconds // 60 }} мин</option>{% endfor %}</select></label>
+        </div>
+        <details class="fuel-advanced"><summary>Дополнительные настройки</summary><div class="form-row two-cols"><label>Данные устарели через, мин<input type="number" name="stale_after_minutes" min="1" max="10080" value="{{ runtime.stale_after_minutes }}" required></label><label>Радиус поиска GdeBenz, км<input type="number" name="nearby_radius_km" min="1" max="20" value="{{ runtime.nearby_radius_km }}" required></label></div></details>
+        <button class="btn" type="submit">Сохранить настройки</button>
+    </section>
+</form>
+<section class="card fuel-diagnostics">
+    <div class="card-head"><div><h2>Состояние сборщика</h2><p class="subline">Последний цикл и ближайший автоматический запуск</p></div><span class="pill">{% if not collector.enabled %}Выключен{% elif collector.running %}Проверка{% elif collector.last_error %}Есть ошибка{% else %}Работает{% endif %}</span></div>
+    <dl class="fuel-diagnostic-grid"><div><dt>Последний запуск</dt><dd>{{ collector.last_poll_started_at|msk_datetime('%d.%m.%Y %H:%M:%S') if collector.last_poll_started_at else 'Ещё не запускался' }}</dd></div><div><dt>Успешных АЗС</dt><dd>{{ collector.last_success_count }}</dd></div><div><dt>Ошибок</dt><dd>{{ collector.last_failed_count }}</dd></div><div><dt>Следующий запуск</dt><dd>{{ collector.next_poll_at|msk_datetime('%d.%m.%Y %H:%M:%S') if collector.next_poll_at else 'Не запланирован' }}</dd></div></dl>
+    {% if collector.last_error %}<div class="alert fuel-diagnostic-error"><b>Последняя ошибка:</b> {{ collector.last_error }}</div>{% endif %}
+    <form method="post" action="/fuel/poll-now"><button class="btn secondary" type="submit" {% if collector.running %}disabled{% endif %}>Проверить сейчас</button></form>
+</section>
+<section class="card fuel-managed-stations">
+    <div class="card-head"><div><h2>АЗС</h2><p class="subline">Отключение станции сохраняет всю её историю.</p></div><a class="btn secondary" href="/fuel/add">+ Добавить</a></div>
+    <div class="list">{% for station in stations %}<a class="list-row fuel-managed-row" href="/fuel/{{ station.id }}/settings"><div class="item-text"><b class="item-title">{{ station.brand or station.name or 'АЗС' }}</b><span class="subline item-meta">{{ station.address or 'Адрес не указан' }}</span></div><span class="pill">{{ 'Включена' if station.enabled else 'Выключена' }}</span></a>{% else %}<div class="empty small">Станций пока нет</div>{% endfor %}</div>
+</section>
+{% endblock %}

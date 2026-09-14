@@ -119,6 +119,11 @@ from .services.fuel import (
     run_fuel_poll_cycle,
 )
 from .services.fuel_analytics import station_correlations
+from .services.fuel_settings import (
+    FuelRuntimeSettings,
+    get_fuel_runtime_settings,
+    save_fuel_runtime_settings,
+)
 from .services.planner import (
     calendar_occurrences,
     format_planner_date_range,
@@ -205,6 +210,9 @@ AUTH_ATTEMPTS_MAX_KEYS = 5_000
 TIMER_REMINDER_MINUTES = settings.timer_reminder_minutes
 timer_reminder_stop = threading.Event()
 logger = logging.getLogger("home_service")
+fuel_scheduler_wakeup = asyncio.Event()
+fuel_manual_poll_gate = asyncio.Lock()
+FUEL_MANUAL_POLL_DEBOUNCE_SECONDS = 30
 RUSSIAN_MONTH_NAMES = (
     "январь", "февраль", "март", "апрель", "май", "июнь",
     "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
@@ -685,35 +693,55 @@ async def file_share_cleanup_scheduler() -> None:
 
 
 async def fuel_poll_scheduler() -> None:
-    logger.info("Fuel poll scheduler started interval=%ss", settings.fuel_poll_interval_seconds)
+    logger.info("Fuel poll scheduler started")
     comments_at = datetime.min
     try:
         while True:
+            with SessionLocal() as db:
+                runtime = get_fuel_runtime_settings(db)
+            if not runtime.monitor_enabled:
+                collector_health.next_poll_at = None
+                try:
+                    await asyncio.wait_for(fuel_scheduler_wakeup.wait(), timeout=60)
+                except TimeoutError:
+                    pass
+                finally:
+                    fuel_scheduler_wakeup.clear()
+                continue
             try:
-                due = utc_now_naive() - comments_at >= timedelta(seconds=settings.fuel_comments_poll_interval_seconds)
+                due = utc_now_naive() - comments_at >= timedelta(seconds=runtime.comments_poll_interval_seconds)
                 provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
                 async with fuel_poll_lock:
                     summary = await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
-                        stale_after_minutes=settings.fuel_data_stale_after_minutes,
-                        nearby_radius_km=settings.fuel_nearby_radius_km, comments_due=due)
+                        stale_after_minutes=runtime.stale_after_minutes,
+                        nearby_radius_km=runtime.nearby_radius_km, comments_due=due)
                 if due:
                     comments_at = utc_now_naive()
                 logger.info("Fuel poll completed stations=%s success=%s failed=%s observations=%s", *summary.values())
             except Exception as exc:
                 logger.warning("Fuel poll cycle failed error=%s", type(exc).__name__)
-            await asyncio.sleep(settings.fuel_poll_interval_seconds)
+            collector_health.next_poll_at = utc_now_naive() + timedelta(seconds=runtime.poll_interval_seconds)
+            try:
+                await asyncio.wait_for(fuel_scheduler_wakeup.wait(), timeout=runtime.poll_interval_seconds)
+            except TimeoutError:
+                pass
+            finally:
+                fuel_scheduler_wakeup.clear()
     finally:
+        collector_health.next_poll_at = None
         logger.info("Fuel poll scheduler stopped")
 
 
 async def fuel_poll_once() -> None:
     """Serialized early poll after a user adds a station."""
+    with SessionLocal() as db:
+        runtime = get_fuel_runtime_settings(db)
     provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
     async with fuel_poll_lock:
         try:
             await run_fuel_poll_cycle(session_factory=SessionLocal, provider=provider,
-                stale_after_minutes=settings.fuel_data_stale_after_minutes,
-                nearby_radius_km=settings.fuel_nearby_radius_km)
+                stale_after_minutes=runtime.stale_after_minutes,
+                nearby_radius_km=runtime.nearby_radius_km)
         except Exception as exc:
             logger.warning("Initial fuel poll failed error=%s", type(exc).__name__)
 
@@ -736,7 +764,7 @@ async def app_lifespan(_app):
     if settings.background_jobs_enabled:
         await asyncio.to_thread(run_file_share_cleanup)
         file_cleanup_task = asyncio.create_task(file_share_cleanup_scheduler(), name="file-share-cleanup-scheduler")
-    if settings.background_jobs_enabled and settings.fuel_monitor_enabled:
+    if settings.background_jobs_enabled:
         fuel_task = asyncio.create_task(fuel_poll_scheduler(), name="fuel-poll-scheduler")
     try:
         yield
@@ -2483,23 +2511,202 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
             FuelStation.owner_id == user.id, FuelStation.enabled.is_(True)
         ).order_by(FuelStation.updated_at.desc())
     ).all()
-    latest = {}
-    forecasts = {}
-    for station in stations:
-        for fuel in station.fuels:
-            if fuel.enabled:
-                latest[(station.id, fuel.fuel_type)] = db.scalar(select(FuelObservation).where(
-                    FuelObservation.station_id == station.id, FuelObservation.fuel_type == fuel.fuel_type
-                ).order_by(FuelObservation.observed_at.desc()).limit(1))
-                forecasts[(station.id, fuel.fuel_type)] = db.scalar(select(FuelForecast).where(
-                    FuelForecast.station_id == station.id, FuelForecast.fuel_type == fuel.fuel_type
-                ).order_by(FuelForecast.generated_at.desc()).limit(1))
+    station_ids = [station.id for station in stations]
+    latest: dict[tuple[int, str], FuelObservation] = {}
+    forecasts: dict[tuple[int, str], FuelForecast] = {}
+    if station_ids:
+        observation_times = select(
+            FuelObservation.station_id,
+            FuelObservation.fuel_type,
+            func.max(FuelObservation.observed_at).label("latest_at"),
+        ).where(FuelObservation.station_id.in_(station_ids)).group_by(
+            FuelObservation.station_id, FuelObservation.fuel_type
+        ).subquery()
+        current_observations = db.scalars(
+            select(FuelObservation).join(
+                observation_times,
+                and_(
+                    FuelObservation.station_id == observation_times.c.station_id,
+                    FuelObservation.fuel_type == observation_times.c.fuel_type,
+                    FuelObservation.observed_at == observation_times.c.latest_at,
+                ),
+            )
+        ).all()
+        latest = {(item.station_id, item.fuel_type): item for item in current_observations}
+
+        forecast_times = select(
+            FuelForecast.station_id,
+            FuelForecast.fuel_type,
+            func.max(FuelForecast.generated_at).label("latest_at"),
+        ).where(FuelForecast.station_id.in_(station_ids)).group_by(
+            FuelForecast.station_id, FuelForecast.fuel_type
+        ).subquery()
+        current_forecasts = db.scalars(
+            select(FuelForecast).join(
+                forecast_times,
+                and_(
+                    FuelForecast.station_id == forecast_times.c.station_id,
+                    FuelForecast.fuel_type == forecast_times.c.fuel_type,
+                    FuelForecast.generated_at == forecast_times.c.latest_at,
+                ),
+            )
+        ).all()
+        forecasts = {(item.station_id, item.fuel_type): item for item in current_forecasts}
     upcoming = sorted((item for item in forecasts.values() if item and item.range_to >= utc_now_naive()), key=lambda item: item.expected_at)
     persistent_success = max((item.last_successful_poll_at for item in stations if item.last_successful_poll_at), default=None)
+    runtime = get_fuel_runtime_settings(db)
     return render(request, "fuel.html", {"user": user, "stations": stations,
         "station_by_id": {item.id: item for item in stations}, "latest": latest, "forecasts": forecasts,
-        "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=settings.fuel_monitor_enabled),
+        "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
         "persistent_success": persistent_success})
+
+
+def render_fuel_settings(
+    request: Request,
+    *,
+    user: User,
+    db: Session,
+    runtime: FuelRuntimeSettings | None = None,
+    error: str | None = None,
+):
+    runtime = runtime or get_fuel_runtime_settings(db)
+    stations = db.scalars(
+        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
+            FuelStation.owner_id == user.id
+        ).order_by(FuelStation.enabled.desc(), FuelStation.updated_at.desc())
+    ).all()
+    response = render(request, "fuel_settings.html", {
+        "user": user,
+        "runtime": runtime,
+        "stations": stations,
+        "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
+        "error": error,
+        "poll_options": (60, 120, 300, 600, 900, 1800),
+        "comments_options": (300, 600, 900, 1800, 3600),
+    })
+    if error:
+        response.status_code = 400
+    return response
+
+
+@app.get("/fuel/settings")
+def fuel_settings_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return render_fuel_settings(request, user=user, db=db)
+
+
+@app.post("/fuel/settings")
+async def fuel_settings_update(
+    request: Request,
+    monitor_enabled: str | None = Form(None),
+    poll_interval_seconds: int = Form(...),
+    comments_poll_interval_seconds: int = Form(...),
+    stale_after_minutes: int = Form(...),
+    nearby_radius_km: int = Form(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        runtime = save_fuel_runtime_settings(
+            db,
+            monitor_enabled=monitor_enabled == "on",
+            poll_interval_seconds=poll_interval_seconds,
+            comments_poll_interval_seconds=comments_poll_interval_seconds,
+            stale_after_minutes=stale_after_minutes,
+            nearby_radius_km=nearby_radius_km,
+        )
+    except ValueError as exc:
+        runtime = FuelRuntimeSettings(
+            monitor_enabled=monitor_enabled == "on",
+            poll_interval_seconds=poll_interval_seconds,
+            comments_poll_interval_seconds=comments_poll_interval_seconds,
+            stale_after_minutes=stale_after_minutes,
+            nearby_radius_km=nearby_radius_km,
+            source="form",
+        )
+        return render_fuel_settings(request, user=user, db=db, runtime=runtime, error=str(exc))
+    fuel_scheduler_wakeup.set()
+    return redirect_notice("/fuel/settings", "Настройки сохранены")
+
+
+@app.post("/fuel/poll-now")
+async def fuel_poll_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    del user
+    async with fuel_manual_poll_gate:
+        now = utc_now_naive()
+        last_manual = collector_health.last_manual_poll_started_at
+        if fuel_poll_lock.locked():
+            return redirect_notice("/fuel/settings", "Проверка уже выполняется")
+        if last_manual and (now - last_manual).total_seconds() < FUEL_MANUAL_POLL_DEBOUNCE_SECONDS:
+            return redirect_notice("/fuel/settings", "Повторная проверка будет доступна через несколько секунд")
+        collector_health.last_manual_poll_started_at = now
+        runtime = get_fuel_runtime_settings(db)
+        provider = GdeBenzProvider(
+            timeout_seconds=settings.fuel_http_timeout_seconds,
+            user_agent=settings.fuel_http_user_agent,
+        )
+        async with fuel_poll_lock:
+            summary = await run_fuel_poll_cycle(
+                session_factory=SessionLocal,
+                provider=provider,
+                stale_after_minutes=runtime.stale_after_minutes,
+                nearby_radius_km=runtime.nearby_radius_km,
+                comments_due=True,
+            )
+    if summary["failed"]:
+        return redirect_notice(
+            "/fuel/settings",
+            f"Проверка завершена: успешно {summary['success']}, ошибок {summary['failed']}",
+        )
+    return redirect_notice("/fuel/settings", f"Проверка завершена, обновлено АЗС: {summary['success']}")
+
+
+@app.get("/fuel/{station_id}/settings")
+def fuel_station_settings_page(
+    request: Request,
+    station_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    station = db.scalar(
+        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
+            FuelStation.id == station_id, FuelStation.owner_id == user.id
+        )
+    )
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    return render(request, "fuel_station_settings.html", {"user": user, "station": station})
+
+
+@app.post("/fuel/{station_id}/settings")
+def fuel_station_settings_update(
+    station_id: int,
+    enabled: str | None = Form(None),
+    fuel_types: list[str] = Form([]),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    station = db.scalar(
+        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
+            FuelStation.id == station_id, FuelStation.owner_id == user.id
+        )
+    )
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    chosen = set(fuel_types).intersection(FUEL_TYPES)
+    if not chosen:
+        raise HTTPException(status_code=400, detail="Выберите хотя бы один вид топлива")
+    station.enabled = enabled == "on"
+    by_type = {item.fuel_type: item for item in station.fuels}
+    for fuel_type in FUEL_TYPES:
+        item = by_type.get(fuel_type)
+        if item is None:
+            db.add(FuelStationFuel(station_id=station.id, fuel_type=fuel_type, enabled=fuel_type in chosen))
+        else:
+            item.enabled = fuel_type in chosen
+    db.commit()
+    fuel_scheduler_wakeup.set()
+    destination = f"/fuel/{station.id}" if station.enabled else "/fuel/settings"
+    return redirect_notice(destination, "Настройки АЗС сохранены; история не изменена")
 
 
 @app.get("/fuel/add")
@@ -2509,7 +2716,10 @@ def fuel_add_page(request: Request, user: User = Depends(get_current_user)):
 
 @app.post("/fuel/search")
 async def fuel_search(
-    request: Request, address: str = Form(...), user: User = Depends(get_current_user)
+    request: Request,
+    address: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     query = clean_required_text(address, "Адрес", 300)
     try:
@@ -2518,8 +2728,9 @@ async def fuel_search(
         if not places:
             return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": "Адрес не найден"})
         place = places[0]
+        runtime = get_fuel_runtime_settings(db)
         provider = GdeBenzProvider(timeout_seconds=settings.fuel_http_timeout_seconds, user_agent=settings.fuel_http_user_agent)
-        candidates = await provider.get_stations_near(place.latitude, place.longitude, 3)
+        candidates = await provider.get_stations_near(place.latitude, place.longitude, runtime.nearby_radius_km)
     except ProviderUnavailable as exc:
         return render(request, "fuel_add.html", {"user": user, "candidates": [], "error": str(exc)})
     return render(request, "fuel_add.html", {"user": user, "candidates": candidates[:12], "query": query})
@@ -2554,8 +2765,8 @@ async def fuel_station_add(
         else:
             item.enabled = fuel in chosen
     db.commit()
-    if settings.background_jobs_enabled and settings.fuel_monitor_enabled:
-        asyncio.create_task(fuel_poll_once(), name="fuel-first-poll")
+    if settings.background_jobs_enabled:
+        fuel_scheduler_wakeup.set()
     return redirect_notice("/fuel", "АЗС добавлена")
 
 
@@ -2578,8 +2789,10 @@ def fuel_stations_api(user: User = Depends(get_current_user), db: Session = Depe
 
 
 @app.get("/api/fuel/status")
-def fuel_collector_status(user: User = Depends(get_current_user)):
-    return collector_health.as_dict(enabled=settings.fuel_monitor_enabled)
+def fuel_collector_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    del user
+    runtime = get_fuel_runtime_settings(db)
+    return collector_health.as_dict(enabled=runtime.monitor_enabled)
 
 
 @app.get("/api/fuel/stations/{station_id}/observations")

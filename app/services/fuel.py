@@ -222,12 +222,23 @@ class FuelCollectorHealth:
     last_successful_poll_at: datetime | None = None
     last_error_at: datetime | None = None
     last_error: str | None = None
+    next_poll_at: datetime | None = None
+    last_station_count = 0
+    last_success_count = 0
+    last_failed_count = 0
+    last_observation_count = 0
+    last_manual_poll_started_at: datetime | None = None
 
     def as_dict(self, *, enabled: bool) -> dict[str, Any]:
         return {
             "enabled": enabled, "running": self.running, "last_poll_started_at": self.last_poll_started_at,
             "last_poll_finished_at": self.last_poll_finished_at, "last_successful_poll_at": self.last_successful_poll_at,
             "last_error_at": self.last_error_at, "last_error": self.last_error,
+            "next_poll_at": self.next_poll_at,
+            "last_station_count": self.last_station_count,
+            "last_success_count": self.last_success_count,
+            "last_failed_count": self.last_failed_count,
+            "last_observation_count": self.last_observation_count,
         }
 
 
@@ -307,7 +318,8 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
                 collector_health.last_successful_poll_at = observed_at
             except Exception as exc:
                 summary["failed"] += 1
-                collector_health.last_error_at, collector_health.last_error = now_utc(), type(exc).__name__
+                message = str(exc).strip() or type(exc).__name__
+                collector_health.last_error_at, collector_health.last_error = now_utc(), message[:200]
                 logger.warning("Fuel station poll failed station_id=%s error=%s", saved.id, type(exc).__name__)
         from .fuel_analytics import process_fuel_history
 
@@ -321,6 +333,12 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
                         events,
                         forecasts,
                     )
+        collector_health.last_station_count = summary["stations"]
+        collector_health.last_success_count = summary["success"]
+        collector_health.last_failed_count = summary["failed"]
+        collector_health.last_observation_count = summary["observations"]
+        if summary["failed"] == 0:
+            collector_health.last_error = None
         return summary
     finally:
         collector_health.running = False

@@ -158,8 +158,8 @@ def load_settings() -> Settings:
         fuel_data_stale_after_minutes=env_int("FUEL_DATA_STALE_AFTER_MINUTES", 120, 1, 10_080),
         fuel_http_user_agent=os.getenv("FUEL_HTTP_USER_AGENT", "HomeOS-FuelMonitor/1.0").strip() or "HomeOS-FuelMonitor/1.0",
         geocoder_user_agent=os.getenv("GEOCODER_USER_AGENT", "HomeOS-FuelMonitor/1.0").strip() or "HomeOS-FuelMonitor/1.0",
-        fuel_poll_interval_seconds=env_int("FUEL_POLL_INTERVAL_SECONDS", 300, 30, 3600),
-        fuel_comments_poll_interval_seconds=env_int("FUEL_COMMENTS_POLL_INTERVAL_SECONDS", 900, 60, 86_400),
+        fuel_poll_interval_seconds=env_int("FUEL_POLL_INTERVAL_SECONDS", 300, 60, 86_400),
+        fuel_comments_poll_interval_seconds=env_int("FUEL_COMMENTS_POLL_INTERVAL_SECONDS", 900, 300, 604_800),
         fuel_nearby_radius_km=env_int("FUEL_NEARBY_RADIUS_KM", 3, 1, 20),
     )
 

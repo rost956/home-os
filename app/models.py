@@ -772,6 +772,25 @@ class FuelStation(Base):
     observations: Mapped[list["FuelObservation"]] = relationship(back_populates="station", cascade="all, delete-orphan")
 
 
+class FuelMonitorSettings(Base):
+    """Persistent application-wide overrides for the fuel collector."""
+
+    __tablename__ = "fuel_monitor_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    monitor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    comments_poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    stale_after_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    nearby_radius_km: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
+        nullable=False,
+    )
+
+
 class FuelStationFuel(Base):
     __tablename__ = "fuel_station_fuels"
     __table_args__ = (UniqueConstraint("station_id", "fuel_type", name="uq_fuel_station_fuel"),)

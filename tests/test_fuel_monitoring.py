@@ -1,14 +1,17 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
 
 import httpx
 import pytest
 
+import app.main as main_module
 import app.services.fuel as fuel_module
 from app.database import SessionLocal
 from app.models import (
     FuelDeliveryEvent,
     FuelForecast,
+    FuelMonitorSettings,
     FuelObservation,
     FuelStation,
     FuelStationComment,
@@ -31,6 +34,7 @@ from app.services.fuel_analytics import (
     detect_delivery_events,
     station_correlations,
 )
+from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 
 
 def test_gdebenz_normalization_per_fuel():
@@ -75,6 +79,257 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     response = client.get("/fuel")
     assert response.status_code == 200
     assert "АЗС пока не выбраны" in response.text
+
+
+def test_fuel_dashboard_renders_forecast_stale_and_collector_error(client, login, make_user, db):
+    user = make_user("fuel-dashboard-states")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    station = FuelStation(
+        owner_id=user.id,
+        provider="gdebenz",
+        provider_station_id="dashboard-station",
+        brand="Teboil",
+        address="Ветеранов, 188/1",
+        latitude=59.9,
+        longitude=30.2,
+        last_successful_poll_at=now - timedelta(minutes=5),
+    )
+    db.add(station)
+    db.flush()
+    db.add(FuelStationFuel(station_id=station.id, fuel_type="95", enabled=True))
+    db.add(
+        FuelObservation(
+            station_id=station.id,
+            fuel_type="95",
+            state="unavailable",
+            observed_at=now - timedelta(minutes=5),
+            is_stale=True,
+        )
+    )
+    db.add(
+        FuelForecast(
+            station_id=station.id,
+            fuel_type="95",
+            generated_at=now,
+            expected_at=now + timedelta(hours=2),
+            range_from=now + timedelta(hours=1),
+            range_to=now + timedelta(hours=3),
+            confidence=0.72,
+            model_version="test",
+            reason_json={},
+        )
+    )
+    db.commit()
+    login("fuel-dashboard-states")
+    previous_error = main_module.collector_health.last_error
+    main_module.collector_health.last_error = "GdeBenz HTTP 503"
+    try:
+        response = client.get("/fuel")
+    finally:
+        main_module.collector_health.last_error = previous_error
+    assert response.status_code == 200
+    assert "Мониторинг задерживается" in response.text
+    assert "GdeBenz HTTP 503" in response.text
+    assert "Данные устарели" in response.text
+    assert "72%" in response.text
+
+
+def test_fuel_settings_default_to_env_and_database_override_persists(db):
+    default = get_fuel_runtime_settings(db)
+    assert default.source == "env"
+    assert default.poll_interval_seconds == main_module.settings.fuel_poll_interval_seconds
+    assert default.comments_poll_interval_seconds == main_module.settings.fuel_comments_poll_interval_seconds
+
+    save_fuel_runtime_settings(
+        db,
+        monitor_enabled=False,
+        poll_interval_seconds=120,
+        comments_poll_interval_seconds=600,
+        stale_after_minutes=90,
+        nearby_radius_km=4,
+    )
+    with SessionLocal() as recreated_session:
+        saved = get_fuel_runtime_settings(recreated_session)
+    assert saved.source == "database"
+    assert saved.monitor_enabled is False
+    assert saved.poll_interval_seconds == 120
+    assert saved.comments_poll_interval_seconds == 600
+    assert saved.stale_after_minutes == 90
+    assert saved.nearby_radius_km == 4
+
+
+@pytest.mark.parametrize(
+    ("poll_interval", "comments_interval"),
+    [(59, 300), (60, 299), (86_401, 300), (60, 604_801)],
+)
+def test_fuel_settings_reject_invalid_intervals(db, poll_interval, comments_interval):
+    with pytest.raises(ValueError):
+        save_fuel_runtime_settings(
+            db,
+            monitor_enabled=True,
+            poll_interval_seconds=poll_interval,
+            comments_poll_interval_seconds=comments_interval,
+            stale_after_minutes=120,
+            nearby_radius_km=3,
+        )
+    assert db.get(FuelMonitorSettings, 1) is None
+
+
+def test_fuel_settings_routes_render_save_and_toggle(client, login, make_user):
+    make_user("fuel-settings")
+    login("fuel-settings")
+    response = client.get("/fuel/settings")
+    assert response.status_code == 200
+    assert "Настройки бензина" in response.text
+    assert "Проверить сейчас" in response.text
+
+    response = client.post(
+        "/fuel/settings",
+        data={
+            "poll_interval_seconds": "120",
+            "comments_poll_interval_seconds": "600",
+            "stale_after_minutes": "90",
+            "nearby_radius_km": "4",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with SessionLocal() as db:
+        saved = get_fuel_runtime_settings(db)
+    assert saved.monitor_enabled is False
+    assert saved.poll_interval_seconds == 120
+
+    invalid = client.post(
+        "/fuel/settings",
+        data={
+            "monitor_enabled": "on",
+            "poll_interval_seconds": "59",
+            "comments_poll_interval_seconds": "600",
+            "stale_after_minutes": "90",
+            "nearby_radius_km": "4",
+        },
+    )
+    assert invalid.status_code == 400
+    assert "допустимо от 60" in invalid.text
+
+
+def test_repeated_fuel_settings_save_only_wakes_scheduler(client, login, make_user, monkeypatch):
+    make_user("fuel-settings-wakeup")
+    login("fuel-settings-wakeup")
+
+    class WakeupSpy:
+        calls = 0
+
+        def set(self):
+            self.calls += 1
+
+    wakeup = WakeupSpy()
+    monkeypatch.setattr(main_module, "fuel_scheduler_wakeup", wakeup)
+    data = {
+        "monitor_enabled": "on",
+        "poll_interval_seconds": "300",
+        "comments_poll_interval_seconds": "900",
+        "stale_after_minutes": "120",
+        "nearby_radius_km": "3",
+    }
+    assert client.post("/fuel/settings", data=data, follow_redirects=False).status_code == 303
+    assert client.post("/fuel/settings", data=data, follow_redirects=False).status_code == 303
+    assert wakeup.calls == 2
+
+
+def test_station_settings_update_fuels_and_enabled_state(client, login, make_user, db):
+    user = make_user("fuel-station-settings")
+    station = FuelStation(
+        owner_id=user.id,
+        provider="gdebenz",
+        provider_station_id="settings-station",
+        brand="Teboil",
+        latitude=59.9,
+        longitude=30.2,
+    )
+    db.add(station)
+    db.flush()
+    db.add_all([FuelStationFuel(station_id=station.id, fuel_type=fuel, enabled=True) for fuel in ("95", "98", "100")])
+    db.commit()
+    station_id = station.id
+    login("fuel-station-settings")
+
+    assert client.get(f"/fuel/{station_id}/settings").status_code == 200
+    response = client.post(
+        f"/fuel/{station_id}/settings",
+        data={"fuel_types": ["95", "100"]},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    with SessionLocal() as check_db:
+        updated = check_db.get(FuelStation, station_id)
+        enabled_fuels = {item.fuel_type for item in updated.fuels if item.enabled}
+    assert updated.enabled is False
+    assert enabled_fuels == {"95", "100"}
+
+
+def test_scheduler_rereads_runtime_interval(monkeypatch):
+    runtimes = iter(
+        (
+            FuelRuntimeSettings(True, 60, 300, 120, 3, "database"),
+            FuelRuntimeSettings(True, 120, 600, 120, 3, "database"),
+        )
+    )
+    waits = []
+
+    def fake_settings(_db):
+        return next(runtimes)
+
+    async def fake_cycle(**_kwargs):
+        return {"stations": 0, "success": 0, "failed": 0, "observations": 0}
+
+    async def fake_wait(awaitable, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        if len(waits) == 2:
+            raise asyncio.CancelledError
+        raise TimeoutError
+
+    monkeypatch.setattr(main_module, "get_fuel_runtime_settings", fake_settings)
+    monkeypatch.setattr(main_module, "run_fuel_poll_cycle", fake_cycle)
+    monkeypatch.setattr(main_module.asyncio, "wait_for", fake_wait)
+    main_module.fuel_scheduler_wakeup.clear()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(main_module.fuel_poll_scheduler())
+    assert waits == [60, 120]
+
+
+def test_poll_now_does_not_start_when_cycle_is_locked(client, login, make_user, monkeypatch):
+    make_user("fuel-manual-lock")
+    login("fuel-manual-lock")
+
+    class BusyLock:
+        def locked(self):
+            return True
+
+    monkeypatch.setattr(main_module, "fuel_poll_lock", BusyLock())
+    response = client.post("/fuel/poll-now", follow_redirects=False)
+    assert response.status_code == 303
+    assert "Проверка уже выполняется" in unquote(response.headers["location"])
+
+
+def test_poll_now_is_debounced(client, login, make_user, monkeypatch):
+    make_user("fuel-manual-debounce")
+    login("fuel-manual-debounce")
+    calls = []
+
+    async def fake_cycle(**_kwargs):
+        calls.append(1)
+        return {"stations": 0, "success": 0, "failed": 0, "observations": 0}
+
+    monkeypatch.setattr(main_module, "run_fuel_poll_cycle", fake_cycle)
+    main_module.collector_health.last_manual_poll_started_at = None
+    first = client.post("/fuel/poll-now", follow_redirects=False)
+    second = client.post("/fuel/poll-now", follow_redirects=False)
+    assert first.status_code == 303
+    assert second.status_code == 303
+    assert "Повторная проверка" in unquote(second.headers["location"])
+    assert len(calls) == 1
 
 
 def test_gdebenz_provider_follows_redirects_sends_headers_and_parses_stations():
