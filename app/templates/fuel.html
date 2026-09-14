@@ -1,8 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Бензин{% endblock %}
+{% block body_class %}fuel-page{% endblock %}
 {% block content %}
-<div class="page-head compact-head"><div><h1>Бензин</h1><div class="subline">Выбранные АЗС и отслеживаемые марки топлива</div></div><a class="btn" href="/fuel/add">+ Добавить АЗС</a></div>
-{% if stations %}<div class="vehicle-grid">{% for station in stations %}
-<section class="card vehicle-card"><div class="vehicle-card-icon">⛽</div><div class="vehicle-card-main"><h2>{{ station.brand or station.name or 'АЗС' }}</h2><span>{{ station.address or 'Адрес не указан источником' }}</span>{% for fuel in station.fuels if fuel.enabled %}{% set item = latest.get((station.id, fuel.fuel_type)) %}<small>АИ-{{ fuel.fuel_type }} — {% if item %}{{ {'available':'Есть','low':'Мало','unavailable':'Нет','unknown':'Нет данных'}[item.state] }}{% if item.is_stale %} · ⚠ данные устарели{% endif %} · {{ item.observed_at|msk_datetime }}{% else %}Нет данных{% endif %}</small>{% endfor %}<small>Последний успешный опрос: {{ station.last_successful_poll_at|msk_datetime or 'ещё не выполнялся' }}</small></div><a class="btn secondary" href="/fuel/{{ station.id }}">История</a><form method="post" action="/fuel/stations/{{ station.id }}/delete"><button class="btn secondary" type="submit">Отключить</button></form></section>
-{% endfor %}</div>{% else %}<section class="card vehicle-empty"><div><h2>АЗС пока не выбраны</h2><p>Найдите адрес, вручную выберите станцию и марки топлива. Данные GdeBenz — отметки водителей, а не гарантия наличия.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
+<div class="page-head compact-head fuel-head">
+    <div><h1>Бензин</h1><div class="subline">Наличие топлива и прогноз поставок</div></div>
+    <a class="btn" href="/fuel/add">+ Добавить АЗС</a>
+</div>
+<div class="fuel-collector {{ 'ok' if collector.enabled and persistent_success else 'warn' }}">
+    <span class="fuel-collector-dot" aria-hidden="true"></span>
+    <div><b>{% if not collector.enabled %}Сбор данных выключен{% elif persistent_success %}Сбор данных работает{% else %}Ожидаем первый опрос{% endif %}</b>
+    <small>{% if persistent_success %}Последний успешный опрос {{ persistent_success|fuel_age }}{% else %}История ещё не получена{% endif %}</small></div>
+</div>
+<section class="fuel-upcoming">
+    <div class="card-head"><div><h2>Ближайшие поставки</h2><p class="subline">Статистический прогноз по накопленной истории</p></div></div>
+    {% if upcoming %}<div class="fuel-forecast-strip">
+        {% for forecast in upcoming %}{% set station = station_by_id[forecast.station_id] %}
+        <a class="card fuel-upcoming-card" href="/fuel/{{ station.id }}"><span class="pill">АИ-{{ forecast.fuel_type }}</span><b>{{ station.brand or station.name or 'АЗС' }}</b><small>{{ station.address or '' }}</small><strong>~{{ forecast.expected_at|msk_datetime('%d.%m %H:%M') }}</strong><span>{{ forecast.range_from|msk_datetime('%H:%M') }}–{{ forecast.range_to|msk_datetime('%H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span></a>
+        {% endfor %}
+    </div>{% else %}<div class="card fuel-empty-inline"><span>◷</span><div><b>Прогноз появится после накопления нескольких поставок</b><small>Для первого расчёта нужно минимум три подтверждённых события.</small></div></div>{% endif %}
+</section>
+{% if stations %}<div class="fuel-station-grid">
+    {% for station in stations %}<article class="card fuel-station-card">
+        <header><div class="fuel-brand-mark">⛽</div><div><h2>{{ station.brand or station.name or 'АЗС' }}</h2><p>{{ station.address or 'Адрес не указан источником' }}</p></div></header>
+        <div class="fuel-status-list">{% for fuel in station.fuels if fuel.enabled %}{% set item = latest.get((station.id, fuel.fuel_type)) %}{% set forecast = forecasts.get((station.id, fuel.fuel_type)) %}
+            <div class="fuel-status-row {{ item.state if item else 'unknown' }} {{ 'stale' if item and item.is_stale else '' }}"><b class="fuel-grade">{{ fuel.fuel_type }}</b><div class="fuel-status-copy"><strong>{% if not item %}Нет данных{% elif item.state == 'available' %}Есть{% elif item.state == 'low' %}Мало{% elif item.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong><small>{% if item and item.is_stale %}⚠ данные устарели · {% endif %}{% if item %}обновлено {{ item.observed_at|fuel_age }}{% else %}ожидаем первый опрос{% endif %}</small>{% if forecast %}<span>Ожидается ~{{ forecast.expected_at|msk_datetime('%d.%m %H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span>{% else %}<span>Собираем статистику</span>{% endif %}</div></div>
+        {% endfor %}</div>
+        <footer><span>Опрос {{ station.last_successful_poll_at|fuel_age if station.last_successful_poll_at else 'ещё не выполнялся' }}</span><a class="btn secondary" href="/fuel/{{ station.id }}">Подробнее</a></footer>
+    </article>{% endfor %}
+</div>{% else %}<section class="card vehicle-empty"><div><h2>АЗС пока не выбраны</h2><p>Добавьте интересующие станции, чтобы сервис начал собирать историю и строить прогноз.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
 {% endblock %}

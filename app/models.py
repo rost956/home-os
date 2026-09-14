@@ -822,6 +822,52 @@ class FuelStationComment(Base):
     raw_data: Mapped[dict | None] = mapped_column(JSON)
 
 
+class FuelDeliveryEvent(Base):
+    __tablename__ = "fuel_delivery_events"
+    __table_args__ = (
+        UniqueConstraint("after_observation_id", name="uq_fuel_delivery_after_observation"),
+        Index("ix_fuel_delivery_station_fuel_at", "station_id", "fuel_type", "estimated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    estimated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    before_observation_id: Mapped[int] = mapped_column(ForeignKey("fuel_observations.id"), nullable=False)
+    after_observation_id: Mapped[int] = mapped_column(ForeignKey("fuel_observations.id"), nullable=False)
+    detection_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    detector_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class FuelForecast(Base):
+    __tablename__ = "fuel_forecasts"
+    __table_args__ = (
+        Index("ix_fuel_forecast_station_fuel_generated", "station_id", "fuel_type", "generated_at"),
+        Index("ix_fuel_forecast_generated", "generated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    station_id: Mapped[int] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    expected_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    range_from: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    range_to: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    actual_delivery_event_id: Mapped[int | None] = mapped_column(ForeignKey("fuel_delivery_events.id"))
+    absolute_error_minutes: Mapped[float | None] = mapped_column()
+    was_within_range: Mapped[bool | None] = mapped_column(Boolean)
+
+
 class ShoppingList(Base):
     __tablename__ = "shopping_lists"
 

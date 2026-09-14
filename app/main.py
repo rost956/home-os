@@ -46,6 +46,8 @@ from .models import (
     ExpenseLimit,
     ExpenseList,
     ExpenseListShare,
+    FuelDeliveryEvent,
+    FuelForecast,
     FuelObservation,
     FuelStation,
     FuelStationComment,
@@ -116,6 +118,7 @@ from .services.fuel import (
     fuel_poll_lock,
     run_fuel_poll_cycle,
 )
+from .services.fuel_analytics import station_correlations
 from .services.planner import (
     calendar_occurrences,
     format_planner_date_range,
@@ -258,6 +261,32 @@ def presence_info(target: User | None) -> dict[str, Any]:
 
 
 templates.env.filters["msk_datetime"] = format_msk_datetime
+
+
+def fuel_age(value: datetime | None) -> str:
+    if value is None:
+        return "нет данных"
+    delta = max(timedelta(0), utc_now_naive() - value.replace(tzinfo=None))
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} мин назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ч назад"
+    return f"{hours // 24} дн назад"
+
+
+templates.env.filters["fuel_age"] = fuel_age
+
+
+def msk_hour_percent(value: datetime | None) -> float:
+    local = to_msk(value)
+    return round((local.hour * 60 + local.minute) / (24 * 60) * 100, 2) if local else 0
+
+
+templates.env.filters["msk_hour_percent"] = msk_hour_percent
 templates.env.filters["fmt_odometer"] = format_odometer
 templates.env.filters["palette_css"] = palette_css_variables
 templates.env.filters["gradient_css"] = gradient_css_variables
@@ -2455,13 +2484,22 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
         ).order_by(FuelStation.updated_at.desc())
     ).all()
     latest = {}
+    forecasts = {}
     for station in stations:
         for fuel in station.fuels:
             if fuel.enabled:
                 latest[(station.id, fuel.fuel_type)] = db.scalar(select(FuelObservation).where(
                     FuelObservation.station_id == station.id, FuelObservation.fuel_type == fuel.fuel_type
                 ).order_by(FuelObservation.observed_at.desc()).limit(1))
-    return render(request, "fuel.html", {"user": user, "stations": stations, "latest": latest})
+                forecasts[(station.id, fuel.fuel_type)] = db.scalar(select(FuelForecast).where(
+                    FuelForecast.station_id == station.id, FuelForecast.fuel_type == fuel.fuel_type
+                ).order_by(FuelForecast.generated_at.desc()).limit(1))
+    upcoming = sorted((item for item in forecasts.values() if item and item.range_to >= utc_now_naive()), key=lambda item: item.expected_at)
+    persistent_success = max((item.last_successful_poll_at for item in stations if item.last_successful_poll_at), default=None)
+    return render(request, "fuel.html", {"user": user, "stations": stations,
+        "station_by_id": {item.id: item for item in stations}, "latest": latest, "forecasts": forecasts,
+        "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=settings.fuel_monitor_enabled),
+        "persistent_success": persistent_success})
 
 
 @app.get("/fuel/add")
@@ -2563,6 +2601,46 @@ def fuel_observations_api(
              "confirmations": item.confirmations, "confidence": item.confidence, "is_stale": item.is_stale} for item in items]
 
 
+@app.get("/api/fuel/stations/{station_id}/deliveries")
+def fuel_deliveries_api(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    items = db.scalars(select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id).order_by(
+        FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
+    return [{"id": item.id, "fuel_type": item.fuel_type, "window_start": item.window_start,
+             "window_end": item.window_end, "estimated_at": item.estimated_at, "confidence": item.confidence,
+             "reason": item.detection_reason, "evidence": item.evidence_json} for item in items]
+
+
+@app.get("/api/fuel/stations/{station_id}/forecast")
+def fuel_forecast_api(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
+    if station is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    items = []
+    for fuel_type in FUEL_TYPES:
+        item = db.scalar(select(FuelForecast).where(FuelForecast.station_id == station.id,
+            FuelForecast.fuel_type == fuel_type).order_by(FuelForecast.generated_at.desc()).limit(1))
+        if item:
+            items.append({"fuel_type": fuel_type, "expected_at": item.expected_at, "range_from": item.range_from,
+                          "range_to": item.range_to, "confidence": item.confidence, "reason": item.reason_json})
+    return items
+
+
+@app.get("/api/fuel/forecasts")
+def fuel_forecasts_api(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    station_ids = select(FuelStation.id).where(FuelStation.owner_id == user.id, FuelStation.enabled.is_(True))
+    items = db.scalars(select(FuelForecast).where(FuelForecast.station_id.in_(station_ids)).order_by(
+        FuelForecast.generated_at.desc()).limit(200)).all()
+    latest = {}
+    for item in items:
+        latest.setdefault((item.station_id, item.fuel_type), item)
+    return [{"station_id": item.station_id, "fuel_type": item.fuel_type, "expected_at": item.expected_at,
+             "range_from": item.range_from, "range_to": item.range_to, "confidence": item.confidence,
+             "reason": item.reason_json} for item in latest.values()]
+
+
 @app.get("/fuel/{station_id}")
 def fuel_station_history(request: Request, station_id: int, fuel_type: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     station = db.scalar(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
@@ -2572,11 +2650,26 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
     if fuel_type in FUEL_TYPES:
         query = query.where(FuelObservation.fuel_type == fuel_type)
     observations = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(200)).all()
+    latest = {fuel: db.scalar(select(FuelObservation).where(FuelObservation.station_id == station.id,
+        FuelObservation.fuel_type == fuel).order_by(FuelObservation.observed_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    delivery_query = select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id)
+    if fuel_type in FUEL_TYPES:
+        delivery_query = delivery_query.where(FuelDeliveryEvent.fuel_type == fuel_type)
+    deliveries = db.scalars(delivery_query.order_by(FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
+    latest_deliveries = {fuel: db.scalar(select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id,
+        FuelDeliveryEvent.fuel_type == fuel).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    forecasts = {fuel: db.scalar(select(FuelForecast).where(FuelForecast.station_id == station.id,
+        FuelForecast.fuel_type == fuel).order_by(FuelForecast.generated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    correlations = {fuel: station_correlations(db, station, fuel) for fuel in FUEL_TYPES}
+    station_names = {item.id: (item.address or item.brand or item.name or "АЗС") for item in db.scalars(
+        select(FuelStation).where(FuelStation.owner_id == user.id)).all()}
     comments = db.scalars(select(FuelStationComment).where(FuelStationComment.station_id == station.id).order_by(
         FuelStationComment.source_created_at.desc(), FuelStationComment.id.desc()
     ).limit(30)).all()
     return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
-                                                  "comments": comments, "fuel_type": fuel_type})
+        "comments": comments, "fuel_type": fuel_type, "latest": latest, "deliveries": deliveries,
+        "latest_deliveries": latest_deliveries, "forecasts": forecasts, "correlations": correlations,
+        "station_names": station_names})
 
 
 @app.get("/vehicles")

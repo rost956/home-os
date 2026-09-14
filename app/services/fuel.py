@@ -261,6 +261,7 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
     collector_health.running = True
     collector_health.last_poll_started_at = now_utc()
     summary = {"stations": 0, "success": 0, "failed": 0, "observations": 0}
+    successful_station_ids: list[int] = []
     try:
         with session_factory() as db:
             stations = db.scalars(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.enabled.is_(True))).all()
@@ -302,11 +303,24 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
                             logger.warning("Fuel comments poll failed station_id=%s error=%s", station.id, type(exc).__name__)
                     db.commit()
                 summary["success"] += 1
+                successful_station_ids.append(saved.id)
                 collector_health.last_successful_poll_at = observed_at
             except Exception as exc:
                 summary["failed"] += 1
                 collector_health.last_error_at, collector_health.last_error = now_utc(), type(exc).__name__
                 logger.warning("Fuel station poll failed station_id=%s error=%s", saved.id, type(exc).__name__)
+        from .fuel_analytics import process_fuel_history
+
+        for station_id in successful_station_ids:
+            with session_factory() as db:
+                events, forecasts = process_fuel_history(db, station_id)
+                if events or forecasts:
+                    logger.info(
+                        "Fuel analytics updated station_id=%s delivery_events=%s forecasts=%s",
+                        station_id,
+                        events,
+                        forecasts,
+                    )
         return summary
     finally:
         collector_health.running = False
