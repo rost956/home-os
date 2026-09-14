@@ -81,8 +81,15 @@ def _distance_meters(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> 
 class GdeBenzProvider:
     """Thin, defensive adapter for the unofficial GdeBenz JSON API."""
 
-    def __init__(self, *, timeout_seconds: int = 10, user_agent: str = "HomeOS-FuelMonitor/1.0") -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 10,
+        user_agent: str = "HomeOS-FuelMonitor/1.0",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.timeout_seconds = timeout_seconds
+        self.transport = transport
         self.headers = {"User-Agent": user_agent, "Accept": "application/json", "Referer": "https://gdebenz.ru/"}
 
     async def get_stations_near(self, latitude: float, longitude: float, radius_km: float = 3) -> list[FuelStationCandidate]:
@@ -112,15 +119,29 @@ class GdeBenzProvider:
     async def _get_json(self, path: str, params: dict[str, str]) -> Any:
         for attempt in range(3):
             try:
-                async with httpx.AsyncClient(base_url="https://gdebenz.ru", headers=self.headers, timeout=self.timeout_seconds) as client:
+                async with httpx.AsyncClient(
+                    base_url="https://gdebenz.ru",
+                    headers=self.headers,
+                    timeout=self.timeout_seconds,
+                    follow_redirects=True,
+                    transport=self.transport,
+                ) as client:
                     response = await client.get(path, params=params)
-                if response.status_code == 429 or response.status_code >= 500:
-                    raise ProviderUnavailable(f"GdeBenz HTTP {response.status_code}")
                 response.raise_for_status()
                 return response.json()
             except (httpx.HTTPError, ValueError, ProviderUnavailable) as exc:
                 if attempt == 2:
-                    logger.warning("GdeBenz request failed path=%s error=%s", path, type(exc).__name__)
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        failed_response = exc.response
+                        logger.warning(
+                            "GdeBenz request failed path=%s status=%s url=%s body=%s",
+                            path,
+                            failed_response.status_code,
+                            failed_response.request.url,
+                            failed_response.text[:500],
+                        )
+                    else:
+                        logger.warning("GdeBenz request failed path=%s error=%s", path, type(exc).__name__)
                     raise ProviderUnavailable("Источник GdeBenz временно недоступен") from exc
                 await asyncio.sleep(0.4 * (2**attempt))
         raise AssertionError("unreachable")

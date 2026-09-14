@@ -1,10 +1,16 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import httpx
+import pytest
+
+import app.services.fuel as fuel_module
 from app.database import SessionLocal
 from app.models import FuelObservation, FuelStation, FuelStationComment, FuelStationFuel
 from app.services.fuel import (
     FuelStationCandidate,
+    GdeBenzProvider,
+    ProviderUnavailable,
     normalize_fuel_states,
     parse_source_datetime,
     run_fuel_poll_cycle,
@@ -54,6 +60,40 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     response = client.get("/fuel")
     assert response.status_code == 200
     assert "АЗС пока не выбраны" in response.text
+
+
+def test_gdebenz_provider_follows_redirects_sends_headers_and_parses_stations():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/nearby":
+            return httpx.Response(301, headers={"Location": "/api/nearby-final"}, request=request)
+        return httpx.Response(200, json={"stations": [{"osm_id": "usr_-yN7-ZKW2RA", "brand": "Teboil", "name": "Тебойл", "addr": "пр-кт Ветеранов, 188/1", "lat": 59.83486, "lon": 30.120975}]}, request=request)
+
+    provider = GdeBenzProvider(user_agent="test-agent", transport=httpx.MockTransport(handler))
+    stations = asyncio.run(provider.get_stations_near(59.83486, 30.120975, 3))
+    assert stations[0].provider_station_id == "usr_-yN7-ZKW2RA"
+    assert len(requests) == 2
+    assert requests[0].headers["user-agent"] == "test-agent"
+    assert requests[0].headers["accept"] == "application/json"
+    assert requests[0].headers["referer"] == "https://gdebenz.ru/"
+
+
+def test_gdebenz_http_status_error_logs_response_context(monkeypatch, caplog):
+    async def no_sleep(_delay):
+        return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="blocked by test provider", request=request)
+
+    monkeypatch.setattr(fuel_module.asyncio, "sleep", no_sleep)
+    provider = GdeBenzProvider(transport=httpx.MockTransport(handler))
+    with pytest.raises(ProviderUnavailable), caplog.at_level("WARNING"):
+        asyncio.run(provider.get_stations_near(59.83486, 30.120975, 3))
+    assert "status=403" in caplog.text
+    assert "https://gdebenz.ru/api/nearby" in caplog.text
+    assert "blocked by test provider" in caplog.text
 
 
 class FakeProvider:
