@@ -11,7 +11,6 @@
     <div class="actions dashboard-actions"><a class="btn" href="/fuel/add"><span aria-hidden="true">+</span> АЗС</a><a class="btn secondary" href="/fuel/settings">Настройки</a></div>
 </div>
 
-{% if dashboard.stations %}
 <section class="fuel-dashboard-controls" aria-label="Фильтры АЗС">
     <div class="fuel-quick-filters" role="group" aria-label="Вид топлива">
         <button type="button" data-fuel="all" aria-pressed="true">Все</button>
@@ -29,19 +28,22 @@
             <p class="subline fuel-location-status" aria-live="polite"></p>
             <div class="actions fuel-filter-actions"><button class="btn" type="button" data-filter-apply>Применить</button><button class="btn secondary" type="button" data-filter-reset>Сбросить</button></div>
         </div>
-        <div class="fuel-view-toggle" role="group" aria-label="Режим отображения"><button type="button" data-view="list" aria-pressed="true">Список</button><button type="button" data-view="map" aria-pressed="false">Карта</button><button type="button" data-view="route" aria-pressed="false">Маршрут</button></div>
+        <div class="fuel-view-toggle" role="group" aria-label="Режим отображения"><button type="button" data-view="list" aria-pressed="true">Список</button><button type="button" data-view="map" aria-pressed="false">Карта</button><button type="button" data-view="trip" aria-pressed="false">Поездка</button></div>
     </div>
 </section>
 
-<section class="card fuel-route-panel" data-route-panel hidden aria-labelledby="fuelRouteTitle">
-    <div class="fuel-route-heading"><div><h2 id="fuelRouteTitle">АЗС вдоль маршрута</h2><p>Укажите координаты начала и конца прямого участка маршрута.</p></div></div>
-    <form class="fuel-route-form" data-route-form>
-        <fieldset><legend>Начало</legend><label>Широта<input name="start_lat" type="number" min="-90" max="90" step="any" inputmode="decimal" required placeholder="59.8348"></label><label>Долгота<input name="start_lon" type="number" min="-180" max="180" step="any" inputmode="decimal" required placeholder="30.1211"></label></fieldset>
-        <fieldset><legend>Конец</legend><label>Широта<input name="end_lat" type="number" min="-90" max="90" step="any" inputmode="decimal" required placeholder="59.9000"></label><label>Долгота<input name="end_lon" type="number" min="-180" max="180" step="any" inputmode="decimal" required placeholder="30.3000"></label></fieldset>
-        <button class="btn" type="submit">Найти АЗС</button>
+<section class="card fuel-trip-panel" data-trip-panel hidden aria-labelledby="fuelTripTitle">
+    <div class="fuel-trip-heading"><h2 id="fuelTripTitle">Планирование поездки</h2><p>Расчёт использует безопасный остаток топлива и актуальные данные АЗС.</p></div>
+    <form class="form fuel-trip-form" data-trip-form>
+        <div class="form-row two-cols"><label>Автомобиль<select name="vehicle_id" required><option value="">Выберите автомобиль</option>{% for vehicle in trip_vehicles %}<option value="{{ vehicle.id }}" data-consumption="{{ vehicle.consumption_l_per_100km or '' }}">{{ vehicle.title }}</option>{% endfor %}</select></label><label>Топливо<select name="fuel_type" required><option value="95">АИ-95</option><option value="98">АИ-98</option><option value="100">АИ-100</option></select></label></div>
+        <div class="form-row two-cols"><label>Откуда<input name="start" maxlength="300" required placeholder="Санкт-Петербург"></label><label>Куда<input name="end" maxlength="300" required placeholder="Мурманск"></label></div>
+        <div class="form-row three-cols"><label>Объём бака, л<input name="tank_liters" type="number" min="1" max="300" step="0.1" inputmode="decimal" required placeholder="55"></label><label>Расход, л/100 км<input name="consumption_l_per_100km" type="number" min="1" max="100" step="0.1" inputmode="decimal" required placeholder="8.5"></label><label>Текущий запас, %<input name="fuel_level_percent" type="number" min="0" max="100" step="1" inputmode="numeric" required value="50"></label></div>
+        {% if not trip_vehicles %}<p class="subline">Сначала <a href="/vehicles/new">добавьте автомобиль</a>. Бак и расход можно указать вручную.</p>{% endif %}
+        <button class="btn" type="submit">Рассчитать поездку</button>
     </form>
-    <p class="subline fuel-route-status" data-route-status aria-live="polite">Маршрут ещё не построен.</p>
+    <p class="subline fuel-trip-status" data-trip-status aria-live="polite">Поездка ещё не рассчитана.</p>
 </section>
+<section class="fuel-trip-summary" data-trip-summary hidden aria-label="Расчёт поездки"></section>
 
 <div class="fuel-dashboard-meta" data-dashboard-meta>
     <span><b data-visible-count>{{ dashboard.stations|length }}</b> АЗС · {% if dashboard.last_updated_at %}обновлено {{ dashboard.last_updated_at|fuel_age }}{% else %}данных пока нет{% endif %}</span>
@@ -58,13 +60,14 @@
         <footer>{{ station.updated_text }}</footer>
     </a>
     {% endfor %}
+    {% if not dashboard.stations %}<section class="card vehicle-empty fuel-no-stations"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС или рассчитайте поездку.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
 </div>
 
 <section class="fuel-map-panel" data-fuel-map-panel hidden aria-label="Карта отслеживаемых АЗС">
     <div id="fuelMap" class="fuel-map" aria-label="Карта АЗС"></div>
     <div class="empty small fuel-map-empty" hidden>По выбранным фильтрам АЗС не найдено.</div>
 </section>
-<section class="fuel-route-results" data-route-results hidden aria-label="АЗС вдоль маршрута"></section>
+<section class="fuel-trip-results" data-trip-results hidden aria-label="Рекомендуемые остановки"></section>
 <section class="card fuel-filter-empty" hidden><h2>По выбранным фильтрам АЗС не найдено</h2><button class="btn secondary" type="button" data-filter-reset>Сбросить фильтры</button></section>
 
 <section class="card slim fuel-today-summary" data-dashboard-summary>
@@ -77,12 +80,9 @@
     <div data-map-sheet-content></div>
 </aside>
 <script id="fuelDashboardData" type="application/json">{{ dashboard.stations|tojson }}</script>
-{% else %}
-<section class="card vehicle-empty fuel-no-stations"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>
-{% endif %}
 {% endblock %}
 
-{% block scripts %}{% if dashboard.stations %}<script>
+{% block scripts %}<script>
 (function () {
     const data = document.getElementById('fuelDashboardData');
     if (!data) return;
@@ -102,29 +102,30 @@
     const onlyAvailable = document.getElementById('fuelOnlyAvailable');
     const locationStatus = document.querySelector('.fuel-location-status');
     const mapSheet = document.querySelector('[data-map-sheet]');
-    const routePanel = document.querySelector('[data-route-panel]');
-    const routeForm = document.querySelector('[data-route-form]');
-    const routeStatus = document.querySelector('[data-route-status]');
-    const routeResults = document.querySelector('[data-route-results]');
+    const tripPanel = document.querySelector('[data-trip-panel]');
+    const tripForm = document.querySelector('[data-trip-form]');
+    const tripStatus = document.querySelector('[data-trip-status]');
+    const tripSummary = document.querySelector('[data-trip-summary]');
+    const tripResults = document.querySelector('[data-trip-results]');
     const dashboardControls = document.querySelector('.fuel-dashboard-controls');
     const dashboardMeta = document.querySelector('[data-dashboard-meta]');
     const dashboardSummary = document.querySelector('[data-dashboard-summary]');
-    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet, routePanel, routeForm, routeStatus, routeResults, dashboardControls, dashboardMeta, dashboardSummary];
+    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet, tripPanel, tripForm, tripStatus, tripSummary, tripResults, dashboardControls, dashboardMeta, dashboardSummary];
     if (required.some(element => !element)) { console.error('Fuel dashboard markup is incomplete'); return; }
     let leafletMap = null;
     let markerLayer = null;
-    let routeLine = null;
+    let tripLine = null;
     let userLocation = null;
     let filteredStations = [];
-    let routeStations = [];
-    let routePoints = [];
-    let routeLoaded = false;
+    let tripStations = [];
+    let tripPoints = [];
+    let tripPlan = null;
     let activeMapStationId = null;
     const mobileMapQuery = matchMedia('(max-width: 600px)');
     const mobileMap = () => mobileMapQuery.matches;
     document.body.append(mapSheet);
     function savedView() { try { return localStorage.getItem('fuel-dashboard-view'); } catch (error) { return null; } }
-    const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map', 'route']};
+    const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map', 'trip']};
     const params = new URLSearchParams(location.search);
     const state = {
         fuel: allowed.fuel.includes(params.get('fuel')) ? params.get('fuel') : 'all',
@@ -137,7 +138,7 @@
     if (!allowed.view.includes(state.view)) state.view = 'list';
 
     function fuelEntry(station) { return state.fuel === 'all' ? null : station.fuels.find(item => item.fuel_type === state.fuel); }
-    function stationState(station) { return station.route || state.fuel === 'all' ? station.summary_state : (fuelEntry(station) || {}).state; }
+    function stationState(station) { return station.trip || state.fuel === 'all' ? station.summary_state : (fuelEntry(station) || {}).state; }
     function matches(station) {
         const current = stationState(station);
         if (!current) return false;
@@ -186,7 +187,7 @@
         const root = document.createElement('div'); root.className = 'fuel-map-card';
         const title = document.createElement('b'); title.className = 'fuel-map-card-title'; title.textContent = station.name; root.append(title);
         const address = document.createElement('p'); address.textContent = station.address; root.append(address);
-        if (station.route) {
+        if (station.trip) {
             const routeDistance = document.createElement('p'); routeDistance.className = 'fuel-map-distance'; routeDistance.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · отклонение ${station.distance_to_route_km.toFixed(1)} км`; root.append(routeDistance);
         } else if (mobile) {
             const distanceLabel = document.createElement('p'); distanceLabel.className = 'fuel-map-distance'; distanceLabel.dataset.mapDistance = ''; distanceLabel.textContent = formatDistance(station); root.append(distanceLabel);
@@ -223,33 +224,47 @@
         if (markerElement) markerElement.setAttribute('aria-expanded', 'true');
         mapSheet.querySelector('[data-map-sheet-content]').replaceChildren(popupContent(station, true));
         mapSheet.hidden = false;
-        if (!station.route) requestSheetLocation(station);
+        if (!station.trip) requestSheetLocation(station);
     }
-    function routeCard(station) {
-        const card = document.createElement('article'); card.className = 'card fuel-route-card';
-        const heading = document.createElement('div'); heading.className = 'fuel-route-card-heading';
-        const title = document.createElement('h3'); title.textContent = station.name; heading.append(title);
-        const metrics = document.createElement('p'); metrics.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · отклонение ${station.distance_to_route_km.toFixed(1)} км`; heading.append(metrics); card.append(heading);
+    function tripStopCard(station, index) {
+        const card = document.createElement('article'); card.className = 'card fuel-trip-stop';
+        const heading = document.createElement('div'); heading.className = 'fuel-trip-stop-heading';
+        const sequence = document.createElement('span'); sequence.className = 'pill'; sequence.textContent = `${index + 1}`; heading.append(sequence);
+        const title = document.createElement('h3'); title.textContent = station.name; heading.append(title); card.append(heading);
+        const metrics = document.createElement('p'); metrics.className = 'fuel-trip-stop-distance'; metrics.textContent = `Через ${station.distance_from_start_km.toFixed(0)} км · отклонение +${station.distance_to_route_km.toFixed(1)} км`; card.append(metrics);
         if (station.address) { const address = document.createElement('p'); address.className = 'subline'; address.textContent = station.address; card.append(address); }
-        const statuses = document.createElement('div'); statuses.className = 'fuel-route-card-statuses';
-        station.fuels.forEach(fuel => { const item = document.createElement('span'); item.className = fuel.state; item.textContent = `${fuel.fuel_type}: ${fuel.symbol} ${fuel.label}`; statuses.append(item); }); card.append(statuses);
-        const footer = document.createElement('footer'); footer.textContent = station.updated_text; card.append(footer);
+        const fuel = document.createElement('p'); fuel.className = `fuel-trip-stop-fuel ${station.selected_fuel.state}`; fuel.textContent = `АИ-${station.selected_fuel.fuel_type}: ${station.selected_fuel.symbol} ${station.selected_fuel.label}`; card.append(fuel);
+        const footer = document.createElement('footer'); footer.textContent = `${station.updated_text} · после заправки ≈ ${station.after_refuel_range_km.toFixed(0)} км`; card.append(footer);
         return card;
     }
-    function renderRouteResults() {
-        routeResults.replaceChildren(...routeStations.map(routeCard));
-        routeResults.hidden = state.view !== 'route' || !routeLoaded || routeStations.length === 0;
-        if (!routeLoaded) routeStatus.textContent = 'Маршрут ещё не построен.';
-        else if (!routeStations.length) routeStatus.textContent = 'В выбранном коридоре АЗС не найдены.';
-        else routeStatus.textContent = `Найдено АЗС: ${routeStations.length}. Список отсортирован от начала маршрута.`;
+    function renderTripPlan() {
+        tripSummary.hidden = state.view !== 'trip' || !tripPlan;
+        tripResults.hidden = state.view !== 'trip' || !tripPlan || tripStations.length === 0;
+        if (!tripPlan) { tripSummary.replaceChildren(); tripResults.replaceChildren(); return; }
+        const calculation = tripPlan.calculation;
+        const summary = document.createElement('section'); summary.className = 'card fuel-trip-calculation';
+        const heading = document.createElement('h2'); heading.textContent = `${tripPlan.route.start.label} → ${tripPlan.route.end.label}`; summary.append(heading);
+        const values = document.createElement('div'); values.className = 'fuel-trip-calculation-grid';
+        const rows = [
+            ['Расстояние', `${calculation.distance_km.toFixed(0)} км`],
+            ['Расход', calculation.consumption_l_per_100km !== undefined ? `${calculation.consumption_l_per_100km.toFixed(1)} л/100 км` : 'не указан'],
+            ['Нужно топлива', calculation.required_liters !== undefined ? `${calculation.required_liters.toFixed(1)} л` : 'нет расчёта'],
+            ['Текущий запас', calculation.current_range_km !== undefined ? `${calculation.current_range_km.toFixed(0)} км` : 'нет расчёта'],
+        ];
+        rows.forEach(([label, value]) => { const item = document.createElement('div'); const term = document.createElement('span'); const result = document.createElement('b'); term.textContent = label; result.textContent = value; item.append(term, result); values.append(item); }); summary.append(values);
+        if (calculation.next_refuel_from_km !== null && calculation.next_refuel_from_km !== undefined) { const next = document.createElement('p'); next.className = 'fuel-trip-next'; next.textContent = `Следующая заправка: примерно через ${calculation.next_refuel_from_km.toFixed(0)}–${calculation.next_refuel_to_km.toFixed(0)} км`; summary.append(next); }
+        if (tripPlan.warnings.length) { const warnings = document.createElement('ul'); warnings.className = 'fuel-trip-warnings'; tripPlan.warnings.forEach(message => { const item = document.createElement('li'); item.textContent = message; warnings.append(item); }); summary.append(warnings); }
+        tripSummary.replaceChildren(summary);
+        const title = document.createElement('h2'); title.textContent = 'Рекомендуемые остановки';
+        tripResults.replaceChildren(title, ...tripStations.map(tripStopCard));
     }
     function renderMap() {
-        if (!['map', 'route'].includes(state.view)) return;
-        const isRoute = state.view === 'route';
-        const mapStations = isRoute ? routeStations : filteredStations;
-        const hasMap = isRoute ? routeLoaded : mapStations.length > 0;
+        if (!['map', 'trip'].includes(state.view)) return;
+        const isTrip = state.view === 'trip';
+        const mapStations = isTrip ? tripStations : filteredStations;
+        const hasMap = isTrip ? Boolean(tripPlan) : mapStations.length > 0;
         mapEmpty.hidden = hasMap;
-        mapEmpty.textContent = isRoute ? 'Укажите координаты и нажмите «Найти АЗС».' : 'По выбранным фильтрам АЗС не найдено.';
+        mapEmpty.textContent = isTrip ? 'Заполните форму и нажмите «Рассчитать поездку».' : 'По выбранным фильтрам АЗС не найдено.';
         document.getElementById('fuelMap').hidden = !hasMap;
         if (!hasMap) return;
         if (!window.L) {
@@ -264,9 +279,16 @@
             markerLayer = window.L.layerGroup().addTo(leafletMap);
         }
         markerLayer.clearLayers();
-        if (routeLine) { routeLine.remove(); routeLine = null; }
-        const points = isRoute ? [...routePoints] : [];
-        if (isRoute && routePoints.length === 2) routeLine = window.L.polyline(routePoints, {color: '#2563eb', weight: 5, opacity: .78}).addTo(leafletMap);
+        if (tripLine) { tripLine.remove(); tripLine = null; }
+        const points = isTrip ? [...tripPoints] : [];
+        if (isTrip && tripPoints.length === 2) tripLine = window.L.polyline(tripPoints, {color: '#2563eb', weight: 5, opacity: .78}).addTo(leafletMap);
+        if (isTrip && tripPoints.length === 2) {
+            [['А', 'Старт'], ['Б', 'Финиш']].forEach(([symbol, label], index) => {
+                const icon = window.L.divIcon({className: `fuel-trip-endpoint ${index ? 'finish' : 'start'}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [38, 38], iconAnchor: [19, 19]});
+                const marker = window.L.marker(tripPoints[index], {icon, title: label, alt: label}).addTo(markerLayer);
+                if (marker.getElement()) marker.getElement().setAttribute('aria-label', label);
+            });
+        }
         mapStations.forEach(station => {
             const current = stationState(station) || 'unknown';
             const symbol = ({available: '✓', candidate: '?', low: '!', unavailable: '×', unknown: '·'})[current] || '·';
@@ -291,16 +313,16 @@
         cards.forEach(card => { card.hidden = true; });
         filteredStations.forEach(station => { const card = cards.get(station.id); card.hidden = false; list.append(card); });
         document.querySelector('[data-visible-count]').textContent = filteredStations.length;
-        list.hidden = state.view !== 'list'; mapPanel.hidden = !['map', 'route'].includes(state.view); routePanel.hidden = state.view !== 'route';
-        dashboardControls.classList.toggle('route-mode', state.view === 'route'); dashboardMeta.hidden = state.view === 'route'; dashboardSummary.hidden = state.view === 'route';
-        if (!['map', 'route'].includes(state.view) || (activeMapStationId && ![...filteredStations, ...routeStations].some(station => station.id === activeMapStationId))) closeMobileSheet();
-        filterEmpty.hidden = filteredStations.length > 0 || state.view !== 'list';
+        list.hidden = state.view !== 'list'; mapPanel.hidden = !['map', 'trip'].includes(state.view); tripPanel.hidden = state.view !== 'trip';
+        dashboardControls.classList.toggle('trip-mode', state.view === 'trip'); dashboardMeta.hidden = state.view === 'trip'; dashboardSummary.hidden = state.view === 'trip';
+        if (!['map', 'trip'].includes(state.view) || (activeMapStationId && ![...filteredStations, ...tripStations].some(station => station.id === activeMapStationId))) closeMobileSheet();
+        filterEmpty.hidden = stations.length === 0 || filteredStations.length > 0 || state.view !== 'list';
         document.querySelectorAll('[data-fuel]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.fuel === state.fuel)); });
         document.querySelectorAll('[data-view]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
         statusFilter.value = state.status; brandFilter.value = [...brandFilter.options].some(option => option.value === state.brand) ? state.brand : 'all'; state.brand = brandFilter.value;
         sortSelect.value = state.sort; onlyAvailable.checked = state.only;
         try { localStorage.setItem('fuel-dashboard-view', state.view); } catch (error) {}
-        syncUrl(); renderRouteResults(); renderMap();
+        syncUrl(); renderTripPlan(); renderMap();
     }
     function closeFilters() { panel.classList.remove('open'); document.body.classList.remove('fuel-filters-open'); filterOpen.setAttribute('aria-expanded', 'false'); }
     function requestLocation() {
@@ -311,31 +333,35 @@
         }, () => { locationStatus.textContent = 'Нет доступа к геолокации — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
     }
     document.querySelectorAll('.fuel-dashboard-controls [data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
-    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; if (state.view === 'route') closeFilters(); render(); }));
-    routeForm.addEventListener('submit', async event => {
+    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; if (state.view === 'trip') closeFilters(); render(); }));
+    tripForm.querySelector('[name="vehicle_id"]').addEventListener('change', event => {
+        const option = event.target.selectedOptions[0];
+        const consumption = tripForm.querySelector('[name="consumption_l_per_100km"]');
+        if (option && option.dataset.consumption && !consumption.value) consumption.value = option.dataset.consumption;
+    });
+    tripForm.addEventListener('submit', async event => {
         event.preventDefault();
-        if (!routeForm.reportValidity()) return;
-        const submit = routeForm.querySelector('[type="submit"]');
-        const values = new FormData(routeForm);
-        const query = new URLSearchParams();
-        ['start_lat', 'start_lon', 'end_lat', 'end_lon'].forEach(name => query.set(name, values.get(name)));
-        submit.disabled = true; routeStatus.textContent = 'Ищем АЗС вдоль маршрута…';
+        if (!tripForm.reportValidity()) return;
+        const submit = tripForm.querySelector('[type="submit"]');
+        const values = new FormData(tripForm);
+        const payload = Object.fromEntries(values.entries());
+        payload.vehicle_id = Number(payload.vehicle_id); payload.fuel_level_percent = Number(payload.fuel_level_percent); payload.tank_liters = Number(payload.tank_liters); payload.consumption_l_per_100km = Number(payload.consumption_l_per_100km);
+        submit.disabled = true; tripStatus.textContent = 'Рассчитываем запас и ищем подходящие АЗС…';
         try {
-            const response = await fetch(`/api/fuel/route-stations?${query.toString()}`, {headers: {'Accept': 'application/json'}});
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(payload.detail || 'Не удалось построить маршрут');
-            routePoints = [[Number(payload.start.latitude), Number(payload.start.longitude)], [Number(payload.end.latitude), Number(payload.end.longitude)]];
-            routeStations = payload.stations.map(item => {
+            const response = await fetch('/api/fuel/trip-plan', {method: 'POST', headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Не удалось рассчитать поездку');
+            tripPoints = result.route.geometry.map(point => [Number(point[0]), Number(point[1])]);
+            tripStations = result.recommended_stops.map(item => {
                 const fuels = item.fuels || [];
-                const fuelStates = fuels.map(fuel => fuel.state);
-                const summary = fuelStates.includes('available') ? 'available' : (fuelStates.includes('low') ? 'low' : (fuelStates.length && fuelStates.every(value => value === 'unavailable') ? 'unavailable' : 'unknown'));
-                return {...item, id: item.station_id, route: true, name: item.brand || item.name || 'АЗС', address: item.address || 'Адрес не указан', fuels, summary_state: summary, updated_text: routeUpdatedText(item.updated_at), distance_from_start_km: Number(item.distance_from_start_km), distance_to_route_km: Number(item.distance_to_route_km)};
+                const summary = (item.selected_fuel || {}).state || 'unknown';
+                return {...item, id: item.station_id, trip: true, name: item.brand || item.name || 'АЗС', address: item.address || 'Адрес не указан', fuels, summary_state: summary, updated_text: routeUpdatedText(item.updated_at), distance_from_start_km: Number(item.distance_from_start_km), distance_to_route_km: Number(item.distance_to_route_km), after_refuel_range_km: Number(item.after_refuel_range_km)};
             });
-            routeLoaded = true; closeMobileSheet(); render();
+            tripPlan = result; tripStatus.textContent = tripStations.length ? `Подобрано остановок: ${tripStations.length}.` : 'Дополнительная остановка по расчёту не требуется.'; closeMobileSheet(); render();
         } catch (error) {
-            routeLoaded = false; routeStations = []; routePoints = []; routeResults.hidden = true;
-            routeStatus.textContent = error instanceof Error ? error.message : 'Не удалось построить маршрут';
-            document.getElementById('fuelMap').hidden = true; mapEmpty.hidden = false; mapEmpty.textContent = 'Не удалось показать маршрут. Проверьте координаты и повторите попытку.';
+            tripPlan = null; tripStations = []; tripPoints = []; tripResults.hidden = true; tripSummary.hidden = true;
+            tripStatus.textContent = error instanceof Error ? error.message : 'Не удалось рассчитать поездку';
+            document.getElementById('fuelMap').hidden = true; mapEmpty.hidden = false; mapEmpty.textContent = 'Не удалось показать поездку. Проверьте данные и повторите попытку.';
         } finally { submit.disabled = false; }
     });
     statusFilter.addEventListener('change', () => { state.status = statusFilter.value; render(); });
@@ -350,14 +376,14 @@
     document.querySelector('[data-filter-close]').addEventListener('click', closeFilters);
     document.addEventListener('pointerdown', event => { if (!mapSheet.hidden && !mapSheet.contains(event.target) && !event.target.closest('.fuel-map-marker')) closeMobileSheet(); });
     document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); closeMobileSheet(); } });
-    window.addEventListener('fuel:leaflet-ready', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
-    window.addEventListener('fuel:leaflet-error', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
-    window.addEventListener('load', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
+    window.addEventListener('fuel:leaflet-ready', () => { if (['map', 'trip'].includes(state.view)) renderMap(); });
+    window.addEventListener('fuel:leaflet-error', () => { if (['map', 'trip'].includes(state.view)) renderMap(); });
+    window.addEventListener('load', () => { if (['map', 'trip'].includes(state.view)) renderMap(); });
     mobileMapQuery.addEventListener('change', () => {
         closeMobileSheet();
         if (leafletMap && leafletMap.closePopup) leafletMap.closePopup();
-        if (['map', 'route'].includes(state.view)) renderMap();
+        if (['map', 'trip'].includes(state.view)) renderMap();
     });
     render();
 })();
-</script>{% endif %}{% endblock %}
+</script>{% endblock %}

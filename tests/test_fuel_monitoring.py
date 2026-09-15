@@ -24,6 +24,7 @@ from app.models import (
     FuelStationMark,
     FuelStationSubscription,
     Recipe,
+    Vehicle,
 )
 from app.services.fuel import (
     FuelChatFeed,
@@ -55,6 +56,7 @@ from app.services.fuel_routes import (
 )
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 from app.services.fuel_timeline import build_fuel_timeline
+from app.services.fuel_trip import calculate_trip, select_recommended_stops
 from app.timezone import format_msk
 
 
@@ -207,12 +209,145 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
     assert invalid.status_code == 422
 
 
+def test_trip_calculation_keeps_safe_reserve_and_fuel_need():
+    result = calculate_trip(
+        1350,
+        tank_liters=60,
+        consumption_l_per_100km=8.5,
+        fuel_level_percent=50,
+    )
+    assert result["required_liters"] == 114.8
+    assert result["current_range_km"] == 352.9
+    assert result["safe_current_range_km"] == 247.1
+    assert result["safe_full_range_km"] == 600
+    assert result["next_refuel_from_km"] < result["next_refuel_to_km"]
+
+
+def test_trip_calculation_missing_vehicle_data_returns_warnings():
+    result = calculate_trip(
+        500,
+        tank_liters=None,
+        consumption_l_per_100km=None,
+        fuel_level_percent=50,
+    )
+    assert result["can_plan"] is False
+    assert len(result["warnings"]) == 2
+
+
+def test_trip_stop_selection_prioritizes_state_and_excludes_bad_candidates():
+    calculation = calculate_trip(
+        900,
+        tank_liters=60,
+        consumption_l_per_100km=10,
+        fuel_level_percent=50,
+    )
+
+    def candidate(identifier, distance, deviation, state, *, updated_at="2026-09-15T10:00:00Z"):
+        return {
+            "provider_station_id": identifier,
+            "name": identifier,
+            "distance_from_start_km": distance,
+            "distance_to_route_km": deviation,
+            "updated_at": updated_at,
+            "fuels": [{"fuel_type": "95", "state": state, "label": state, "symbol": "?"}],
+        }
+
+    candidates = [
+        candidate("outside", 200, 15, "available"),
+        candidate("no-fuel", 210, 0.1, "unavailable"),
+        candidate("candidate", 205, 0.1, "candidate"),
+        candidate("available", 195, 0.8, "available"),
+        candidate("second", 650, 0.3, "available"),
+    ]
+    stops, warnings = select_recommended_stops(
+        candidates,
+        fuel_type="95",
+        calculation=calculation,
+        now=datetime(2026, 9, 15, 11, tzinfo=timezone.utc),
+    )
+    assert [item["provider_station_id"] for item in stops] == ["available", "second"]
+    assert warnings == []
+
+
+def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
+    client, login, make_user, monkeypatch, db
+):
+    user = make_user("fuel-trip-api")
+    vehicle = Vehicle(
+        owner_id=user.id,
+        display_name="Фокус",
+        make="Ford",
+        model="Focus 3",
+        year=2014,
+        current_odometer=120000,
+    )
+    db.add(vehicle)
+    db.commit()
+
+    class TripProvider:
+        calls = 0
+
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            self.calls += 1
+            return [FuelStationCandidate(
+                provider="gdebenz",
+                provider_station_id=f"trip-{self.calls}",
+                brand="Teboil",
+                latitude=latitude,
+                longitude=longitude,
+                raw={"status": "yes", "fuels_now": "95", "updated": "2026-09-15T10:00:00Z"},
+            )]
+
+    monkeypatch.setattr(main_module, "make_gdebenz_provider", TripProvider)
+    login(user.username)
+    response = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id,
+        "start": "59.0,30.0",
+        "end": "64.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 50,
+        "tank_liters": 50,
+        "consumption_l_per_100km": 10,
+    })
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["vehicle"]["title"] == "Фокус"
+    assert payload["calculation"]["required_liters"] > 60
+    assert len(payload["recommended_stops"]) >= 1
+    assert all(
+        item["selected_fuel"]["fuel_type"] == "95"
+        for item in payload["recommended_stops"]
+    )
+    assert payload["warnings"]
+    missing_data = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id,
+        "start": "59.0,30.0",
+        "end": "60.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 50,
+    })
+    assert missing_data.status_code == 200
+    assert missing_data.json()["calculation"]["can_plan"] is False
+    assert len(missing_data.json()["warnings"]) >= 2
+    forbidden_vehicle = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id + 999,
+        "start": "59.0,30.0",
+        "end": "60.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 50,
+        "tank_liters": 50,
+        "consumption_l_per_100km": 10,
+    })
+    assert forbidden_vehicle.status_code == 404
+
+
 def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login, make_user):
     make_user("fuel-page")
     login("fuel-page")
     response = client.get("/fuel")
     assert response.status_code == 200
     assert "Пока ничего не отслеживается" in response.text
+    assert "Поездка" in response.text
 
 
 def test_fuel_dashboard_renders_forecast_stale_and_collector_error(client, login, make_user, db):
@@ -1739,6 +1874,15 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
         before_observation_id=before.id, after_observation_id=candidate_98.id,
         detection_reason="browser candidate", evidence_json={}, detector_version="test",
     ))
+    vehicle = Vehicle(
+        owner_id=user.id,
+        display_name="Ford Focus 3",
+        make="Ford",
+        model="Focus",
+        year=2014,
+        current_odometer=120000,
+    )
+    db.add(vehicle)
     db.commit()
     login(user.username)
     response = client.get("/fuel")
@@ -1782,35 +1926,54 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
         shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
     ] + [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
     executable = next((path for path in browser_paths if path and Path(path).exists()), None)
-    route_payload = {
-        "start": {"latitude": 59.83, "longitude": 30.10},
-        "end": {"latitude": 59.90, "longitude": 30.30},
-        "radius_km": 3,
-        "stations": [
+    trip_payload = {
+        "route": {
+            "start": {"label": "Санкт-Петербург", "latitude": 59.93, "longitude": 30.31},
+            "end": {"label": "Мурманск", "latitude": 68.97, "longitude": 33.08},
+            "distance_km": 1350.0,
+            "geometry": [[59.93, 30.31], [68.97, 33.08]],
+        },
+        "vehicle": {"id": vehicle.id, "title": "Ford Focus 3", "make": "Ford", "model": "Focus", "consumption_source": "manual"},
+        "fuel_type": "95",
+        "calculation": {
+            "can_plan": True, "distance_km": 1350.0, "tank_liters": 55.0,
+            "consumption_l_per_100km": 8.5, "fuel_level_percent": 50.0,
+            "required_liters": 114.8, "current_fuel_liters": 27.5,
+            "current_range_km": 323.5, "safe_current_range_km": 226.5,
+            "full_range_km": 647.1, "safe_full_range_km": 550.0,
+            "next_refuel_from_km": 192.5, "next_refuel_to_km": 226.5,
+            "reserve_percent": 15.0,
+        },
+        "recommended_stops": [
             {
-                "provider": "gdebenz", "provider_station_id": "route-first",
+                "provider": "gdebenz", "provider_station_id": "trip-first",
                 "station_id": stations[0].id, "brand": "Teboil", "name": "Тебойл",
                 "address": "Ветеранов, 188/1", "latitude": 59.835, "longitude": 30.121,
-                "distance_from_start_km": 2.1, "distance_to_route_km": 0.2,
+                "distance_from_start_km": 240.0, "distance_to_route_km": 0.8,
                 "updated_at": "2026-09-15T09:30:00Z",
                 "fuels": [
                     {"fuel_type": "95", "state": "available", "label": "ЕСТЬ", "symbol": "✓"},
                     {"fuel_type": "98", "state": "low", "label": "МАЛО / ОЧЕРЕДЬ", "symbol": "!"},
                     {"fuel_type": "100", "state": "unavailable", "label": "НЕТ", "symbol": "×"},
                 ],
+                "selected_fuel": {"fuel_type": "95", "state": "available", "label": "ЕСТЬ", "symbol": "✓"},
+                "after_refuel_range_km": 647.1,
             },
             {
-                "provider": "gdebenz", "provider_station_id": "route-second",
+                "provider": "gdebenz", "provider_station_id": "trip-second",
                 "station_id": None, "brand": "Газпромнефть", "name": "АЗС",
                 "address": "У маршрута", "latitude": 59.88, "longitude": 30.25,
-                "distance_from_start_km": 7.5, "distance_to_route_km": 0.5,
+                "distance_from_start_km": 720.0, "distance_to_route_km": 0.5,
                 "updated_at": None,
                 "fuels": [
                     {"fuel_type": fuel, "state": "unknown", "label": "НЕТ ДАННЫХ", "symbol": "·"}
                     for fuel in ("95", "98", "100")
                 ],
+                "selected_fuel": {"fuel_type": "95", "state": "candidate", "label": "ВОЗМОЖНО", "symbol": "?"},
+                "after_refuel_range_km": 647.1,
             },
         ],
+        "warnings": ["Расстояние приблизительное."],
     }
     with playwright.sync_playwright() as manager:
         try:
@@ -1842,8 +2005,8 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
                         content_type="text/css",
                         body=Path("app/static/style.css").read_text(encoding="utf-8"),
                     )
-                elif path == "http://homeos.test/api/fuel/route-stations":
-                    route.fulfill(content_type="application/json", body=json.dumps(route_payload))
+                elif path == "http://homeos.test/api/fuel/trip-plan":
+                    route.fulfill(content_type="application/json", body=json.dumps(trip_payload))
                 elif path.endswith("/api/notifications/unread"):
                     route.fulfill(content_type="application/json", body='{"unread_total":0,"threads":[]}')
                 else:
@@ -1886,32 +2049,41 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert page.locator(".leaflet-popup").is_visible()
             assert page.locator(".leaflet-popup .btn").get_attribute("href").startswith("/fuel/")
 
-            page.locator('[data-view="route"]').click()
-            assert page.locator("[data-route-panel]").is_visible()
-            page.locator('[name="start_lat"]').fill("59.83")
-            page.locator('[name="start_lon"]').fill("30.10")
-            page.locator('[name="end_lat"]').fill("59.90")
-            page.locator('[name="end_lon"]').fill("30.30")
-            page.locator("[data-route-form] [type=submit]").click()
-            page.locator(".fuel-route-card").first.wait_for()
-            assert page.locator(".fuel-route-card").count() == 2
-            assert "2.1 км от начала" in page.locator(".fuel-route-card").first.text_content()
-            assert "отклонение 0.2 км" in page.locator(".fuel-route-card").first.text_content()
-            assert page.locator(".fuel-route-card").first.locator(".fuel-route-card-statuses span").count() == 3
+            page.locator('[data-view="trip"]').click()
+            assert page.locator("[data-trip-panel]").is_visible()
+            page.locator('[name="vehicle_id"]').select_option(str(vehicle.id))
+            page.locator('[name="start"]').fill("Санкт-Петербург")
+            page.locator('[name="end"]').fill("Мурманск")
+            page.locator('[name="tank_liters"]').fill("55")
+            page.locator('[name="consumption_l_per_100km"]').fill("8.5")
+            page.locator("[data-trip-form] [type=submit]").click()
+            page.locator(".fuel-trip-stop").first.wait_for()
+            assert page.locator(".fuel-trip-stop").count() == 2
+            assert "Через 240 км" in page.locator(".fuel-trip-stop").first.text_content()
+            assert "отклонение +0.8 км" in page.locator(".fuel-trip-stop").first.text_content()
+            assert "1350 км" in page.locator("[data-trip-summary]").text_content()
             assert page.locator(".fuel-map-marker").count() == 2
+            assert page.locator(".fuel-map-marker").nth(1).text_content().strip() == "?"
+            assert page.locator(".fuel-trip-endpoint").count() == 2
             assert page.evaluate("window.fuelRouteLines") == 1
             page.locator(".fuel-map-marker").first.click()
-            assert "2.1 км от начала" in page.locator(".leaflet-popup").text_content()
+            assert "240.0 км от начала" in page.locator(".leaflet-popup").text_content()
 
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
-            page.locator('[data-view="route"]').click()
-            assert page.locator("[data-route-panel]").is_visible()
-            assert page.locator(".fuel-route-card").count() == 2
+            page.locator('[data-view="trip"]').click()
+            assert page.locator("[data-trip-panel]").is_visible()
+            assert page.locator(".fuel-trip-stop").count() == 2
             assert page.locator("#fuelMap").is_visible()
+            page.locator(".fuel-map-marker").first.scroll_into_view_if_needed()
+            trip_scroll_before = page.evaluate("scrollY")
             page.locator(".fuel-map-marker").first.click()
             assert page.locator("[data-map-sheet]").is_visible()
-            assert "2.1 км от начала" in page.locator("[data-map-sheet]").text_content()
+            assert "240.0 км от начала" in page.locator("[data-map-sheet]").text_content()
+            assert "95" in page.locator("[data-map-sheet]").text_content()
+            assert page.locator(".leaflet-popup").count() == 0
+            assert page.evaluate("scrollY") == trip_scroll_before
+            assert page.locator('[data-map-sheet]:not([hidden])').count() == 1
             page.locator("[data-map-sheet-close]").click()
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
             page.locator('[data-view="list"]').click()

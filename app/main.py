@@ -10,7 +10,7 @@ import threading
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager, suppress
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -146,13 +146,22 @@ from .services.fuel_notifications import (
     get_or_create_settings as get_fuel_notification_settings,
 )
 from .services.fuel_notifications import run_fuel_notification_cycle
-from .services.fuel_routes import find_stations_near_route
+from .services.fuel_routes import distance_to_route_km, find_stations_near_route, haversine_km
 from .services.fuel_settings import (
     FuelRuntimeSettings,
     get_fuel_runtime_settings,
     save_fuel_runtime_settings,
 )
 from .services.fuel_timeline import load_fuel_timeline
+from .services.fuel_trip import (
+    ROAD_DISTANCE_FACTOR,
+    FuelTripPlanRequest,
+    calculate_trip,
+    planned_search_distances,
+    route_point_at_fraction,
+    route_progress_fraction,
+    select_recommended_stops,
+)
 from .services.planner import (
     calendar_occurrences,
     format_planner_date_range,
@@ -2803,10 +2812,36 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
     dashboard = load_fuel_dashboard(
         db, user.id, stale_after_minutes=runtime.stale_after_minutes
     )
+    vehicles = db.scalars(
+        select(Vehicle).where(Vehicle.owner_id == user.id).order_by(Vehicle.make, Vehicle.model)
+    ).all()
+    vehicle_ids = [vehicle.id for vehicle in vehicles]
+    entries = db.scalars(
+        select(VehicleFuelEntry)
+        .where(VehicleFuelEntry.vehicle_id.in_(vehicle_ids))
+        .order_by(VehicleFuelEntry.vehicle_id, VehicleFuelEntry.occurred_on)
+    ).all() if vehicle_ids else []
+    entries_by_vehicle: dict[int, list[VehicleFuelEntry]] = {}
+    for entry in entries:
+        entries_by_vehicle.setdefault(entry.vehicle_id, []).append(entry)
+    trip_vehicles = []
+    for vehicle in vehicles:
+        summary = fuel_summary(entries_by_vehicle.get(vehicle.id, []))
+        trip_vehicles.append({
+            "id": vehicle.id,
+            "title": vehicle.title,
+            "make": vehicle.make,
+            "model": vehicle.model,
+            "consumption_l_per_100km": (
+                round(float(summary["consumption"]), 2)
+                if summary["consumption"] is not None else None
+            ),
+        })
     return render(request, "fuel.html", {
         "user": user,
         "dashboard": dashboard,
         "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
+        "trip_vehicles": trip_vehicles,
     })
 
 
@@ -3158,6 +3193,229 @@ async def fuel_route_stations_api(
         "end": {"latitude": end_lat, "longitude": end_lon},
         "radius_km": radius,
         "stations": stations,
+    }
+
+
+async def _resolve_trip_place(query: str, geocoder: NominatimGeocoder) -> dict[str, Any]:
+    parts = [part.strip().replace(",", ".") for part in query.split(";")]
+    if len(parts) != 2:
+        parts = [part.strip() for part in query.split(",")]
+    if len(parts) == 2:
+        try:
+            latitude, longitude = float(parts[0]), float(parts[1])
+            if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+                return {"label": query, "latitude": latitude, "longitude": longitude}
+        except ValueError:
+            pass
+    places = await geocoder.search(query)
+    if not places:
+        raise ValueError(f"Не удалось найти точку: {query}")
+    place = places[0]
+    return {
+        "label": place.display_name,
+        "latitude": place.latitude,
+        "longitude": place.longitude,
+    }
+
+
+@app.post("/api/fuel/trip-plan")
+async def fuel_trip_plan_api(
+    request_data: FuelTripPlanRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    vehicle = db.scalar(
+        select(Vehicle).where(
+            Vehicle.id == request_data.vehicle_id,
+            Vehicle.owner_id == user.id,
+        )
+    )
+    if vehicle is None:
+        raise HTTPException(status_code=404, detail="Автомобиль не найден")
+    entries = db.scalars(
+        select(VehicleFuelEntry)
+        .where(VehicleFuelEntry.vehicle_id == vehicle.id)
+        .order_by(VehicleFuelEntry.occurred_on, VehicleFuelEntry.odometer)
+    ).all()
+    vehicle_summary = fuel_summary(entries)
+    consumption = request_data.consumption_l_per_100km
+    consumption_source = "manual"
+    if consumption is None and vehicle_summary["consumption"] is not None:
+        consumption = float(vehicle_summary["consumption"])
+        consumption_source = "fuel_log"
+    elif consumption is None:
+        consumption_source = "missing"
+
+    geocoder = NominatimGeocoder(
+        timeout_seconds=settings.fuel_http_timeout_seconds,
+        user_agent=settings.geocoder_user_agent,
+    )
+    try:
+        start = await _resolve_trip_place(request_data.start, geocoder)
+        end = await _resolve_trip_place(request_data.end, geocoder)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    straight_distance = haversine_km(
+        float(start["latitude"]),
+        float(start["longitude"]),
+        float(end["latitude"]),
+        float(end["longitude"]),
+    )
+    if straight_distance < 0.5:
+        raise HTTPException(status_code=400, detail="Точки маршрута находятся слишком близко")
+    estimated_distance = straight_distance * ROAD_DISTANCE_FACTOR
+    calculation = calculate_trip(
+        estimated_distance,
+        tank_liters=request_data.tank_liters,
+        consumption_l_per_100km=consumption,
+        fuel_level_percent=request_data.fuel_level_percent,
+    )
+    warnings = list(calculation.pop("warnings", []))
+    warnings.append(
+        "Длина поездки оценена по прямой с поправочным коэффициентом; "
+        "это не пошаговый автомобильный маршрут."
+    )
+
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    search_distances = planned_search_distances(calculation)
+    if (
+        search_distances
+        and search_distances[-1] + float(calculation["safe_full_range_km"])
+        < estimated_distance
+    ):
+        warnings.append(
+            "Поиск остановок ограничен двадцатью точками; для такой поездки нужен этапный маршрут."
+        )
+    if search_distances:
+        provider = make_gdebenz_provider()
+        runtime = get_fuel_runtime_settings(db)
+        search_radius = min(10.0, max(3.0, float(runtime.nearby_radius_km)))
+        try:
+            for target_distance in search_distances:
+                fraction = min(1.0, target_distance / estimated_distance)
+                latitude, longitude = route_point_at_fraction(
+                    float(start["latitude"]),
+                    float(start["longitude"]),
+                    float(end["latitude"]),
+                    float(end["longitude"]),
+                    fraction,
+                )
+                nearby = await find_stations_near_route(
+                    provider,
+                    start_latitude=latitude,
+                    start_longitude=longitude,
+                    end_latitude=latitude,
+                    end_longitude=longitude,
+                    radius_km=search_radius,
+                )
+                for station in nearby:
+                    progress = route_progress_fraction(
+                        float(station["latitude"]),
+                        float(station["longitude"]),
+                        float(start["latitude"]),
+                        float(start["longitude"]),
+                        float(end["latitude"]),
+                        float(end["longitude"]),
+                    )
+                    station["distance_from_start_km"] = round(
+                        progress * estimated_distance, 1
+                    )
+                    station["distance_to_route_km"] = round(
+                        distance_to_route_km(
+                            float(station["latitude"]),
+                            float(station["longitude"]),
+                            float(start["latitude"]),
+                            float(start["longitude"]),
+                            float(end["latitude"]),
+                            float(end["longitude"]),
+                        ),
+                        2,
+                    )
+                    candidates_by_id[str(station["provider_station_id"])] = station
+        except ProviderUnavailable:
+            warnings.append("Не удалось получить актуальные АЗС; расчёт топлива сохранён.")
+
+    provider_ids = list(candidates_by_id)
+    subscriptions = db.scalars(
+        select(FuelStationSubscription)
+        .options(selectinload(FuelStationSubscription.station))
+        .join(FuelStationSubscription.station)
+        .where(
+            FuelStationSubscription.user_id == user.id,
+            FuelStation.provider == "gdebenz",
+            FuelStation.provider_station_id.in_(provider_ids),
+        )
+    ).all() if provider_ids else []
+    own_stations = {
+        item.station.provider_station_id: item.station for item in subscriptions
+    }
+    own_station_ids = [station.id for station in own_stations.values()]
+    observations = db.scalars(
+        select(FuelObservation)
+        .where(
+            FuelObservation.station_id.in_(own_station_ids),
+            FuelObservation.fuel_type == request_data.fuel_type,
+        )
+        .order_by(FuelObservation.observed_at.desc())
+    ).all() if own_station_ids else []
+    latest_observations: dict[int, FuelObservation] = {}
+    for observation in observations:
+        latest_observations.setdefault(observation.station_id, observation)
+    recent_events = db.scalars(
+        select(FuelDeliveryEvent)
+        .where(
+            FuelDeliveryEvent.station_id.in_(own_station_ids),
+            FuelDeliveryEvent.fuel_type == request_data.fuel_type,
+            FuelDeliveryEvent.event_type != "candidate_appearance",
+            FuelDeliveryEvent.estimated_at >= utc_now_naive() - timedelta(hours=24),
+        )
+        .order_by(FuelDeliveryEvent.estimated_at.desc())
+    ).all() if own_station_ids else []
+    event_station_ids = {event.station_id for event in recent_events}
+    for provider_id, station in candidates_by_id.items():
+        own_station = own_stations.get(provider_id)
+        station["station_id"] = own_station.id if own_station else None
+        station["has_confirmed_event"] = bool(
+            own_station and own_station.id in event_station_ids
+        )
+        observation = latest_observations.get(own_station.id) if own_station else None
+        if observation:
+            station["latest_observation_at"] = observation.observed_at.replace(
+                tzinfo=timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+            if not station.get("updated_at"):
+                station["updated_at"] = station["latest_observation_at"]
+
+    recommendations, selection_warnings = select_recommended_stops(
+        list(candidates_by_id.values()),
+        fuel_type=request_data.fuel_type,
+        calculation=calculation,
+    )
+    warnings.extend(selection_warnings)
+    return {
+        "route": {
+            "start": start,
+            "end": end,
+            "distance_km": calculation["distance_km"],
+            "geometry": [
+                [start["latitude"], start["longitude"]],
+                [end["latitude"], end["longitude"]],
+            ],
+        },
+        "vehicle": {
+            "id": vehicle.id,
+            "title": vehicle.title,
+            "make": vehicle.make,
+            "model": vehicle.model,
+            "consumption_source": consumption_source,
+        },
+        "fuel_type": request_data.fuel_type,
+        "calculation": calculation,
+        "recommended_stops": recommendations,
+        "warnings": warnings,
     }
 
 

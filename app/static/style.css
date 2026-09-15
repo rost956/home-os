@@ -2726,8 +2726,8 @@ html[data-theme="dark"] .success-alert {
 .fuel-quick-filters button, .fuel-view-toggle button { min-height: 36px; padding: 7px 14px; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
 .fuel-quick-filters button[aria-pressed="true"], .fuel-view-toggle button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 12%, transparent); }
 .fuel-toolbar-line { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
-.fuel-dashboard-controls.route-mode .fuel-quick-filters, .fuel-dashboard-controls.route-mode .fuel-filter-open, .fuel-dashboard-controls.route-mode .fuel-filter-panel { display: none; }
-.fuel-dashboard-controls.route-mode .fuel-toolbar-line { justify-content: flex-end; }
+.fuel-dashboard-controls.trip-mode .fuel-quick-filters, .fuel-dashboard-controls.trip-mode .fuel-filter-open, .fuel-dashboard-controls.trip-mode .fuel-filter-panel { display: none; }
+.fuel-dashboard-controls.trip-mode .fuel-toolbar-line { justify-content: flex-end; }
 .fuel-filter-open { display: none; }
 .fuel-filter-backdrop { display: none; }
 .fuel-filter-panel { display: flex; min-width: 0; align-items: end; gap: 10px; }
@@ -2736,6 +2736,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-filter-panel-head, .fuel-filter-actions, .fuel-location-status { display: none; }
 .fuel-only-available { min-height: 38px; white-space: nowrap; }
 .fuel-dashboard-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 13px; }
+.fuel-dashboard-meta[hidden], .fuel-today-summary[hidden] { display: none !important; }
 .fuel-collector-link { color: var(--muted); text-decoration: none; white-space: nowrap; }
 .fuel-collector-link.ok span { color: #16a34a; }
 .fuel-collector-link.error span { color: var(--danger); }
@@ -2759,29 +2760,34 @@ html[data-theme="dark"] .success-alert {
 .fuel-compact-status.unknown { border-style: dotted; color: var(--muted); }
 .fuel-compact-station-card footer { margin-top: auto; }
 .fuel-map-panel { position: relative; width: 100%; max-width: 100%; min-width: 0; isolation: isolate; }
-.fuel-route-panel { display: grid; min-width: 0; gap: 12px; margin-bottom: 12px; }
-.fuel-route-panel[hidden], .fuel-route-results[hidden] { display: none; }
-.fuel-route-heading h2, .fuel-route-heading p, .fuel-route-card h3, .fuel-route-card p { margin: 0; }
-.fuel-route-heading p { margin-top: 3px; color: var(--muted); }
-.fuel-route-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; min-width: 0; align-items: end; gap: 12px; }
-.fuel-route-form fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 8px; margin: 0; padding: 0; border: 0; }
-.fuel-route-form legend { margin-bottom: 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
-.fuel-route-form label { display: grid; min-width: 0; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
-.fuel-route-form input { width: 100%; min-width: 0; }
-.fuel-route-status { margin: 0; }
-.fuel-route-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 12px; margin-top: 12px; }
-.fuel-route-card { display: grid; min-width: 0; gap: 9px; }
-.fuel-route-card-heading { display: flex; min-width: 0; align-items: start; justify-content: space-between; gap: 12px; }
-.fuel-route-card-heading h3 { min-width: 0; overflow-wrap: anywhere; }
-.fuel-route-card-heading p { flex: 0 0 auto; color: var(--muted); font-size: 12px; text-align: right; }
-.fuel-route-card-statuses { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.fuel-route-card-statuses span { min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); font-size: 11px; font-weight: 900; overflow-wrap: anywhere; }
-.fuel-route-card-statuses .available { color: #15803d; }
-.fuel-route-card-statuses .low, .fuel-map-card .low { color: #b45309; }
-.fuel-route-card-statuses .low { border-style: dashed; }
-.fuel-route-card-statuses .unavailable { color: #b91c1c; }
-.fuel-route-card-statuses .unknown { color: var(--muted); border-style: dotted; }
-.fuel-route-card footer { color: var(--muted); font-size: 12px; }
+.fuel-trip-panel { display: grid; min-width: 0; gap: 12px; margin-bottom: 12px; }
+.fuel-trip-panel[hidden], .fuel-trip-summary[hidden], .fuel-trip-results[hidden] { display: none; }
+.fuel-trip-heading h2, .fuel-trip-heading p, .fuel-trip-calculation h2, .fuel-trip-stop h3, .fuel-trip-stop p { margin: 0; }
+.fuel-trip-heading p { margin-top: 3px; color: var(--muted); }
+.fuel-trip-form { margin: 0; padding: 0; border: 0; box-shadow: none; }
+.fuel-trip-form .three-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fuel-trip-form input, .fuel-trip-form select { width: 100%; min-width: 0; }
+.fuel-trip-status { margin: 0; }
+.fuel-trip-summary { margin-bottom: 12px; }
+.fuel-trip-calculation { display: grid; min-width: 0; gap: 12px; }
+.fuel-trip-calculation h2 { overflow-wrap: anywhere; }
+.fuel-trip-calculation-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.fuel-trip-calculation-grid div { display: grid; min-width: 0; gap: 3px; padding: 10px; border-radius: 10px; background: var(--soft); }
+.fuel-trip-calculation-grid span { color: var(--muted); font-size: 12px; }
+.fuel-trip-next { margin: 0; font-weight: 900; }
+.fuel-trip-warnings { margin: 0; padding-left: 20px; color: var(--muted); }
+.fuel-trip-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 12px; margin-top: 12px; }
+.fuel-trip-results > h2 { grid-column: 1 / -1; margin: 4px 0 0; }
+.fuel-trip-stop { display: grid; min-width: 0; gap: 8px; }
+.fuel-trip-stop-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.fuel-trip-stop-heading h3 { min-width: 0; overflow-wrap: anywhere; }
+.fuel-trip-stop-distance { font-weight: 900; }
+.fuel-trip-stop-fuel { width: fit-content; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--soft); font-size: 12px; font-weight: 900; }
+.fuel-trip-stop-fuel.available { color: #15803d; }
+.fuel-trip-stop-fuel.low, .fuel-map-card .low { color: #b45309; }
+.fuel-trip-stop-fuel.candidate { color: #b45309; border-style: dashed; }
+.fuel-trip-stop-fuel.unknown { color: var(--muted); border-style: dotted; }
+.fuel-trip-stop footer { color: var(--muted); font-size: 12px; }
 .fuel-map { width: 100%; max-width: 100%; height: min(58vh, 560px); min-height: 360px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
 .fuel-map-empty { min-height: 180px; place-content: center; text-align: center; }
 .fuel-filter-empty { display: grid; min-height: 160px; place-items: center; text-align: center; }
@@ -2792,6 +2798,8 @@ html[data-theme="dark"] .success-alert {
 .fuel-map-marker.low { border-style: double; background: #b45309; }
 .fuel-map-marker.unavailable { background: #b91c1c; }
 .fuel-map-marker.unknown { border-style: dotted; background: #64748b; }
+.fuel-trip-endpoint { display: grid; place-items: center; box-sizing: border-box; width: 38px; height: 38px; border: 3px solid var(--card); border-radius: 50%; background: #2563eb; box-shadow: 0 2px 8px rgba(15, 23, 42, .32); color: #fff; font-size: 13px; font-weight: 900; }
+.fuel-trip-endpoint.finish { background: #111827; }
 .fuel-map-card { display: grid; min-width: 210px; gap: 8px; color: var(--text); }
 .fuel-map-card p { margin: 0; color: var(--muted); }
 .fuel-map-card dl { display: grid; gap: 4px; margin: 0; }
@@ -2827,7 +2835,7 @@ html[data-theme="dark"] .success-alert {
     .fuel-filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .fuel-filter-actions .btn { width: 100%; justify-content: center; }
     .fuel-location-status:not(:empty) { display: block; margin: 0; }
-    .fuel-route-form { grid-template-columns: 1fr; }
+    .fuel-trip-calculation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
     .fuel-head, .fuel-detail-head { flex-direction: column; align-items: stretch; }
@@ -2858,12 +2866,10 @@ html[data-theme="dark"] .success-alert {
     .fuel-dashboard-list { grid-template-columns: 1fr; }
     .fuel-view-toggle { width: 100%; }
     .fuel-view-toggle button { min-width: 0; flex: 1; padding-inline: 8px; }
-    .fuel-route-panel { padding: 14px; }
-    .fuel-route-form fieldset { gap: 7px; }
-    .fuel-route-form .btn { width: 100%; justify-content: center; }
-    .fuel-route-results { grid-template-columns: 1fr; }
-    .fuel-route-card-heading { flex-direction: column; gap: 4px; }
-    .fuel-route-card-heading p { text-align: left; }
+    .fuel-trip-panel { padding: 14px; }
+    .fuel-trip-form .form-row, .fuel-trip-form .three-cols { grid-template-columns: 1fr; }
+    .fuel-trip-form .btn { width: 100%; justify-content: center; }
+    .fuel-trip-results { grid-template-columns: 1fr; }
     .fuel-map { height: 52vh; min-height: 330px; }
     .fuel-map-sheet { right: 0; bottom: 0; left: 0; width: 100%; max-width: 100%; max-height: min(48dvh, 390px); padding: 10px 18px calc(16px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 20px 20px 0 0; box-shadow: 0 -10px 30px rgba(15, 23, 42, .2); }
     .fuel-map-sheet:not([hidden]) { display: block; }
