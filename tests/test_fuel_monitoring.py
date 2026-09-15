@@ -1488,21 +1488,34 @@ def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_us
             assert desktop_row.evaluate(
                 "element => getComputedStyle(element).gridTemplateColumns.startsWith('52px')"
             )
-            assert page.locator(".fuel-timeline-symbol").first.is_visible()
-            assert not page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            segments = page.locator(".fuel-timeline-segment")
+            assert all((text or "").strip() == "" for text in segments.all_text_contents())
+            assert page.locator(".fuel-timeline-segment .fuel-timeline-popover").count() == 0
+            assert page.locator("[data-fuel-timeline-popover]").count() == 1
+            assert page.locator("[data-fuel-timeline-popover]").evaluate(
+                "element => element.closest('.fuel-timeline-segment') === null"
+            )
+            segments.nth(0).hover()
+            assert page.locator("[data-fuel-timeline-popover]").is_visible()
+            assert "АИ-95" in page.locator("[data-fuel-timeline-popover]").text_content()
+            page.locator(".fuel-timeline-card h2").hover()
+            assert not page.locator("[data-fuel-timeline-popover]").is_visible()
+            segments.nth(0).focus()
+            assert page.locator("[data-fuel-timeline-popover]").is_visible()
+            segments.nth(0).blur()
+            assert not page.locator("[data-fuel-timeline-popover]").is_visible()
 
             page.set_viewport_size({"width": 390, "height": 844})
-            assert page.locator(".fuel-timeline-segment").count() > 20
+            assert segments.count() > 20
             assert page.evaluate(
                 "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
             )
-            assert all(text.strip() == "" for text in page.locator(
-                ".fuel-timeline-segment"
-            ).all_inner_texts())
+            assert all((text or "").strip() == "" for text in segments.all_text_contents())
             assert page.evaluate("""() => {
                 const style = getComputedStyle(document.querySelector('.fuel-timeline-segment'));
                 return style.overflow === 'hidden' && style.minWidth === '0px'
-                    && style.boxSizing === 'border-box';
+                    && style.boxSizing === 'border-box' && style.fontSize === '0px'
+                    && style.lineHeight === '0px' && style.whiteSpace === 'nowrap';
             }""")
             overlaps = page.evaluate("""() => [...document.querySelectorAll('.fuel-timeline-track')]
                 .flatMap((track, row) => {
@@ -1515,15 +1528,14 @@ def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_us
             assert overlaps == []
             assert page.locator(".fuel-timeline-axis time:visible").count() <= 5
 
-            segments = page.locator(".fuel-timeline-segment")
             segments.nth(0).click()
             assert page.locator(".fuel-timeline-segment.open").count() == 1
-            assert page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            assert page.locator("[data-fuel-timeline-popover]").is_visible()
             segments.nth(4).click()
             assert page.locator(".fuel-timeline-segment.open").count() == 1
-            assert page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            assert page.locator("[data-fuel-timeline-popover]").is_visible()
             page.locator(".fuel-timeline-card h2").click()
             assert page.locator(".fuel-timeline-segment.open").count() == 0
-            assert not page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            assert not page.locator("[data-fuel-timeline-popover]").is_visible()
         finally:
             browser.close()
