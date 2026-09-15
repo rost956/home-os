@@ -1,5 +1,7 @@
 import asyncio
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import unquote
 
 import httpx
@@ -1411,3 +1413,117 @@ def test_legacy_station_migration_creates_subscription_idempotently(make_user):
         ).one()
         assert subscription.enabled is False
         assert subscription.tracked_fuel_types == ("95", "100")
+
+
+def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_user, db):
+    playwright = pytest.importorskip("playwright.sync_api")
+    user = make_user("fuel-mobile-timeline")
+    station = FuelStation(
+        owner_id=user.id, provider="gdebenz", provider_station_id="mobile-stress",
+        brand="Teboil", latitude=59.9, longitude=30.2,
+    )
+    db.add(station)
+    db.flush()
+    add_subscription(db, user, station)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for fuel_type in ("95", "98", "100"):
+        for cycle in range(8):
+            cycle_start = now - timedelta(hours=24) + timedelta(hours=cycle * 3)
+            before = FuelObservation(
+                station_id=station.id, fuel_type=fuel_type, state="unavailable",
+                observed_at=cycle_start, is_stale=False,
+            )
+            appeared = FuelObservation(
+                station_id=station.id, fuel_type=fuel_type, state="available",
+                observed_at=cycle_start + timedelta(hours=1), is_stale=False,
+            )
+            disappeared = FuelObservation(
+                station_id=station.id, fuel_type=fuel_type, state="unavailable",
+                observed_at=cycle_start + timedelta(hours=1, minutes=2), is_stale=False,
+            )
+            unknown = FuelObservation(
+                station_id=station.id, fuel_type=fuel_type, state="unknown",
+                observed_at=cycle_start + timedelta(hours=2), is_stale=False,
+            )
+            db.add_all([before, appeared, disappeared, unknown])
+            db.flush()
+            confidence = 0.85 if cycle % 2 == 0 else 0.25
+            db.add(FuelDeliveryEvent(
+                station_id=station.id, fuel_type=fuel_type,
+                window_start=before.observed_at, window_end=appeared.observed_at,
+                estimated_at=appeared.observed_at, disappeared_at=disappeared.observed_at,
+                before_observation_id=before.id, after_observation_id=appeared.id,
+                event_type="confirmed_availability" if cycle % 2 == 0 else "candidate_appearance",
+                confidence=confidence, appearance_confidence=confidence,
+                delivery_confidence=0.1, availability_duration_minutes=2,
+                detection_reason="mobile stress", evidence_json={"mark_support_count": cycle % 3},
+                detector_version="test", classifier_version="test",
+            ))
+    db.commit()
+    login("fuel-mobile-timeline")
+    response = client.get(f"/fuel/{station.id}")
+    assert response.status_code == 200
+
+    browser_paths = [
+        shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
+    ] + [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    executable = next((path for path in browser_paths if path and Path(path).exists()), None)
+    with playwright.sync_playwright() as manager:
+        try:
+            browser = manager.chromium.launch(
+                headless=True, executable_path=executable
+            ) if executable else manager.chromium.launch(headless=True)
+        except playwright.Error as exc:
+            pytest.skip(f"Chromium browser is unavailable: {exc}")
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.set_content(response.text, wait_until="load")
+            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+
+            assert page.locator(".fuel-timeline-row").count() == 3
+            desktop_row = page.locator(".fuel-timeline-row").first
+            assert desktop_row.evaluate(
+                "element => getComputedStyle(element).gridTemplateColumns.startsWith('52px')"
+            )
+            assert page.locator(".fuel-timeline-symbol").first.is_visible()
+            assert not page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            assert page.locator(".fuel-timeline-segment").count() > 20
+            assert page.evaluate(
+                "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
+            )
+            assert all(text.strip() == "" for text in page.locator(
+                ".fuel-timeline-segment"
+            ).all_inner_texts())
+            assert page.evaluate("""() => {
+                const style = getComputedStyle(document.querySelector('.fuel-timeline-segment'));
+                return style.overflow === 'hidden' && style.minWidth === '0px'
+                    && style.boxSizing === 'border-box';
+            }""")
+            overlaps = page.evaluate("""() => [...document.querySelectorAll('.fuel-timeline-track')]
+                .flatMap((track, row) => {
+                    const segments = [...track.querySelectorAll('.fuel-timeline-segment')]
+                        .map(item => item.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+                    return segments.slice(1).map((item, index) => ({
+                        row, overlap: segments[index].right - item.left
+                    })).filter(item => item.overlap > 0.5);
+                })""")
+            assert overlaps == []
+            assert page.locator(".fuel-timeline-axis time:visible").count() <= 5
+
+            segments = page.locator(".fuel-timeline-segment")
+            segments.nth(0).click()
+            assert page.locator(".fuel-timeline-segment.open").count() == 1
+            assert page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            segments.nth(4).click()
+            assert page.locator(".fuel-timeline-segment.open").count() == 1
+            assert page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+            page.locator(".fuel-timeline-card h2").click()
+            assert page.locator(".fuel-timeline-segment.open").count() == 0
+            assert not page.locator("[data-fuel-timeline-mobile-popover]").is_visible()
+        finally:
+            browser.close()

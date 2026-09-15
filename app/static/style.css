@@ -2660,6 +2660,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-timeline-popover { position: absolute; z-index: 8; left: 50%; bottom: calc(100% + 8px); display: none; width: max-content; max-width: min(260px, 75vw); gap: 3px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); color: var(--muted); font-size: 11px; text-align: left; transform: translateX(-50%); }
 .fuel-timeline-popover b { color: var(--text); }
 .fuel-timeline-segment:hover .fuel-timeline-popover, .fuel-timeline-segment:focus-visible .fuel-timeline-popover, .fuel-timeline-segment.open .fuel-timeline-popover { display: grid; }
+.fuel-timeline-mobile-popover { display: none; }
 .fuel-next { display: grid; gap: 4px; padding: 12px; border-radius: var(--radius); background: var(--soft); }
 .fuel-next b { font-size: 17px; }
 .fuel-next small { color: var(--muted); }
@@ -2735,10 +2736,16 @@ html[data-theme="dark"] .success-alert {
     .fuel-settings-form .form-row, .fuel-diagnostic-grid { grid-template-columns: 1fr; }
     .fuel-managed-stations .card-head { align-items: stretch; flex-direction: column; }
     .fuel-managed-stations .btn { width: 100%; justify-content: center; }
-    .fuel-timeline-axis { margin-left: 48px; }
+    .fuel-timeline-card, .fuel-timeline, .fuel-timeline-row, .fuel-timeline-track { width: 100%; max-width: 100%; min-width: 0; }
+    .fuel-timeline-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; }
+    .fuel-timeline-axis { margin-left: 0; }
     .fuel-timeline-axis time:nth-child(even) { visibility: hidden; }
-    .fuel-timeline-row { grid-template-columns: 38px minmax(0, 1fr); gap: 8px; }
-    .fuel-timeline-popover { position: fixed; right: 12px; bottom: 18px; left: 12px; width: auto; max-width: none; transform: none; }
+    .fuel-timeline-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+    .fuel-timeline-row > b { display: block; }
+    .fuel-timeline-segment { min-width: 0; overflow: hidden; box-sizing: border-box; border: 0 !important; color: transparent; font-size: 0; }
+    .fuel-timeline-segment .fuel-timeline-symbol, .fuel-timeline-segment .fuel-timeline-popover { display: none !important; }
+    .fuel-timeline-mobile-popover:not([hidden]) { position: fixed; z-index: 30; right: 12px; bottom: 18px; left: 12px; display: grid; width: auto; max-width: none; gap: 3px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); color: var(--muted); font-size: 11px; text-align: left; }
+    .fuel-timeline-mobile-popover b { color: var(--text); }
 }
 
 @media (max-width: 370px) {
