@@ -47,6 +47,11 @@ from app.services.fuel_analytics import (
     station_correlations,
 )
 from app.services.fuel_dashboard import load_fuel_dashboard
+from app.services.fuel_routes import (
+    distance_to_route_km,
+    find_stations_near_route,
+    route_sample_points,
+)
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 from app.services.fuel_timeline import build_fuel_timeline
 from app.timezone import format_msk
@@ -108,6 +113,79 @@ def test_fuel_station_api_and_soft_disable(client, login, make_user):
     assert len(stations) == 1
     assert stations[0]["enabled"] is True
     assert stations[0]["fuel_types"] == ["98"]
+
+
+def test_route_lookup_samples_corridor_filters_and_deduplicates():
+    class RouteProvider:
+        def __init__(self):
+            self.calls = []
+
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            self.calls.append((latitude, longitude, radius_km))
+            return [
+                FuelStationCandidate(
+                    provider="gdebenz",
+                    provider_station_id="on-route",
+                    brand="Teboil",
+                    name="Тебойл",
+                    address="У маршрута",
+                    latitude=59.84,
+                    longitude=30.15,
+                ),
+                FuelStationCandidate(
+                    provider="gdebenz",
+                    provider_station_id="outside",
+                    name="Далеко",
+                    latitude=60.0,
+                    longitude=30.15,
+                ),
+            ]
+
+    provider = RouteProvider()
+    stations = asyncio.run(find_stations_near_route(
+        provider,
+        start_latitude=59.84,
+        start_longitude=30.10,
+        end_latitude=59.84,
+        end_longitude=30.20,
+        radius_km=3,
+    ))
+    assert len(provider.calls) >= 2
+    assert {call[2] for call in provider.calls} == {3}
+    assert [station["provider_station_id"] for station in stations] == ["on-route"]
+    assert stations[0]["distance_to_route_km"] == 0
+    assert distance_to_route_km(59.84, 30.15, 59.84, 30.10, 59.84, 30.20) < 0.01
+    assert route_sample_points(59.84, 30.10, 59.84, 30.20, 3)[0] == (59.84, 30.10)
+
+
+def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_user, monkeypatch):
+    class RouteProvider:
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [FuelStationCandidate(
+                provider="gdebenz",
+                provider_station_id="route-api",
+                brand="Teboil",
+                name="Тебойл",
+                address="пр-кт Ветеранов, 188/1",
+                latitude=59.8348,
+                longitude=30.1211,
+            )]
+
+    url = "/api/fuel/route-stations?start_lat=59.83&start_lon=30.10&end_lat=59.84&end_lon=30.14&radius_km=3"
+    assert client.get(url, follow_redirects=False).status_code in {302, 303, 307}
+    user = make_user("fuel-route-api")
+    login(user.username)
+    monkeypatch.setattr(main_module, "make_gdebenz_provider", RouteProvider)
+    response = client.get(url)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["radius_km"] == 3
+    assert payload["stations"][0]["provider_station_id"] == "route-api"
+    assert "raw" not in payload["stations"][0]
+    invalid = client.get(
+        "/api/fuel/route-stations?start_lat=91&start_lon=30&end_lat=59&end_lon=30"
+    )
+    assert invalid.status_code == 422
 
 
 def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login, make_user):
@@ -1748,6 +1826,9 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
 
             page.locator('[data-view="map"]').click()
             assert page.locator(".fuel-map-marker").count() == 3
+            assert page.locator(".fuel-map-marker").first.bounding_box()["width"] >= 44
+            assert page.locator(".fuel-map-marker").first.get_attribute("aria-label")
+            assert page.locator(".fuel-map-marker").first.text_content().strip() in {"✓", "?", "×", "·"}
             page.locator(".fuel-map-marker").first.click()
             assert page.locator(".leaflet-popup").is_visible()
             assert page.locator(".leaflet-popup .btn").get_attribute("href").startswith("/fuel/")
@@ -1766,6 +1847,14 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             page.locator(".fuel-map-marker").click()
             assert page.locator("[data-map-sheet]").is_visible()
             assert "ВОЗМОЖНО" in page.locator("[data-map-sheet]").text_content()
+            assert page.locator("[data-map-sheet] dt").all_text_contents() == ["95", "98", "100"]
+            assert "Расстояние:" in page.locator("[data-map-distance]").text_content()
+            assert page.locator("[data-map-sheet]").evaluate("element => element.parentElement === document.body")
+            assert page.locator("#fuelMap").is_visible()
+            assert page.locator("#fuelMap").bounding_box()["y"] < page.locator("[data-map-sheet]").bounding_box()["y"]
+            assert page.locator('[data-map-sheet]:not([hidden])').count() == 1
+            page.locator("[data-map-sheet-close]").click()
+            assert not page.locator("[data-map-sheet]").is_visible()
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
             assert page_errors == []
 

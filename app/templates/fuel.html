@@ -60,7 +60,8 @@
     <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ dashboard.confirmed_appearances }} · возможных: {{ dashboard.candidates }} · поставок: {{ dashboard.confirmed_deliveries + dashboard.probable_deliveries }} · подтверждённое наличие: {{ dashboard.confirmed_duration_minutes }} мин</span></div>
 </section>
 
-<aside class="fuel-map-sheet" data-map-sheet hidden aria-live="polite">
+<aside class="fuel-map-sheet" data-map-sheet hidden role="dialog" aria-modal="false" aria-live="polite" aria-label="Информация об АЗС">
+    <span class="fuel-map-sheet-handle" aria-hidden="true"></span>
     <button class="icon-btn" type="button" data-map-sheet-close aria-label="Закрыть карточку">×</button>
     <div data-map-sheet-content></div>
 </aside>
@@ -96,6 +97,9 @@
     let markerLayer = null;
     let userLocation = null;
     let filteredStations = [];
+    let activeMapStationId = null;
+    const mobileMap = () => matchMedia('(max-width: 600px)').matches;
+    document.body.append(mapSheet);
     function savedView() { try { return localStorage.getItem('fuel-dashboard-view'); } catch (error) { return null; } }
     const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map']};
     const params = new URLSearchParams(location.search);
@@ -144,22 +148,52 @@
         const query = next.toString();
         try { history.replaceState(null, '', location.pathname + (query ? '?' + query : '')); } catch (error) {}
     }
-    function popupContent(station) {
+    function formatDistance(station) {
+        const value = distance(station);
+        if (!Number.isFinite(value)) return 'Расстояние: определяем…';
+        return value < 1 ? `Расстояние: ${Math.round(value * 1000)} м` : `Расстояние: ${value.toFixed(1)} км`;
+    }
+    function popupContent(station, mobile = false) {
         const root = document.createElement('div'); root.className = 'fuel-map-card';
-        const title = document.createElement('b'); title.textContent = station.name; root.append(title);
+        const title = document.createElement('b'); title.className = 'fuel-map-card-title'; title.textContent = station.name; root.append(title);
         const address = document.createElement('p'); address.textContent = station.address; root.append(address);
-        const statuses = document.createElement('dl');
-        station.fuels.forEach(fuel => {
+        if (mobile) {
+            const distanceLabel = document.createElement('p'); distanceLabel.className = 'fuel-map-distance'; distanceLabel.dataset.mapDistance = ''; distanceLabel.textContent = formatDistance(station); root.append(distanceLabel);
+        }
+        const statuses = document.createElement('dl'); statuses.className = 'fuel-map-statuses';
+        ['95', '98', '100'].forEach(fuelType => {
+            const fuel = station.fuels.find(item => item.fuel_type === fuelType) || {fuel_type: fuelType, state: 'untracked', symbol: '—', label: 'НЕ ОТСЛЕЖИВАЕТСЯ'};
             const row = document.createElement('div'); const term = document.createElement('dt'); const value = document.createElement('dd');
             term.textContent = fuel.fuel_type; value.textContent = `${fuel.symbol} ${fuel.label}`; value.className = fuel.state;
             row.append(term, value); statuses.append(row);
         });
         root.append(statuses);
-        const updated = document.createElement('small'); updated.textContent = cards.get(station.id).querySelector('footer').textContent; root.append(updated);
+        const updated = document.createElement('small'); updated.textContent = station.updated_text; root.append(updated);
         const link = document.createElement('a'); link.className = 'btn'; link.href = `/fuel/${station.id}`; link.textContent = 'Подробнее'; root.append(link);
         return root;
     }
-    function openMobileSheet(station) { const content = mapSheet.querySelector('[data-map-sheet-content]'); content.replaceChildren(popupContent(station)); mapSheet.hidden = false; }
+    function closeMobileSheet() { mapSheet.hidden = true; activeMapStationId = null; document.querySelectorAll('.fuel-map-marker[aria-expanded="true"]').forEach(marker => marker.setAttribute('aria-expanded', 'false')); }
+    function refreshMobileSheet(station) {
+        if (activeMapStationId !== station.id || mapSheet.hidden) return;
+        mapSheet.querySelector('[data-map-sheet-content]').replaceChildren(popupContent(station, true));
+    }
+    function requestSheetLocation(station) {
+        if (userLocation || !navigator.geolocation) { refreshMobileSheet(station); return; }
+        navigator.geolocation.getCurrentPosition(position => {
+            userLocation = position.coords; refreshMobileSheet(station);
+        }, () => {
+            const label = mapSheet.querySelector('[data-map-distance]');
+            if (label && activeMapStationId === station.id) label.textContent = 'Расстояние: геолокация недоступна';
+        }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
+    }
+    function openMobileSheet(station, markerElement) {
+        activeMapStationId = station.id;
+        document.querySelectorAll('.fuel-map-marker[aria-expanded="true"]').forEach(marker => marker.setAttribute('aria-expanded', 'false'));
+        if (markerElement) markerElement.setAttribute('aria-expanded', 'true');
+        mapSheet.querySelector('[data-map-sheet-content]').replaceChildren(popupContent(station, true));
+        mapSheet.hidden = false;
+        requestSheetLocation(station);
+    }
     function renderMap() {
         if (state.view !== 'map') return;
         mapEmpty.hidden = filteredStations.length > 0;
@@ -184,10 +218,11 @@
             const symbol = ({available: '✓', candidate: '?', unavailable: '×', unknown: '·'})[current];
             const stateLabel = ({available: 'есть', candidate: 'возможное наличие', unavailable: 'нет', unknown: 'нет данных'})[current];
             const description = `${station.name}, ${station.address}, ${stateLabel}`;
-            const icon = window.L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [34, 34], iconAnchor: [17, 17]});
+            const icon = window.L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [44, 44], iconAnchor: [22, 22]});
             const marker = window.L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
-            if (marker.getElement()) marker.getElement().setAttribute('aria-label', description);
-            if (matchMedia('(max-width: 600px)').matches) marker.on('click', () => openMobileSheet(station));
+            const markerElement = marker.getElement();
+            if (markerElement) { markerElement.setAttribute('aria-label', description); markerElement.setAttribute('aria-expanded', 'false'); }
+            if (mobileMap()) marker.on('click', () => openMobileSheet(station, markerElement));
             else marker.bindPopup(popupContent(station), {maxWidth: 280});
             points.push([station.latitude, station.longitude]);
         });
@@ -203,6 +238,7 @@
         filteredStations.forEach(station => { const card = cards.get(station.id); card.hidden = false; list.append(card); });
         document.querySelector('[data-visible-count]').textContent = filteredStations.length;
         list.hidden = state.view !== 'list'; mapPanel.hidden = state.view !== 'map';
+        if (state.view !== 'map' || (activeMapStationId && !filteredStations.some(station => station.id === activeMapStationId))) closeMobileSheet();
         filterEmpty.hidden = filteredStations.length > 0 || state.view === 'map';
         document.querySelectorAll('[data-fuel]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.fuel === state.fuel)); });
         document.querySelectorAll('[data-view]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
@@ -229,9 +265,10 @@
     panel.querySelector('.fuel-filter-close').addEventListener('click', closeFilters);
     panel.querySelector('[data-filter-apply]').addEventListener('click', closeFilters);
     document.querySelectorAll('[data-filter-reset]').forEach(button => button.addEventListener('click', () => { state.fuel = state.status = state.brand = 'all'; state.sort = 'usefulness'; state.only = false; locationStatus.textContent = ''; closeFilters(); render(); }));
-    mapSheet.querySelector('[data-map-sheet-close]').addEventListener('click', () => { mapSheet.hidden = true; });
+    mapSheet.querySelector('[data-map-sheet-close]').addEventListener('click', closeMobileSheet);
     document.querySelector('[data-filter-close]').addEventListener('click', closeFilters);
-    document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); mapSheet.hidden = true; } });
+    document.addEventListener('pointerdown', event => { if (!mapSheet.hidden && !mapSheet.contains(event.target) && !event.target.closest('.fuel-map-marker')) closeMobileSheet(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); closeMobileSheet(); } });
     window.addEventListener('fuel:leaflet-ready', () => { if (state.view === 'map') renderMap(); });
     window.addEventListener('fuel:leaflet-error', () => { if (state.view === 'map') renderMap(); });
     window.addEventListener('load', () => { if (state.view === 'map') renderMap(); });

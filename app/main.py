@@ -24,7 +24,18 @@ except Exception:  # pragma: no cover - dependency is installed in Docker, but k
     WebPushException = Exception
     webpush = None
 
-from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -135,6 +146,7 @@ from .services.fuel_notifications import (
     get_or_create_settings as get_fuel_notification_settings,
 )
 from .services.fuel_notifications import run_fuel_notification_cycle
+from .services.fuel_routes import find_stations_near_route
 from .services.fuel_settings import (
     FuelRuntimeSettings,
     get_fuel_runtime_settings,
@@ -3095,6 +3107,43 @@ def fuel_collector_status(user: User = Depends(get_current_user), db: Session = 
     del user
     runtime = get_fuel_runtime_settings(db)
     return collector_health.as_dict(enabled=runtime.monitor_enabled)
+
+
+@app.get("/api/fuel/route-stations")
+async def fuel_route_stations_api(
+    start_lat: float = Query(..., ge=-90, le=90),
+    start_lon: float = Query(..., ge=-180, le=180),
+    end_lat: float = Query(..., ge=-90, le=90),
+    end_lon: float = Query(..., ge=-180, le=180),
+    radius_km: float | None = Query(None, ge=0.5, le=10),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return public provider stations in a corridor around a straight route."""
+    del user
+    radius = radius_km or float(get_fuel_runtime_settings(db).nearby_radius_km)
+    try:
+        stations = await find_stations_near_route(
+            make_gdebenz_provider(),
+            start_latitude=start_lat,
+            start_longitude=start_lon,
+            end_latitude=end_lat,
+            end_longitude=end_lon,
+            radius_km=radius,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Источник данных об АЗС временно недоступен",
+        ) from exc
+    return {
+        "start": {"latitude": start_lat, "longitude": start_lon},
+        "end": {"latitude": end_lat, "longitude": end_lon},
+        "radius_km": radius,
+        "stations": stations,
+    }
 
 
 @app.get("/api/fuel/stations/{station_id}/observations")
