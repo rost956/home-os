@@ -103,6 +103,31 @@ def test_chunked_request_body_is_limited():
     assert response.status_code == 413
 
 
+def test_file_upload_routes_use_the_configured_streaming_limit():
+    limited_app = FastAPI()
+    limited_app.add_middleware(RequestSizeLimitMiddleware, max_bytes=10, upload_max_bytes=20)
+
+    @limited_app.post("/files/new")
+    async def upload(request: Request):
+        return {"size": len(await request.body())}
+
+    def allowed_chunks():
+        yield b"1234567890"
+        yield b"12345"
+
+    def rejected_chunks():
+        yield b"1234567890"
+        yield b"12345678901"
+
+    with TestClient(limited_app) as client:
+        allowed = client.post("/files/new", content=allowed_chunks())
+        rejected = client.post("/files/new", content=rejected_chunks())
+
+    assert allowed.status_code == 200
+    assert rejected.status_code == 413
+    assert "превышает допустимый лимит" in rejected.text
+
+
 def test_income_cannot_be_changed_by_another_user(client, db, make_user, login):
     alice = make_user("alice")
     make_user("bob")

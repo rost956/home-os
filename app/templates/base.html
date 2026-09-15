@@ -16,7 +16,7 @@
     <meta name="theme-color" content="#111827">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=73">
+<link rel="stylesheet" href="/static/style.css?v=74">
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -148,7 +148,9 @@
     const badgeMenu = document.getElementById('chatUnreadBadgeMenu');
     const btn = document.getElementById('enableNotifications');
     const themeToggle = document.getElementById('themeToggle');
-    let lastUnread = Number(localStorage.getItem('lastUnreadCount') || '0');
+    function storageGet(key) { try { return localStorage.getItem(key); } catch (error) { return null; } }
+    function storageSet(key, value) { try { localStorage.setItem(key, value); } catch (error) {} }
+    let lastUnread = Number(storageGet('lastUnreadCount') || '0');
     let pushNotificationsEnabled = false;
 
     function setBadge(count) {
@@ -175,7 +177,7 @@
                 }
             }
             lastUnread = count;
-            localStorage.setItem('lastUnreadCount', String(count));
+            storageSet('lastUnreadCount', String(count));
         } catch (e) {}
     }
 
@@ -364,9 +366,9 @@
 
     document.querySelectorAll('[data-nav-group]').forEach((group) => {
         const storageKey = 'nav-group:' + group.dataset.navGroup;
-        const saved = localStorage.getItem(storageKey);
+        const saved = storageGet(storageKey);
         if (saved !== null) group.open = saved === 'open';
-        group.addEventListener('toggle', () => localStorage.setItem(storageKey, group.open ? 'open' : 'closed'));
+        group.addEventListener('toggle', () => storageSet(storageKey, group.open ? 'open' : 'closed'));
     });
 
     async function pingPresence() {
@@ -398,7 +400,8 @@
 
 <script>
 (function () {
-    const storage = window.sessionStorage;
+    let storage = null;
+    try { storage = window.sessionStorage; } catch (error) {}
     const exactKey = 'scroll:' + window.location.pathname + window.location.search;
     const pathKey = 'scroll:' + window.location.pathname;
 
@@ -407,9 +410,12 @@
     }
 
     function readSavedScroll() {
-        const exact = storage.getItem(exactKey);
-        if (exact !== null) return exact;
-        return storage.getItem(pathKey);
+        if (!storage) return null;
+        try {
+            const exact = storage.getItem(exactKey);
+            if (exact !== null) return exact;
+            return storage.getItem(pathKey);
+        } catch (error) { return null; }
     }
 
     function restoreScroll() {
@@ -419,15 +425,14 @@
         requestAnimationFrame(() => {
             window.scrollTo(0, y);
             setTimeout(() => window.scrollTo(0, y), 80);
-            storage.removeItem(exactKey);
-            storage.removeItem(pathKey);
+            try { storage.removeItem(exactKey); storage.removeItem(pathKey); } catch (error) {}
         });
     }
 
     function saveScroll() {
+        if (!storage) return;
         const y = String(window.scrollY || document.documentElement.scrollTop || 0);
-        storage.setItem(exactKey, y);
-        storage.setItem(pathKey, y);
+        try { storage.setItem(exactKey, y); storage.setItem(pathKey, y); } catch (error) {}
     }
 
     window.addEventListener('beforeunload', saveScroll);

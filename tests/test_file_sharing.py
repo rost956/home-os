@@ -1,16 +1,24 @@
+import asyncio
+import tempfile
 from dataclasses import replace
 from datetime import timedelta
 from io import BytesIO
+from pathlib import Path
 
+import pytest
 from PIL import Image
 from sqlalchemy import create_engine, inspect
+from starlette.datastructures import Headers
+from starlette.formparsers import MultiPartParser
 
 import app.main as main_module
 from app.database import Base
 from app.models import TemporaryFileTransfer, TemporarySharedFile
 from app.services.file_sharing import storage_path, transfer_is_expired
 from app.timezone import now_utc
-from app.web import SHARED_FILES_DIR
+from app.web import SHARED_FILES_DIR, UPLOAD_SPOOL_DIR
+
+MEBIBYTE = 1024 * 1024
 
 
 def upload_payload(name: str, content: bytes = b"file content"):
@@ -56,6 +64,113 @@ def test_create_transfer_uploads_multiple_unicode_duplicate_files_and_ttl(client
     assert [file.original_filename for file in transfer.files] == ["Фото машины 10.09.2026.jpg", "photo.jpg", "photo.jpg"]
     assert len({file.storage_key for file in transfer.files}) == 3
     assert [storage_path(SHARED_FILES_DIR, transfer.id, file.storage_key).read_bytes() for file in transfer.files] == [b"one", b"two", b"three"]
+
+
+def test_large_multipart_upload_streams_two_ten_megabyte_files(client, db, make_user, login):
+    user = make_user("large-file-owner")
+    login(user.username)
+    ten_megabytes = b"x" * (10 * MEBIBYTE)
+
+    response = create_transfer(
+        client,
+        title="Large multipart",
+        files=[
+            ("files", ("first.bin", BytesIO(ten_megabytes), "application/octet-stream")),
+            ("files", ("second.bin", BytesIO(ten_megabytes), "application/octet-stream")),
+        ],
+    )
+
+    assert response.status_code == 303
+    transfer = db.query(TemporaryFileTransfer).one()
+    appended = client.post(
+        f"/files/{transfer.id}/upload",
+        files=[("files", ("third.bin", BytesIO(ten_megabytes), "application/octet-stream"))],
+        follow_redirects=False,
+    )
+    assert appended.status_code == 303
+    db.expire_all()
+    transfer = db.get(TemporaryFileTransfer, transfer.id)
+    assert [item.size_bytes for item in transfer.files] == [10 * MEBIBYTE] * 3
+    assert all(
+        storage_path(SHARED_FILES_DIR, transfer.id, item.storage_key).stat().st_size == 10 * MEBIBYTE
+        for item in transfer.files
+    )
+    client.post(f"/files/{transfer.id}/delete", follow_redirects=False)
+
+
+def test_multipart_spool_failure_returns_a_clear_error(client, make_user, login, monkeypatch, caplog):
+    user = make_user("spool-failure-owner")
+    login(user.username)
+    original = MultiPartParser.on_part_data
+
+    def fail_file_part(self, data, start, end):
+        if self._current_part.file is not None:
+            raise OSError(28, "simulated full spool volume")
+        return original(self, data, start, end)
+
+    monkeypatch.setattr(MultiPartParser, "on_part_data", fail_file_part)
+    with caplog.at_level("WARNING", logger="home_service"):
+        response = create_transfer(client, files=upload_payload("large.bin", b"content"))
+
+    assert response.status_code == 400
+    assert "Не удалось прочитать загрузку" in response.json()["detail"]
+    assert "There was an error parsing the body" not in response.text
+    assert "Multipart upload parsing failed path=/files/new cause=OSError" in caplog.text
+
+
+def test_starlette_parser_spools_more_than_500_megabytes_outside_ram():
+    boundary = "homeos-large-upload"
+    file_size = 501 * MEBIBYTE
+    prefix = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="large.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    suffix = f"\r\n--{boundary}--\r\n".encode()
+
+    async def body_stream():
+        yield prefix
+        chunk = b"z" * MEBIBYTE
+        for _ in range(file_size // len(chunk)):
+            yield chunk
+        yield suffix
+
+    parser = MultiPartParser(
+        Headers({"Content-Type": f"multipart/form-data; boundary={boundary}"}),
+        body_stream(),
+    )
+    form = asyncio.run(parser.parse())
+    upload = form["files"]
+    try:
+        assert upload.size == file_size
+        assert upload.file._rolled is True
+        assert Path(tempfile.gettempdir()).resolve() == UPLOAD_SPOOL_DIR.resolve()
+    finally:
+        asyncio.run(form.close())
+
+
+def test_interrupted_multipart_parse_closes_spooled_file():
+    boundary = "homeos-interrupted-upload"
+    prefix = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="partial.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    before = set(UPLOAD_SPOOL_DIR.iterdir())
+
+    async def interrupted_stream():
+        yield prefix
+        yield b"x" * (2 * MEBIBYTE)
+        raise ConnectionError("client disconnected")
+
+    parser = MultiPartParser(
+        Headers({"Content-Type": f"multipart/form-data; boundary={boundary}"}),
+        interrupted_stream(),
+    )
+    with pytest.raises(ConnectionError, match="client disconnected"):
+        asyncio.run(parser.parse())
+
+    assert set(UPLOAD_SPOOL_DIR.iterdir()) == before
 
 
 def test_public_share_is_anonymous_private_and_downloads_original_filename(client, db, make_user, login):

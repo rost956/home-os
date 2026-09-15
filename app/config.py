@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 FALSE_VALUES = {"0", "false", "no", "off"}
 TRUE_VALUES = {"1", "true", "yes", "on"}
+MEBIBYTE = 1024 * 1024
+FILE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 8 * MEBIBYTE
 INSECURE_SECRETS = {
     "change-me",
     "change-me-in-production",
@@ -105,6 +107,11 @@ class Settings:
     def is_production(self) -> bool:
         return self.app_env == "production"
 
+    @property
+    def file_share_max_request_bytes(self) -> int:
+        """Maximum multipart request size, including bounded form/header overhead."""
+        return self.file_share_max_transfer_bytes + FILE_UPLOAD_MULTIPART_OVERHEAD_BYTES
+
 
 def load_settings() -> Settings:
     app_env = os.getenv("APP_ENV", "development").strip().lower() or "development"
@@ -126,6 +133,10 @@ def load_settings() -> Settings:
         raise RuntimeError("HOME_FILE_SHARE_DIR must be inside DATA_DIR") from exc
     database_url = os.getenv("DATABASE_URL", f"sqlite:///{(data_dir / 'app.db').as_posix()}").strip()
     session_days = env_int("SESSION_MAX_AGE_DAYS", 30, 1, 365)
+    file_share_max_file_bytes = env_int("HOME_FILE_SHARE_MAX_FILE_MB", 1_024, 1, 1_024) * MEBIBYTE
+    file_share_max_transfer_bytes = env_int("HOME_FILE_SHARE_MAX_TRANSFER_MB", 5_120, 1, 10_240) * MEBIBYTE
+    if file_share_max_file_bytes > file_share_max_transfer_bytes:
+        raise RuntimeError("HOME_FILE_SHARE_MAX_FILE_MB must not exceed HOME_FILE_SHARE_MAX_TRANSFER_MB")
     return Settings(
         app_env=app_env,
         secret_key=secret_key,
@@ -146,8 +157,8 @@ def load_settings() -> Settings:
         vapid_private_key=(os.getenv("WEB_PUSH_VAPID_PRIVATE_KEY") or os.getenv("HOME_VAPID_PRIVATE_KEY") or os.getenv("VAPID_PRIVATE_KEY") or "").strip(),
         vapid_subject=(os.getenv("WEB_PUSH_SUBJECT") or os.getenv("HOME_VAPID_SUBJECT") or os.getenv("VAPID_SUBJECT") or "mailto:admin@example.com").strip(),
         file_share_dir=file_share_dir,
-        file_share_max_file_bytes=env_int("HOME_FILE_SHARE_MAX_FILE_MB", 100, 1, 1_024) * 1024 * 1024,
-        file_share_max_transfer_bytes=env_int("HOME_FILE_SHARE_MAX_TRANSFER_MB", 500, 1, 10_240) * 1024 * 1024,
+        file_share_max_file_bytes=file_share_max_file_bytes,
+        file_share_max_transfer_bytes=file_share_max_transfer_bytes,
         file_share_cleanup_seconds=env_int("HOME_FILE_SHARE_CLEANUP_SECONDS", 3600, 60, 86_400),
         file_share_orphan_grace_hours=env_int("HOME_FILE_SHARE_ORPHAN_GRACE_HOURS", 24, 1, 720),
         file_share_max_storage_bytes=env_int("HOME_FILE_SHARE_MAX_STORAGE_MB", 0, 0, 102_400) * 1024 * 1024,

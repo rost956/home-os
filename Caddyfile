@@ -1,15 +1,14 @@
 {$CADDY_SITE_ADDRESS:localhost} {
     encode zstd gzip
-    request_body {
-        max_size {$HOME_FILE_SHARE_MAX_TRANSFER_MB:500}MB
-    }
+    # Upload limits are streamed and enforced by HomeOS from the same settings
+    # that validate individual files and the total transfer size. Keeping a
+    # second proxy limit here would reject valid multipart framing overhead.
     header {
         -Server
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         X-XSS-Protection "0"
         Referrer-Policy "same-origin"
-        Permissions-Policy "camera=(), microphone=(), geolocation=()"
         Strict-Transport-Security "max-age=15552000"
     }
     reverse_proxy web:8000

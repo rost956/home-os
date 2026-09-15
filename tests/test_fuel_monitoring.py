@@ -22,6 +22,7 @@ from app.models import (
     FuelStationFuel,
     FuelStationMark,
     FuelStationSubscription,
+    Recipe,
 )
 from app.services.fuel import (
     FuelChatFeed,
@@ -1645,6 +1646,9 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
     login(user.username)
     response = client.get("/fuel")
     assert response.status_code == 200
+    assert "https://unpkg.com" in response.headers["content-security-policy"]
+    assert "https://tile.openstreetmap.org" in response.headers["content-security-policy"]
+    assert "geolocation=(self)" in response.headers["permissions-policy"]
     assert "Скрытая сеть" not in response.text
     assert "Чужая АЗС" not in response.text
 
@@ -1686,16 +1690,46 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             pytest.skip(f"Chromium browser is unavailable: {exc}")
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
-            page.evaluate(leaflet_stub)
+            page_errors = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.add_init_script(leaflet_stub)
             page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", lambda route: route.fulfill(content_type="text/css", body=""))
             page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", lambda route: route.abort())
-            page.set_content(response.text, wait_until="load")
-            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+
+            def serve_homeos(route):
+                path = route.request.url.split("?", 1)[0]
+                if path == "http://homeos.test/fuel":
+                    route.fulfill(
+                        status=200,
+                        headers={
+                            "Content-Type": "text/html; charset=utf-8",
+                            "Content-Security-Policy": response.headers["content-security-policy"],
+                            "Permissions-Policy": response.headers["permissions-policy"],
+                        },
+                        body=response.text,
+                    )
+                elif path == "http://homeos.test/static/style.css":
+                    route.fulfill(
+                        content_type="text/css",
+                        body=Path("app/static/style.css").read_text(encoding="utf-8"),
+                    )
+                elif path.endswith("/api/notifications/unread"):
+                    route.fulfill(content_type="application/json", body='{"unread_total":0,"threads":[]}')
+                else:
+                    route.fulfill(status=404, body="")
+
+            page.route("http://homeos.test/**", serve_homeos)
+            page.goto("http://homeos.test/fuel", wait_until="load")
 
             assert page.locator("[data-station-id]:visible").count() == 3
             assert page.evaluate("window.fuelGeoCalls") == 0
             page.locator('[data-fuel="95"]').click()
             assert page.locator("[data-station-id]:visible").count() == 2
+            page.locator('[data-fuel="98"]').click()
+            assert page.locator("[data-station-id]:visible").count() == 1
+            page.locator('[data-fuel="100"]').click()
+            assert page.locator("[data-station-id]:visible").count() == 1
+            page.locator('[data-fuel="95"]').click()
             page.locator("#fuelOnlyAvailable").check()
             assert page.locator("[data-station-id]:visible").count() == 1
             page.locator("#fuelOnlyAvailable").uncheck()
@@ -1721,16 +1755,81 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
             page.locator('[data-view="list"]').click()
+            page.locator('[data-fuel="98"]').click()
             page.locator(".fuel-filter-open").click()
             assert page.locator(".fuel-filter-panel").is_visible()
-            page.locator('[data-fuel="98"]').click()
             page.locator("#fuelStatusFilter").select_option("candidate")
             page.locator("[data-filter-apply]").click()
+            assert not page.locator(".fuel-filter-panel").is_visible()
             page.locator('[data-view="map"]').click()
             assert page.locator(".fuel-map-marker").count() == 1
             page.locator(".fuel-map-marker").click()
             assert page.locator("[data-map-sheet]").is_visible()
             assert "ВОЗМОЖНО" in page.locator("[data-map-sheet]").text_content()
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
+            assert page_errors == []
+
+            fallback_page = browser.new_page(viewport={"width": 1440, "height": 900})
+            fallback_page.route(
+                "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
+                lambda route: route.fulfill(content_type="text/css", body=""),
+            )
+            fallback_page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", lambda route: route.abort())
+            fallback_page.route("http://homeos.test/**", serve_homeos)
+            fallback_page.goto("http://homeos.test/fuel", wait_until="load")
+            fallback_page.locator('[data-fuel="95"]').click()
+            assert fallback_page.locator("[data-station-id]:visible").count() == 2
+            fallback_page.locator('[data-view="map"]').click()
+            assert fallback_page.locator(".fuel-map-empty").is_visible()
+            assert "Список АЗС продолжает работать" in fallback_page.locator(".fuel-map-empty").text_content()
+            fallback_page.locator('[data-view="list"]').click()
+            assert fallback_page.locator("[data-station-id]:visible").count() == 2
+        finally:
+            browser.close()
+
+
+def test_recipes_mobile_actions_stay_inside_viewport(client, login, make_user, db):
+    playwright = pytest.importorskip("playwright.sync_api")
+    user = make_user("recipes-mobile-browser")
+    db.add(Recipe(
+        owner_id=user.id,
+        title="Очень длинное название рецепта для проверки мобильной вёрстки",
+        ingredients="Ингредиенты",
+        steps='[{"text":"Приготовить"}]',
+        tags="быстро, семейный ужин, повседневное",
+        cook_time_minutes=120,
+    ))
+    db.commit()
+    login(user.username)
+    response = client.get("/recipes")
+    assert response.status_code == 200
+    assert "https://unpkg.com" not in response.headers["content-security-policy"]
+    assert "geolocation=()" in response.headers["permissions-policy"]
+
+    browser_paths = [
+        shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
+    ] + [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    executable = next((path for path in browser_paths if path and Path(path).exists()), None)
+    with playwright.sync_playwright() as manager:
+        try:
+            browser = manager.chromium.launch(
+                headless=True, executable_path=executable
+            ) if executable else manager.chromium.launch(headless=True)
+        except playwright.Error as exc:
+            pytest.skip(f"Chromium browser is unavailable: {exc}")
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.set_content(response.text, wait_until="load")
+            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+            assert page.evaluate(
+                "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
+            )
+            assert page.evaluate(
+                "() => [...document.querySelectorAll('.recipe-page-head .btn')].every(button => {"
+                " const box = button.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth; })"
+            )
         finally:
             browser.close()

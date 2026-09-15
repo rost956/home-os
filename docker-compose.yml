@@ -39,8 +39,8 @@ services:
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
       PUSH_ENDPOINT_HOSTS: ${PUSH_ENDPOINT_HOSTS:-}
       HOME_FILE_SHARE_DIR: ${HOME_FILE_SHARE_DIR:-/app/data/shared_files}
-      HOME_FILE_SHARE_MAX_FILE_MB: ${HOME_FILE_SHARE_MAX_FILE_MB:-100}
-      HOME_FILE_SHARE_MAX_TRANSFER_MB: ${HOME_FILE_SHARE_MAX_TRANSFER_MB:-500}
+      HOME_FILE_SHARE_MAX_FILE_MB: ${HOME_FILE_SHARE_MAX_FILE_MB:-1024}
+      HOME_FILE_SHARE_MAX_TRANSFER_MB: ${HOME_FILE_SHARE_MAX_TRANSFER_MB:-5120}
       HOME_FILE_SHARE_CLEANUP_SECONDS: ${HOME_FILE_SHARE_CLEANUP_SECONDS:-3600}
       HOME_FILE_SHARE_ORPHAN_GRACE_HOURS: ${HOME_FILE_SHARE_ORPHAN_GRACE_HOURS:-24}
       HOME_FILE_SHARE_MAX_STORAGE_MB: ${HOME_FILE_SHARE_MAX_STORAGE_MB:-0}
@@ -68,6 +68,8 @@ services:
       - ./data:/app/data
     init: true
     read_only: true
+    # Small process temporaries stay in RAM. Starlette UploadFile spools are
+    # explicitly directed to /app/data/.upload_spool by the application.
     tmpfs:
       - /tmp:size=64m,mode=1777
     restart: unless-stopped
@@ -90,7 +92,6 @@ services:
         condition: service_healthy
     environment:
       CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
-      HOME_FILE_SHARE_MAX_TRANSFER_MB: ${HOME_FILE_SHARE_MAX_TRANSFER_MB:-500}
     ports:
       - "80:80"
       - "443:443"

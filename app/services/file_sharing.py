@@ -63,6 +63,12 @@ def safe_original_filename(value: str | None) -> str:
 
 
 def upload_size(upload: UploadFile) -> int:
+    if upload.size is not None:
+        try:
+            upload.file.seek(0)
+        except (AttributeError, OSError) as exc:
+            raise FileShareValidationError("Не удалось прочитать загружаемый файл.") from exc
+        return upload.size
     try:
         upload.file.seek(0, 2)
         size = upload.file.tell()

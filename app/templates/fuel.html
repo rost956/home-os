@@ -3,7 +3,7 @@
 {% block body_class %}fuel-page fuel-dashboard-page{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer onload="window.dispatchEvent(new Event('fuel:leaflet-ready'))" onerror="window.dispatchEvent(new Event('fuel:leaflet-error'))"></script>
 {% endblock %}
 {% block content %}
 <div class="page-head compact-head fuel-head fuel-dashboard-head">
@@ -19,6 +19,7 @@
     </div>
     <div class="fuel-toolbar-line">
         <button class="btn secondary fuel-filter-open" type="button" aria-controls="fuelFilterPanel" aria-expanded="false">Фильтры</button>
+        <div class="fuel-filter-backdrop" data-filter-close aria-hidden="true"></div>
         <div class="fuel-filter-panel" id="fuelFilterPanel" role="dialog" aria-labelledby="fuelFilterTitle">
             <div class="fuel-filter-panel-head"><b id="fuelFilterTitle">Фильтры</b><button class="icon-btn fuel-filter-close" type="button" aria-label="Закрыть фильтры">×</button></div>
             <label>Состояние<select id="fuelStatusFilter"><option value="all">Все состояния</option><option value="available">Есть</option><option value="candidate">Возможное</option><option value="unavailable">Нет</option><option value="unknown">Нет данных</option></select></label>
@@ -71,7 +72,11 @@
 
 {% block scripts %}{% if dashboard.stations %}<script>
 (function () {
-    const stations = JSON.parse(document.getElementById('fuelDashboardData').textContent);
+    const data = document.getElementById('fuelDashboardData');
+    if (!data) return;
+    let stations = [];
+    try { stations = JSON.parse(data.textContent); }
+    catch (error) { console.error('Fuel dashboard data could not be parsed', error); return; }
     const cards = new Map([...document.querySelectorAll('[data-station-id]')].map(card => [Number(card.dataset.stationId), card]));
     const list = document.querySelector('[data-fuel-list]');
     const mapPanel = document.querySelector('[data-fuel-map-panel]');
@@ -85,6 +90,8 @@
     const onlyAvailable = document.getElementById('fuelOnlyAvailable');
     const locationStatus = document.querySelector('.fuel-location-status');
     const mapSheet = document.querySelector('[data-map-sheet]');
+    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet];
+    if (required.some(element => !element)) { console.error('Fuel dashboard markup is incomplete'); return; }
     let leafletMap = null;
     let markerLayer = null;
     let userLocation = null;
@@ -134,7 +141,8 @@
         if (state.sort !== 'usefulness') next.set('sort', state.sort);
         if (state.only) next.set('only', '1');
         if (state.view !== 'list') next.set('view', state.view);
-        try { history.replaceState(null, '', location.pathname + (next.size ? '?' + next : '')); } catch (error) {}
+        const query = next.toString();
+        try { history.replaceState(null, '', location.pathname + (query ? '?' + query : '')); } catch (error) {}
     }
     function popupContent(station) {
         const root = document.createElement('div'); root.className = 'fuel-map-card';
@@ -165,9 +173,9 @@
             return;
         }
         if (!leafletMap) {
-            leafletMap = L.map('fuelMap', {zoomControl: true});
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(leafletMap);
-            markerLayer = L.layerGroup().addTo(leafletMap);
+            leafletMap = window.L.map('fuelMap', {zoomControl: true});
+            window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(leafletMap);
+            markerLayer = window.L.layerGroup().addTo(leafletMap);
         }
         markerLayer.clearLayers();
         const points = [];
@@ -176,8 +184,8 @@
             const symbol = ({available: '✓', candidate: '?', unavailable: '×', unknown: '·'})[current];
             const stateLabel = ({available: 'есть', candidate: 'возможное наличие', unavailable: 'нет', unknown: 'нет данных'})[current];
             const description = `${station.name}, ${station.address}, ${stateLabel}`;
-            const icon = L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [34, 34], iconAnchor: [17, 17]});
-            const marker = L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
+            const icon = window.L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [34, 34], iconAnchor: [17, 17]});
+            const marker = window.L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
             if (marker.getElement()) marker.getElement().setAttribute('aria-label', description);
             if (matchMedia('(max-width: 600px)').matches) marker.on('click', () => openMobileSheet(station));
             else marker.bindPopup(popupContent(station), {maxWidth: 280});
@@ -203,7 +211,7 @@
         try { localStorage.setItem('fuel-dashboard-view', state.view); } catch (error) {}
         syncUrl(); renderMap();
     }
-    function closeFilters() { panel.classList.remove('open'); filterOpen.setAttribute('aria-expanded', 'false'); }
+    function closeFilters() { panel.classList.remove('open'); document.body.classList.remove('fuel-filters-open'); filterOpen.setAttribute('aria-expanded', 'false'); }
     function requestLocation() {
         if (!navigator.geolocation) { locationStatus.textContent = 'Геолокация недоступна — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); return; }
         locationStatus.textContent = 'Определяем местоположение…';
@@ -211,18 +219,21 @@
             userLocation = position.coords; locationStatus.textContent = 'Сортировка по расстоянию включена.'; render();
         }, () => { locationStatus.textContent = 'Нет доступа к геолокации — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
     }
-    document.querySelectorAll('[data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
-    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; render(); }));
+    document.querySelectorAll('.fuel-dashboard-controls [data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
+    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; render(); }));
     statusFilter.addEventListener('change', () => { state.status = statusFilter.value; render(); });
     brandFilter.addEventListener('change', () => { state.brand = brandFilter.value; render(); });
     onlyAvailable.addEventListener('change', () => { state.only = onlyAvailable.checked; render(); });
     sortSelect.addEventListener('change', () => { state.sort = sortSelect.value; if (state.sort === 'distance' && !userLocation) requestLocation(); else render(); });
-    filterOpen.addEventListener('click', () => { panel.classList.add('open'); filterOpen.setAttribute('aria-expanded', 'true'); panel.querySelector('select').focus(); });
+    filterOpen.addEventListener('click', () => { panel.classList.add('open'); document.body.classList.add('fuel-filters-open'); filterOpen.setAttribute('aria-expanded', 'true'); panel.querySelector('select').focus(); });
     panel.querySelector('.fuel-filter-close').addEventListener('click', closeFilters);
     panel.querySelector('[data-filter-apply]').addEventListener('click', closeFilters);
     document.querySelectorAll('[data-filter-reset]').forEach(button => button.addEventListener('click', () => { state.fuel = state.status = state.brand = 'all'; state.sort = 'usefulness'; state.only = false; locationStatus.textContent = ''; closeFilters(); render(); }));
     mapSheet.querySelector('[data-map-sheet-close]').addEventListener('click', () => { mapSheet.hidden = true; });
+    document.querySelector('[data-filter-close]').addEventListener('click', closeFilters);
     document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); mapSheet.hidden = true; } });
+    window.addEventListener('fuel:leaflet-ready', () => { if (state.view === 'map') renderMap(); });
+    window.addEventListener('fuel:leaflet-error', () => { if (state.view === 'map') renderMap(); });
     window.addEventListener('load', () => { if (state.view === 'map') renderMap(); });
     render();
 })();

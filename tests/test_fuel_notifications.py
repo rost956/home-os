@@ -1,5 +1,10 @@
+import shutil
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import pytest
+
+import app.main as main_module
 from app.models import (
     FuelDeliveryEvent,
     FuelNotification,
@@ -242,3 +247,94 @@ def test_fuel_notification_settings_and_station_flags_are_owned(client, db, make
     page = client.get("/fuel/settings")
     assert "Тест на всех устройствах" in page.text
     assert "Web Push не настроен на сервере" in page.text or "data-push-available=\"0\"" in page.text
+
+
+def test_fuel_push_controls_complete_browser_click_flow(client, make_user, login, monkeypatch):
+    playwright = pytest.importorskip("playwright.sync_api")
+    user = make_user("fuel-push-browser")
+    login(user.username)
+    monkeypatch.setattr(main_module, "ensure_vapid_keys", lambda: {"available": True})
+    monkeypatch.setattr(main_module, "webpush", object())
+    response = client.get("/fuel/settings")
+    assert response.status_code == 200
+    assert 'data-push-available="1"' in response.text
+
+    browser_paths = [
+        shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
+    ] + [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    executable = next((path for path in browser_paths if path and Path(path).exists()), None)
+    browser_mocks = r"""
+    window.pushRequests = [];
+    window.localNotifications = 0;
+    const notificationApi = {
+      permission: 'default',
+      requestPermission: async () => { notificationApi.permission = 'granted'; return 'granted'; }
+    };
+    Object.defineProperty(window, 'Notification', {configurable: true, value: notificationApi});
+    Object.defineProperty(window, 'PushManager', {configurable: true, value: function PushManager(){}});
+    let subscription = null;
+    const registration = {
+      update: async () => {},
+      showNotification: async () => { window.localNotifications += 1; },
+      pushManager: {
+        getSubscription: async () => subscription,
+        subscribe: async () => {
+          subscription = {
+            endpoint: 'https://fcm.googleapis.com/push/browser-test',
+            unsubscribe: async () => true,
+            toJSON: () => ({endpoint: 'https://fcm.googleapis.com/push/browser-test', keys: {p256dh: 'key', auth: 'auth'}})
+          };
+          return subscription;
+        }
+      }
+    };
+    Object.defineProperty(navigator, 'serviceWorker', {configurable: true, value: {
+      getRegistration: async () => registration,
+      register: async () => registration,
+      ready: Promise.resolve(registration)
+    }});
+    window.fetch = async (url, options = {}) => {
+      const path = String(url); window.pushRequests.push({path, method: options.method || 'GET'});
+      if (path.includes('vapid-public-key')) return new Response(JSON.stringify({public_key: 'AQAB'}), {status: 200});
+      if (path.includes('/api/fuel/push/test')) return new Response(JSON.stringify({ok: true, sent: 1}), {status: 200});
+      if (path.includes('/api/push/subscriptions')) return new Response(JSON.stringify({ok: true}), {status: 200});
+      if (path.includes('/api/notifications/unread')) return new Response(JSON.stringify({unread_total: 0, threads: []}), {status: 200});
+      return new Response(JSON.stringify({ok: true}), {status: 200});
+    };
+    """
+
+    with playwright.sync_playwright() as manager:
+        try:
+            browser = manager.chromium.launch(
+                headless=True, executable_path=executable
+            ) if executable else manager.chromium.launch(headless=True)
+        except playwright.Error as exc:
+            pytest.skip(f"Chromium browser is unavailable: {exc}")
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page_errors = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.evaluate(browser_mocks)
+            page.set_content(response.text, wait_until="load")
+            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+            page.locator("#fuelPushEnable").click()
+            page.wait_for_function("document.getElementById('fuelPushStatus').textContent.includes('подключено')")
+            assert "подключено" in page.locator("#fuelPushStatus").text_content().lower()
+            page.locator("#fuelPushTest").click()
+            page.wait_for_function("document.getElementById('fuelPushStatus').textContent.includes('1')")
+            assert "1" in page.locator("#fuelPushStatus").text_content()
+            assert page.evaluate(
+                "window.pushRequests.some(request => request.path.includes('/api/push/subscriptions'))"
+            )
+            assert page.evaluate(
+                "window.pushRequests.some(request => request.path.includes('/api/fuel/push/test'))"
+            )
+            assert page.evaluate(
+                "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
+            )
+            assert page_errors == []
+        finally:
+            browser.close()

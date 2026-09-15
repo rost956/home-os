@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover - dependency is installed in Docker, but k
     webpush = None
 
 from fastapi import Depends, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import and_, asc, desc, func, or_, select, update
@@ -32,6 +33,7 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import get_current_user, get_current_user_optional, hash_password, verify_password
 from .config import settings
@@ -187,6 +189,7 @@ from .web import (
     BACKUP_DIR,
     CHAT_MEDIA_DIR,
     DATA_DIR,
+    FILE_UPLOAD_PATH,
     MEDIA_DIR,
     MOMENT_MEDIA_DIR,
     PUSH_VAPID_PRIVATE_KEY_FILE,
@@ -200,7 +203,6 @@ ONLINE_WINDOW_SECONDS = 75
 BACKUP_RETENTION_COUNT = 14
 IMPORT_MAX_BYTES = 2 * 1024 * 1024
 IMPORT_MAX_ITEMS = 10_000
-MAX_REQUEST_BYTES = max(16 * 1024 * 1024, settings.file_share_max_transfer_bytes + 2 * 1024 * 1024)
 MOMENT_THUMB_DIR = MOMENT_MEDIA_DIR / "thumbs"
 MOMENT_THUMB_SIZE = (480, 360)
 PUSH_ENDPOINT_HOST_SUFFIXES = tuple(
@@ -1013,15 +1015,30 @@ async def app_lifespan(_app):
 app.router.lifespan_context = app_lifespan
 
 
+@app.exception_handler(StarletteHTTPException)
+async def friendly_upload_http_error(request: Request, exc: StarletteHTTPException):
+    if (
+        request.method == "POST"
+        and FILE_UPLOAD_PATH.fullmatch(request.url.path)
+        and exc.status_code == 400
+        and exc.detail == "There was an error parsing the body"
+    ):
+        cause = type(exc.__cause__).__name__ if exc.__cause__ else "Unknown"
+        logger.warning("Multipart upload parsing failed path=%s cause=%s", request.url.path, cause)
+        return JSONResponse(
+            {
+                "detail": (
+                    "Не удалось прочитать загрузку. Проверьте соединение и свободное место, "
+                    "затем попробуйте ещё раз."
+                )
+            },
+            status_code=400,
+        )
+    return await http_exception_handler(request, exc)
+
+
 @app.middleware("http")
 async def protect_unsafe_requests(request: Request, call_next):
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_REQUEST_BYTES:
-                return Response("Request body is too large", status_code=413)
-        except ValueError:
-            return Response("Invalid Content-Length", status_code=400)
     if settings.background_jobs_enabled:
         auto_daily_backup()
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -1038,11 +1055,17 @@ async def protect_unsafe_requests(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
-    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    is_fuel_dashboard = request.url.path == "/fuel"
+    geolocation_policy = "geolocation=(self)" if is_fuel_dashboard else "geolocation=()"
+    response.headers.setdefault("Permissions-Policy", f"camera=(), microphone=(), {geolocation_policy}")
+    leaflet_source = " https://unpkg.com" if is_fuel_dashboard else ""
+    map_tile_source = " https://tile.openstreetmap.org" if is_fuel_dashboard else ""
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; "
+        f"default-src 'self'; script-src 'self' 'unsafe-inline'{leaflet_source}; "
+        f"style-src 'self' 'unsafe-inline'{leaflet_source}; "
+        f"img-src 'self' data: blob:{map_tile_source}; connect-src 'self' ws: wss:; "
+        "font-src 'self'; object-src 'none'; "
         "base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
     )
     if response.headers.get("content-type", "").startswith("text/html"):
