@@ -15,6 +15,10 @@
         {% if collector.last_error %}<small class="fuel-collector-error">{{ collector.last_error }}</small>{% endif %}
     </div>
 </section>
+<section class="card slim fuel-today-summary">
+    <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ today_digest.confirmed_appearances }} · возможных: {{ today_digest.candidates }} · поставок: {{ today_digest.confirmed_deliveries + today_digest.probable_deliveries }} · подтверждённое наличие: {{ today_digest.confirmed_duration_minutes }} мин</span></div>
+    <a class="btn secondary" href="/fuel/settings">Уведомления</a>
+</section>
 <section class="fuel-upcoming">
     <div class="card-head"><div><h2>Ближайшие вероятные поставки</h2><p class="subline">Прогноз только по событиям с достаточными признаками поставки</p></div></div>
     {% if upcoming %}<div class="fuel-forecast-strip">

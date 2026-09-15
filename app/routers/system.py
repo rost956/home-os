@@ -48,9 +48,10 @@ self.addEventListener('push', event => {
         renotify: true,
         requireInteraction: Boolean(payload.requireInteraction),
         data: {
-            url: payload.url || '/today',
+            url: payload.internal_url || payload.url || '/today',
             planner_item_id: payload.planner_item_id || null,
-            occurrence_key: payload.occurrence_key || null
+            occurrence_key: payload.occurrence_key || null,
+            fuel_event_id: payload.fuel_event_id || null
         }
     };
     event.waitUntil(self.registration.showNotification(title, options));

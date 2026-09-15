@@ -48,6 +48,9 @@ from .models import (
     ExpenseListShare,
     FuelDeliveryEvent,
     FuelForecast,
+    FuelNotification,
+    FuelNotificationDelivery,
+    FuelNotificationSettings,
     FuelObservation,
     FuelStation,
     FuelStationChatMessage,
@@ -124,6 +127,13 @@ from .services.fuel_analytics import (
     FORECAST_VERSION,
     MIN_DELIVERY_CONFIDENCE,
     station_correlations,
+)
+from .services.fuel_notifications import (
+    build_daily_fuel_digest,
+    run_fuel_notification_cycle,
+)
+from .services.fuel_notifications import (
+    get_or_create_settings as get_fuel_notification_settings,
 )
 from .services.fuel_settings import (
     FuelRuntimeSettings,
@@ -329,9 +339,9 @@ def ensure_vapid_keys() -> dict[str, str]:
     if not public_key or not private_key:
         return {"available": "", "reason": "VAPID-конфигурация не заполнена"}
     if not re.fullmatch(r"[A-Za-z0-9_-]{80,120}", public_key):
-        return {"available": "", "reason": "Некорректный HOME_VAPID_PUBLIC_KEY"}
+        return {"available": "", "reason": "Некорректный WEB_PUSH_VAPID_PUBLIC_KEY"}
     if not (settings.vapid_subject.startswith("mailto:") or settings.vapid_subject.startswith("https://")):
-        return {"available": "", "reason": "Некорректный HOME_VAPID_SUBJECT"}
+        return {"available": "", "reason": "Некорректный WEB_PUSH_SUBJECT"}
     private_value = private_key
     if "BEGIN" in private_key:
         private_text = private_key.replace("\\n", "\n")
@@ -391,6 +401,8 @@ def send_push_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> dic
                 timeout=12,
             )
             sub.last_used_at = utc_now_naive()
+            sub.last_success_at = utc_now_naive()
+            sub.failure_count = 0
             result["sent"] += 1
         except Exception as exc:
             result["failed"] += 1
@@ -399,6 +411,8 @@ def send_push_to_user(db: Session, user_id: int, payload: dict[str, Any]) -> dic
             if status_code:
                 error_text = f"HTTP {status_code}: {error_text}"
             result["errors"].append(error_text[:500])
+            sub.last_failure_at = utc_now_naive()
+            sub.failure_count += 1
             if status_code in (404, 410):
                 sub.disabled_at = utc_now_naive()
                 result["removed"] += 1
@@ -475,7 +489,10 @@ def schema_change_required() -> bool:
         "chat_threads": {"is_pinned"},
         "chat_thread_messages": {"reply_to_id", "attachment_path"},
         "recipe_cooking_timers": {"last_reminded_at"},
-        "push_subscriptions": {"updated_at", "last_seen_at", "disabled_at"},
+        "push_subscriptions": {
+            "updated_at", "last_seen_at", "disabled_at", "device_name",
+            "last_success_at", "last_failure_at", "failure_count",
+        },
         "expense_items": {"include_in_analytics", "include_in_forecast"},
         "expense_list_shares": {"can_edit"},
         "shopping_list_shares": {"can_edit"},
@@ -490,6 +507,7 @@ def schema_change_required() -> bool:
         },
         "fuel_station_subscriptions": {
             "user_id", "station_id", "enabled", "track_95", "track_98", "track_100", "updated_at",
+            "notify_95", "notify_98", "notify_100", "notifications_enabled_at",
         },
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
         "ai_user_settings": {
@@ -662,6 +680,9 @@ def ensure_runtime_schema() -> None:
         TemporarySharedFile.__table__.create(bind=connection, checkfirst=True)
         FuelStationChatMessage.__table__.create(bind=connection, checkfirst=True)
         FuelStationSubscription.__table__.create(bind=connection, checkfirst=True)
+        FuelNotificationSettings.__table__.create(bind=connection, checkfirst=True)
+        FuelNotification.__table__.create(bind=connection, checkfirst=True)
+        FuelNotificationDelivery.__table__.create(bind=connection, checkfirst=True)
 
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
@@ -709,6 +730,15 @@ def ensure_runtime_schema() -> None:
             connection.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN last_seen_at DATETIME")
         if push_columns and "disabled_at" not in push_columns:
             connection.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN disabled_at DATETIME")
+        push_defaults = {
+            "device_name": "VARCHAR(120)",
+            "last_success_at": "DATETIME",
+            "last_failure_at": "DATETIME",
+            "failure_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column_name, column_sql in push_defaults.items():
+            if push_columns and column_name not in push_columns:
+                connection.exec_driver_sql(f"ALTER TABLE push_subscriptions ADD COLUMN {column_name} {column_sql}")
         if push_columns:
             connection.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_push_subscriptions_disabled_at ON push_subscriptions (disabled_at)"
@@ -762,6 +792,20 @@ def ensure_runtime_schema() -> None:
             )
 
         _migrate_fuel_station_subscriptions(connection)
+        fuel_subscription_columns = [
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(fuel_station_subscriptions)").fetchall()
+        ]
+        fuel_subscription_defaults = {
+            "notify_95": "BOOLEAN NOT NULL DEFAULT 0",
+            "notify_98": "BOOLEAN NOT NULL DEFAULT 0",
+            "notify_100": "BOOLEAN NOT NULL DEFAULT 0",
+            "notifications_enabled_at": "DATETIME",
+        }
+        for column_name, column_sql in fuel_subscription_defaults.items():
+            if fuel_subscription_columns and column_name not in fuel_subscription_columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE fuel_station_subscriptions ADD COLUMN {column_name} {column_sql}"
+                )
 
         wishlist_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(wishlist_items)").fetchall()]
         wishlist_defaults = {
@@ -827,19 +871,24 @@ def run_planner_push_cycle() -> None:
             sender,
             catchup=timedelta(minutes=settings.push_catchup_minutes),
         )
+    # Fuel uses the same scheduler and sender, but a separate session so a push
+    # failure can never roll back collector/analytics writes.
+    with SessionLocal() as db:
+        runtime = get_fuel_runtime_settings(db)
+        run_fuel_notification_cycle(db, sender, stale_after_minutes=runtime.stale_after_minutes)
 
 
 async def planner_push_scheduler() -> None:
-    logger.info("Planner push scheduler started interval=%ss", settings.push_poll_seconds)
+    logger.info("Web Push scheduler started interval=%ss", settings.push_poll_seconds)
     try:
         while True:
             try:
                 await asyncio.to_thread(run_planner_push_cycle)
             except Exception as exc:
-                logger.warning("Planner push scheduler cycle failed: %s", type(exc).__name__)
+                logger.warning("Web Push scheduler cycle failed: %s", type(exc).__name__)
             await asyncio.sleep(settings.push_poll_seconds)
     finally:
-        logger.info("Planner push scheduler stopped")
+        logger.info("Web Push scheduler stopped")
 
 
 def run_file_share_cleanup(*, owner_id: int | None = None):
@@ -2779,11 +2828,14 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
     )
     persistent_success = max((item.last_successful_poll_at for item in stations if item.last_successful_poll_at), default=None)
     runtime = get_fuel_runtime_settings(db)
+    today_digest = build_daily_fuel_digest(
+        db, user.id, msk_today(), stale_after_minutes=runtime.stale_after_minutes
+    )
     return render(request, "fuel.html", {"user": user, "stations": stations,
         "station_by_id": {item.id: item for item in stations}, "latest": latest, "forecasts": forecasts,
         "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
         "persistent_success": persistent_success, "subscriptions": subscriptions,
-        "tracked_by_station": tracked_by_station})
+        "tracked_by_station": tracked_by_station, "today_digest": today_digest})
 
 
 def render_fuel_settings(
@@ -2800,6 +2852,11 @@ def render_fuel_settings(
             FuelStationSubscription.user_id == user.id
         ).order_by(FuelStationSubscription.enabled.desc(), FuelStationSubscription.updated_at.desc())
     ).all()
+    notification_settings = get_fuel_notification_settings(db, user.id)
+    active_push_devices = db.scalar(select(func.count(PushSubscription.id)).where(
+        PushSubscription.user_id == user.id, PushSubscription.disabled_at.is_(None)
+    )) or 0
+    db.commit()
     response = render(request, "fuel_settings.html", {
         "user": user,
         "runtime": runtime,
@@ -2808,6 +2865,9 @@ def render_fuel_settings(
         "error": error,
         "poll_options": (60, 120, 300, 600, 900, 1800),
         "comments_options": (300, 600, 900, 1800, 3600),
+        "notification_settings": notification_settings,
+        "active_push_devices": active_push_devices,
+        "push_available": bool(ensure_vapid_keys().get("available") and webpush is not None),
     })
     if error:
         response.status_code = 400
@@ -2817,6 +2877,46 @@ def render_fuel_settings(
 @app.get("/fuel/settings")
 def fuel_settings_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return render_fuel_settings(request, user=user, db=db)
+
+
+@app.post("/fuel/notification-settings")
+def fuel_notification_settings_update(
+    notifications_enabled: str | None = Form(None),
+    notification_level: str = Form("confirmed_only"),
+    notify_probable_delivery: str | None = Form(None),
+    quiet_hours_enabled: str | None = Form(None),
+    quiet_hours_start: str = Form("23:00"),
+    quiet_hours_end: str = Form("07:00"),
+    daily_digest_enabled: str | None = Form(None),
+    daily_digest_time: str = Form("21:00"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if notification_level not in {"confirmed_only", "candidate_and_confirmed"}:
+        raise HTTPException(status_code=400, detail="Некорректный уровень уведомлений")
+    for value in (quiet_hours_start, quiet_hours_end, daily_digest_time):
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Время должно быть в формате ЧЧ:ММ") from exc
+    preferences = get_fuel_notification_settings(db, user.id)
+    enabling = notifications_enabled == "on"
+    broadening = (
+        notification_level == "candidate_and_confirmed"
+        and preferences.notification_level != "candidate_and_confirmed"
+    ) or (notify_probable_delivery == "on" and not preferences.notify_probable_delivery)
+    if enabling and (not preferences.notifications_enabled or broadening):
+        preferences.notifications_enabled_at = utc_now_naive()
+    preferences.notifications_enabled = enabling
+    preferences.notification_level = notification_level
+    preferences.notify_probable_delivery = notify_probable_delivery == "on"
+    preferences.quiet_hours_enabled = quiet_hours_enabled == "on"
+    preferences.quiet_hours_start = quiet_hours_start
+    preferences.quiet_hours_end = quiet_hours_end
+    preferences.daily_digest_enabled = daily_digest_enabled == "on"
+    preferences.daily_digest_time = daily_digest_time
+    db.commit()
+    return redirect_notice("/fuel/settings", "Настройки уведомлений сохранены")
 
 
 @app.post("/fuel/settings")
@@ -2900,6 +3000,7 @@ def fuel_station_settings_update(
     station_id: int,
     enabled: str | None = Form(None),
     fuel_types: list[str] = Form([]),
+    notify_fuel_types: list[str] = Form([]),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -2911,6 +3012,13 @@ def fuel_station_settings_update(
     subscription.track_95 = "95" in chosen
     subscription.track_98 = "98" in chosen
     subscription.track_100 = "100" in chosen
+    notify_chosen = set(notify_fuel_types).intersection(chosen)
+    previously_notified = {fuel for fuel in FUEL_TYPES if getattr(subscription, f"notify_{fuel}")}
+    subscription.notify_95 = "95" in notify_chosen
+    subscription.notify_98 = "98" in notify_chosen
+    subscription.notify_100 = "100" in notify_chosen
+    if notify_chosen - previously_notified:
+        subscription.notifications_enabled_at = utc_now_naive()
     db.commit()
     fuel_scheduler_wakeup.set()
     destination = f"/fuel/{station_id}" if subscription.enabled else "/fuel/settings"
@@ -5130,6 +5238,11 @@ async def push_subscribe(
                     PlannerReminderDelivery.push_subscription_id == subscription.id
                 )
             )
+            db.execute(
+                sql_delete(FuelNotificationDelivery).where(
+                    FuelNotificationDelivery.push_subscription_id == subscription.id
+                )
+            )
         subscription.user_id = user.id
         subscription.p256dh = p256dh
         subscription.auth = auth
@@ -5138,6 +5251,8 @@ async def push_subscribe(
         subscription.last_seen_at = utc_now_naive()
         subscription.last_used_at = utc_now_naive()
         subscription.disabled_at = None
+        subscription.failure_count = 0
+        subscription.device_name = str(data.get("device_name") or "")[:120] or None
     else:
         db.add(PushSubscription(
             user_id=user.id,
@@ -5145,6 +5260,7 @@ async def push_subscribe(
             p256dh=p256dh,
             auth=auth,
             user_agent=(request.headers.get("user-agent") or "")[:500] or None,
+            device_name=str(data.get("device_name") or "")[:120] or None,
             last_used_at=utc_now_naive(),
             last_seen_at=utc_now_naive(),
         ))
@@ -5205,6 +5321,31 @@ def push_test(user: User = Depends(get_current_user), db: Session = Depends(get_
         "badge": "/static/icon-192.png",
     })
     return result
+
+
+@app.post("/api/fuel/push/test")
+def fuel_push_test(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The test deliberately targets all active devices and says so in Fuel UI."""
+    now = utc_now_naive()
+    recent = db.scalar(select(func.max(FuelNotification.created_at)).where(
+        FuelNotification.user_id == user.id,
+        FuelNotification.notification_type == "test",
+    ))
+    if recent and now - recent < timedelta(seconds=30):
+        raise HTTPException(status_code=429, detail="Повторная проверка доступна через 30 секунд")
+    db.add(FuelNotification(
+        identity_key=f"fuel-test:{user.id}:{uuid.uuid4().hex}", user_id=user.id,
+        notification_type="test", status="sent", available_after=now,
+        sent_at=now, tag=f"fuel-test-{user.id}", title="Бензин · уведомления работают",
+        body="Тестовые уведомления работают", internal_url="/fuel",
+    ))
+    db.commit()
+    return send_push_to_user(db, user.id, {
+        "title": "Бензин · уведомления работают",
+        "body": "Тестовые уведомления работают",
+        "url": "/fuel", "tag": f"fuel-test-{user.id}",
+        "icon": "/static/icon-192.png", "badge": "/static/icon-192.png",
+    })
 
 
 @app.get("/api/notifications/unread")

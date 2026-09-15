@@ -2713,6 +2713,14 @@ html[data-theme="dark"] .success-alert {
 .fuel-station-settings-card { max-width: 720px; }
 .fuel-choice-fieldset { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); }
 .fuel-choice-fieldset legend { padding: 0 6px; font-weight: 800; }
+.fuel-notification-settings { display: grid; gap: 16px; margin-top: 14px; }
+.fuel-notification-times { grid-template-columns: minmax(180px, 1fr) minmax(120px, .5fr) minmax(120px, .5fr); align-items: end; }
+.fuel-push-device-card, .fuel-today-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.fuel-push-device-card p, .fuel-today-summary span { margin: 3px 0 0; }
+.fuel-today-summary { margin-bottom: 20px; padding: 13px 16px; border-top: 0; }
+.fuel-today-summary > div { display: grid; min-width: 0; gap: 3px; }
+.fuel-today-summary span { color: var(--muted); font-size: 13px; }
+.fuel-station-fuel-setting { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(140px, 1fr); gap: 10px; }
 
 @media (max-width: 1050px) {
     .fuel-station-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2734,6 +2742,10 @@ html[data-theme="dark"] .success-alert {
     .fuel-settings-form .form-row, .fuel-diagnostic-grid { grid-template-columns: 1fr; }
     .fuel-managed-stations .card-head { align-items: stretch; flex-direction: column; }
     .fuel-managed-stations .btn { width: 100%; justify-content: center; }
+    .fuel-notification-times, .fuel-station-fuel-setting { grid-template-columns: 1fr; }
+    .fuel-push-device-card, .fuel-today-summary { align-items: stretch; flex-direction: column; }
+    .fuel-push-device-card .actions { display: grid; grid-template-columns: 1fr; }
+    .fuel-push-device-card .btn, .fuel-today-summary .btn { width: 100%; justify-content: center; }
     .fuel-timeline-card, .fuel-timeline, .fuel-timeline-row, .fuel-timeline-track { width: 100%; max-width: 100%; min-width: 0; }
     .fuel-timeline-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; }
     .fuel-timeline-axis { margin-left: 0; }

@@ -15,6 +15,31 @@
         <button class="btn" type="submit">Сохранить настройки</button>
     </section>
 </form>
+<section class="card fuel-notification-settings">
+    <div class="card-head"><div><h2>Личные уведомления</h2><p class="subline">Ваши настройки не влияют на других пользователей HomeOS.</p></div><span class="pill">{{ active_push_devices }} устройств</span></div>
+    <form class="form" method="post" action="/fuel/notification-settings">
+        <label class="check-row fuel-toggle"><input type="checkbox" name="notifications_enabled" {% if notification_settings.notifications_enabled %}checked{% endif %}><span><b>Уведомлять о бензине</b><small>Новые события будут учитываться только после включения.</small></span></label>
+        <div class="form-row two-cols">
+            <label>Какие появления<select name="notification_level"><option value="confirmed_only" {% if notification_settings.notification_level == 'confirmed_only' %}selected{% endif %}>Только подтверждённые</option><option value="candidate_and_confirmed" {% if notification_settings.notification_level == 'candidate_and_confirmed' %}selected{% endif %}>Возможные и подтверждённые</option></select></label>
+            <label class="check-row"><input type="checkbox" name="notify_probable_delivery" {% if notification_settings.notify_probable_delivery %}checked{% endif %}> Сообщать о вероятной/подтверждённой поставке</label>
+        </div>
+        <div class="form-row fuel-notification-times">
+            <label class="check-row"><input type="checkbox" name="quiet_hours_enabled" {% if notification_settings.quiet_hours_enabled %}checked{% endif %}> Тихие часы</label>
+            <label>С<input type="time" name="quiet_hours_start" value="{{ notification_settings.quiet_hours_start }}"></label>
+            <label>До<input type="time" name="quiet_hours_end" value="{{ notification_settings.quiet_hours_end }}"></label>
+        </div>
+        <div class="form-row fuel-notification-times">
+            <label class="check-row"><input type="checkbox" name="daily_digest_enabled" {% if notification_settings.daily_digest_enabled %}checked{% endif %}> Ежедневные итоги</label>
+            <label>Время по Москве<input type="time" name="daily_digest_time" value="{{ notification_settings.daily_digest_time }}"></label>
+        </div>
+        <p class="subline">Тихие события откладываются и перед отправкой проверяются снова. Итоги приходят в указанное время независимо от тихих часов.</p>
+        <button class="btn" type="submit">Сохранить уведомления</button>
+    </form>
+    <div class="fuel-push-device-card" data-push-available="{{ '1' if push_available else '0' }}">
+        <div><b>Web Push на этом устройстве</b><p id="fuelPushStatus" class="subline">Проверяем поддержку…</p></div>
+        <div class="actions"><button id="fuelPushEnable" class="btn secondary" type="button">Включить на этом устройстве</button><button id="fuelPushTest" class="btn secondary" type="button">Тест на всех устройствах</button><button id="fuelPushDisable" class="btn danger" type="button">Отключить здесь</button></div>
+    </div>
+</section>
 <section class="card fuel-diagnostics">
     <div class="card-head"><div><h2>Состояние сборщика</h2><p class="subline">Последний цикл и ближайший автоматический запуск</p></div><span class="pill">{% if not collector.enabled %}Выключен{% elif collector.running %}Проверка{% elif collector.last_error %}Есть ошибка{% else %}Работает{% endif %}</span></div>
     <dl class="fuel-diagnostic-grid"><div><dt>Последний запуск</dt><dd>{{ collector.last_poll_started_at|msk_datetime('%d.%m.%Y %H:%M:%S') if collector.last_poll_started_at else 'Ещё не запускался' }}</dd></div><div><dt>Успешных АЗС</dt><dd>{{ collector.last_success_count }}</dd></div><div><dt>Ошибок</dt><dd>{{ collector.last_failed_count }}</dd></div><div><dt>Следующий запуск</dt><dd>{{ collector.next_poll_at|msk_datetime('%d.%m.%Y %H:%M:%S') if collector.next_poll_at else 'Не запланирован' }}</dd></div></dl>
@@ -27,3 +52,37 @@
     <div class="list">{% for subscription in subscriptions %}{% set station = subscription.station %}<a class="list-row fuel-managed-row" href="/fuel/{{ station.id }}/settings"><div class="item-text"><b class="item-title">{{ station.brand or station.name or 'АЗС' }}</b><span class="subline item-meta">{{ station.address or 'Адрес не указан' }}</span></div><span class="pill">{{ 'Включена' if subscription.enabled else 'Выключена' }}</span></a>{% else %}<div class="empty small">Станций пока нет</div>{% endfor %}</div>
 </section>
 {% endblock %}
+{% block scripts %}{{ super() }}<script>
+(function () {
+    const card = document.querySelector('.fuel-push-device-card');
+    if (!card) return;
+    const status = document.getElementById('fuelPushStatus');
+    const enable = document.getElementById('fuelPushEnable');
+    const test = document.getElementById('fuelPushTest');
+    const disable = document.getElementById('fuelPushDisable');
+    const supported = window.homePush && window.homePush.supported();
+    const available = card.dataset.pushAvailable === '1';
+    function message(text) { status.textContent = text; }
+    if (!supported) { message('Этот браузер не поддерживает Web Push.'); enable.disabled = test.disabled = disable.disabled = true; return; }
+    if (!available) { message('Web Push не настроен на сервере. Сохранить личные настройки можно, но отправки не будет.'); enable.disabled = test.disabled = true; return; }
+    if (Notification.permission === 'denied') { message('Уведомления запрещены в настройках браузера.'); enable.disabled = true; }
+    else message(Notification.permission === 'granted' ? 'Браузер разрешает уведомления.' : 'Разрешение будет запрошено только после нажатия кнопки.');
+    enable.addEventListener('click', async () => {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') { message('Уведомления не разрешены браузером.'); return; }
+        const result = await window.homePush.registerPushSubscription();
+        message(result.ok ? 'Это устройство подключено.' : (result.error || 'Не удалось подключить устройство.'));
+    });
+    disable.addEventListener('click', async () => {
+        const result = await window.homePush.unregisterPushSubscription();
+        message(result.ok ? 'Уведомления на этом устройстве отключены.' : 'Не удалось отключить устройство.');
+    });
+    test.addEventListener('click', async () => {
+        test.disabled = true;
+        const response = await fetch('/api/fuel/push/test', {method: 'POST', cache: 'no-store'});
+        const data = await response.json().catch(() => ({}));
+        message(response.ok && data.ok ? `Тест отправлен на активные устройства: ${data.sent || 0}.` : (data.detail || (data.errors || [])[0] || 'Тест не отправлен.'));
+        window.setTimeout(() => { test.disabled = false; }, 30000);
+    });
+})();
+</script>{% endblock %}

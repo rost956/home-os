@@ -1463,6 +1463,8 @@ def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_us
     login("fuel-mobile-timeline")
     response = client.get(f"/fuel/{station.id}")
     assert response.status_code == 200
+    settings_response = client.get("/fuel/settings")
+    assert settings_response.status_code == 200
 
     browser_paths = [
         shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
@@ -1537,5 +1539,12 @@ def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_us
             page.locator(".fuel-timeline-card h2").click()
             assert page.locator(".fuel-timeline-segment.open").count() == 0
             assert not page.locator("[data-fuel-timeline-popover]").is_visible()
+
+            page.set_content(settings_response.text, wait_until="load")
+            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+            assert page.locator(".fuel-notification-settings").is_visible()
+            assert page.evaluate(
+                "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
+            )
         finally:
             browser.close()

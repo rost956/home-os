@@ -691,6 +691,10 @@ class PushSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    device_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     user: Mapped[User] = relationship(back_populates="push_subscriptions")
     reminder_deliveries: Mapped[list["PlannerReminderDelivery"]] = relationship(
@@ -798,6 +802,10 @@ class FuelStationSubscription(Base):
     track_95: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     track_98: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     track_100: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_95: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
+    notify_98: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
+    notify_100: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="0")
+    notifications_enabled_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
@@ -836,6 +844,90 @@ class FuelMonitorSettings(Base):
         onupdate=utc_now_naive,
         nullable=False,
     )
+
+
+class FuelNotificationSettings(Base):
+    """Private, per-user Fuel notification preferences."""
+
+    __tablename__ = "fuel_notification_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "notification_level IN ('confirmed_only', 'candidate_and_confirmed')",
+            name="ck_fuel_notification_level",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    notification_level: Mapped[str] = mapped_column(String(32), default="confirmed_only", nullable=False)
+    notify_probable_delivery: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quiet_hours_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    quiet_hours_start: Mapped[str] = mapped_column(String(5), default="23:00", nullable=False)
+    quiet_hours_end: Mapped[str] = mapped_column(String(5), default="07:00", nullable=False)
+    daily_digest_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    daily_digest_time: Mapped[str] = mapped_column(String(5), default="21:00", nullable=False)
+    notifications_enabled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
+    )
+
+
+class FuelNotification(Base):
+    """One logical Fuel notification; the unique key survives restarts/deploys."""
+
+    __tablename__ = "fuel_notifications"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'deferred', 'sent', 'skipped')", name="ck_fuel_notification_status"),
+        Index("ix_fuel_notification_due", "status", "available_after"),
+        Index("ix_fuel_notification_user_kind_date", "user_id", "notification_type", "local_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identity_key: Mapped[str] = mapped_column(String(180), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("fuel_stations.id", ondelete="CASCADE"), index=True)
+    fuel_type: Mapped[str | None] = mapped_column(String(12))
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("fuel_delivery_events.id", ondelete="CASCADE"), index=True)
+    notification_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    local_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(12), default="pending", nullable=False, index=True)
+    available_after: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    tag: Mapped[str] = mapped_column(String(180), nullable=False)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    internal_url: Mapped[str] = mapped_column(String(300), default="/fuel", nullable=False)
+    skip_reason: Mapped[str | None] = mapped_column(String(120))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+
+class FuelNotificationDelivery(Base):
+    """Independent per-device attempt for a logical Fuel notification."""
+
+    __tablename__ = "fuel_notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("notification_id", "push_subscription_id", name="uq_fuel_notification_device"),
+        CheckConstraint("status IN ('pending', 'retry', 'sent', 'failed')", name="ck_fuel_notification_delivery_status"),
+        Index("ix_fuel_notification_delivery_status", "status", "last_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    notification_id: Mapped[int] = mapped_column(
+        ForeignKey("fuel_notifications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    push_subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("push_subscriptions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(12), default="pending", nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
 
 
 class FuelStationFuel(Base):
