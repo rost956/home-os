@@ -24,6 +24,6 @@
 </section>
 <section class="card fuel-managed-stations">
     <div class="card-head"><div><h2>АЗС</h2><p class="subline">Отключение станции сохраняет всю её историю.</p></div><a class="btn secondary" href="/fuel/add">+ Добавить</a></div>
-    <div class="list">{% for station in stations %}<a class="list-row fuel-managed-row" href="/fuel/{{ station.id }}/settings"><div class="item-text"><b class="item-title">{{ station.brand or station.name or 'АЗС' }}</b><span class="subline item-meta">{{ station.address or 'Адрес не указан' }}</span></div><span class="pill">{{ 'Включена' if station.enabled else 'Выключена' }}</span></a>{% else %}<div class="empty small">Станций пока нет</div>{% endfor %}</div>
+    <div class="list">{% for subscription in subscriptions %}{% set station = subscription.station %}<a class="list-row fuel-managed-row" href="/fuel/{{ station.id }}/settings"><div class="item-text"><b class="item-title">{{ station.brand or station.name or 'АЗС' }}</b><span class="subline item-meta">{{ station.address or 'Адрес не указан' }}</span></div><span class="pill">{{ 'Включена' if subscription.enabled else 'Выключена' }}</span></a>{% else %}<div class="empty small">Станций пока нет</div>{% endfor %}</div>
 </section>
 {% endblock %}

@@ -51,8 +51,8 @@ from .models import (
     FuelObservation,
     FuelStation,
     FuelStationChatMessage,
-    FuelStationFuel,
     FuelStationMark,
+    FuelStationSubscription,
     IncomeItem,
     MenuItem,
     Moment,
@@ -130,6 +130,7 @@ from .services.fuel_settings import (
     get_fuel_runtime_settings,
     save_fuel_runtime_settings,
 )
+from .services.fuel_timeline import load_fuel_timeline
 from .services.planner import (
     calendar_occurrences,
     format_planner_date_range,
@@ -487,6 +488,9 @@ def schema_change_required() -> bool:
             "disappeared_at",
             "classifier_version",
         },
+        "fuel_station_subscriptions": {
+            "user_id", "station_id", "enabled", "track_95", "track_98", "track_100", "updated_at",
+        },
         "wishlist_items": {"priority", "status", "goal_amount", "saved_amount", "expense_item_id", "expense_prev_status", "expense_prev_is_done"},
         "ai_user_settings": {
             "user_id",
@@ -522,6 +526,131 @@ def schema_change_required() -> bool:
     return False
 
 
+def _legacy_fuel_subscription_values(connection, station_id: int) -> dict[str, Any] | None:
+    station = connection.exec_driver_sql(
+        "SELECT owner_id, enabled FROM fuel_stations WHERE id = ?", (station_id,)
+    ).fetchone()
+    if station is None or station[0] is None:
+        return None
+    fuels = dict(connection.exec_driver_sql(
+        "SELECT fuel_type, enabled FROM fuel_station_fuels WHERE station_id = ?", (station_id,)
+    ).fetchall())
+    return {
+        "user_id": int(station[0]),
+        "station_id": station_id,
+        "enabled": bool(station[1]),
+        "track_95": bool(fuels.get("95", True)),
+        "track_98": bool(fuels.get("98", True)),
+        "track_100": bool(fuels.get("100", True)),
+    }
+
+
+def _upsert_fuel_subscription(connection, values: dict[str, Any]) -> None:
+    connection.exec_driver_sql(
+        "INSERT INTO fuel_station_subscriptions "
+        "(user_id, station_id, enabled, track_95, track_98, track_100, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(user_id, station_id) DO UPDATE SET "
+        "enabled = MAX(enabled, excluded.enabled), "
+        "track_95 = MAX(track_95, excluded.track_95), "
+        "track_98 = MAX(track_98, excluded.track_98), "
+        "track_100 = MAX(track_100, excluded.track_100), "
+        "updated_at = CURRENT_TIMESTAMP",
+        (
+            values["user_id"], values["station_id"], values["enabled"],
+            values["track_95"], values["track_98"], values["track_100"],
+        ),
+    )
+
+
+def _insert_fuel_subscription_if_missing(connection, values: dict[str, Any]) -> None:
+    connection.exec_driver_sql(
+        "INSERT OR IGNORE INTO fuel_station_subscriptions "
+        "(user_id, station_id, enabled, track_95, track_98, track_100, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (
+            values["user_id"], values["station_id"], values["enabled"],
+            values["track_95"], values["track_98"], values["track_100"],
+        ),
+    )
+
+
+def _merge_physical_fuel_station(connection, canonical_id: int, duplicate_id: int) -> None:
+    legacy = _legacy_fuel_subscription_values(connection, duplicate_id)
+    if legacy:
+        legacy["station_id"] = canonical_id
+        _upsert_fuel_subscription(connection, legacy)
+    for row in connection.exec_driver_sql(
+        "SELECT user_id, enabled, track_95, track_98, track_100 "
+        "FROM fuel_station_subscriptions WHERE station_id = ?",
+        (duplicate_id,),
+    ).fetchall():
+        _upsert_fuel_subscription(connection, {
+            "user_id": row[0], "station_id": canonical_id, "enabled": row[1],
+            "track_95": row[2], "track_98": row[3], "track_100": row[4],
+        })
+    connection.exec_driver_sql(
+        "DELETE FROM fuel_station_subscriptions WHERE station_id = ?", (duplicate_id,)
+    )
+
+    for table, conflict_columns in (
+        ("fuel_station_comments", "provider, source_key, text, source_created_at, fetched_at, raw_data"),
+        (
+            "fuel_station_chat_messages",
+            "provider, provider_message_id, author_id, author_name, body, source_created_at, "
+            "reactions_json, reply_to_id, reply_to_name, reply_to_excerpt, author_reliable, "
+            "author_tier, on_site, ingested_at",
+        ),
+    ):
+        columns = conflict_columns
+        connection.exec_driver_sql(
+            f"INSERT OR IGNORE INTO {table} (station_id, {columns}) "
+            f"SELECT ?, {columns} FROM {table} WHERE station_id = ?",
+            (canonical_id, duplicate_id),
+        )
+        connection.exec_driver_sql(f"DELETE FROM {table} WHERE station_id = ?", (duplicate_id,))
+
+    connection.exec_driver_sql(
+        "UPDATE fuel_observations SET station_id = ? WHERE station_id = ?", (canonical_id, duplicate_id)
+    )
+    connection.exec_driver_sql(
+        "UPDATE fuel_delivery_events SET station_id = ? WHERE station_id = ?", (canonical_id, duplicate_id)
+    )
+    connection.exec_driver_sql(
+        "UPDATE fuel_forecasts SET station_id = ? WHERE station_id = ?", (canonical_id, duplicate_id)
+    )
+    connection.exec_driver_sql(
+        "INSERT OR IGNORE INTO fuel_station_fuels (station_id, fuel_type, enabled, created_at) "
+        "SELECT ?, fuel_type, enabled, created_at FROM fuel_station_fuels WHERE station_id = ?",
+        (canonical_id, duplicate_id),
+    )
+    connection.exec_driver_sql("DELETE FROM fuel_station_fuels WHERE station_id = ?", (duplicate_id,))
+    connection.exec_driver_sql("DELETE FROM fuel_stations WHERE id = ?", (duplicate_id,))
+
+
+def _migrate_fuel_station_subscriptions(connection) -> None:
+    """Preserve source history while splitting legacy owned stations into subscriptions."""
+    if not sa_inspect(connection).has_table("fuel_stations"):
+        return
+    duplicate_groups = connection.exec_driver_sql(
+        "SELECT provider, provider_station_id, MIN(id) AS canonical_id, GROUP_CONCAT(id) "
+        "FROM fuel_stations GROUP BY provider, provider_station_id HAVING COUNT(*) > 1"
+    ).fetchall()
+    for _provider, _provider_station_id, canonical_id, identifiers in duplicate_groups:
+        for duplicate_id in (int(value) for value in identifiers.split(",")):
+            if duplicate_id != canonical_id:
+                _merge_physical_fuel_station(connection, int(canonical_id), duplicate_id)
+
+    for (station_id,) in connection.exec_driver_sql("SELECT id FROM fuel_stations").fetchall():
+        values = _legacy_fuel_subscription_values(connection, int(station_id))
+        if values:
+            _insert_fuel_subscription_if_missing(connection, values)
+    connection.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_fuel_station_provider_physical "
+        "ON fuel_stations (provider, provider_station_id)"
+    )
+
+
 def ensure_runtime_schema() -> None:
     """Small SQLite migrations for existing local databases."""
     if not engine.url.drivername.startswith("sqlite"):
@@ -532,6 +661,7 @@ def ensure_runtime_schema() -> None:
         TemporaryFileTransfer.__table__.create(bind=connection, checkfirst=True)
         TemporarySharedFile.__table__.create(bind=connection, checkfirst=True)
         FuelStationChatMessage.__table__.create(bind=connection, checkfirst=True)
+        FuelStationSubscription.__table__.create(bind=connection, checkfirst=True)
 
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
@@ -612,7 +742,7 @@ def ensure_runtime_schema() -> None:
             row[1] for row in connection.exec_driver_sql("PRAGMA table_info(fuel_delivery_events)").fetchall()
         ]
         fuel_event_defaults = {
-            "event_type": "VARCHAR(32) NOT NULL DEFAULT 'availability_appearance'",
+            "event_type": "VARCHAR(32) NOT NULL DEFAULT 'candidate_appearance'",
             "appearance_confidence": "FLOAT",
             "delivery_confidence": "FLOAT",
             "availability_duration_minutes": "FLOAT",
@@ -627,9 +757,11 @@ def ensure_runtime_schema() -> None:
         if fuel_event_columns:
             connection.exec_driver_sql(
                 "UPDATE fuel_delivery_events "
-                "SET event_type = COALESCE(event_type, 'availability_appearance'), "
+                "SET event_type = COALESCE(event_type, 'candidate_appearance'), "
                 "appearance_confidence = COALESCE(appearance_confidence, confidence)"
             )
+
+        _migrate_fuel_station_subscriptions(connection)
 
         wishlist_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(wishlist_items)").fetchall()]
         wishlist_defaults = {
@@ -2547,17 +2679,52 @@ def require_owned_vehicle(db: Session, vehicle_id: int, user: User) -> Vehicle:
     return vehicle
 
 
+def get_user_fuel_subscription_or_404(
+    db: Session, station_id: int, user: User
+) -> FuelStationSubscription:
+    subscription = db.scalar(
+        select(FuelStationSubscription).options(selectinload(FuelStationSubscription.station)).where(
+            FuelStationSubscription.station_id == station_id,
+            FuelStationSubscription.user_id == user.id,
+        )
+    )
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    return subscription
+
+
+def _tracked_fuels(subscription: FuelStationSubscription) -> tuple[str, ...]:
+    return subscription.tracked_fuel_types
+
+
+def _user_fuel_station_ids(db: Session, user: User) -> set[int]:
+    return set(db.scalars(select(FuelStationSubscription.station_id).where(
+        FuelStationSubscription.user_id == user.id
+    )).all())
+
+
+def _private_forecast_reason(reason: dict[str, Any], visible_station_ids: set[int]) -> dict[str, Any]:
+    result = dict(reason or {})
+    signal = result.get("cross_station_signal")
+    if signal and signal.get("source_station_id") not in visible_station_ids:
+        result.pop("cross_station_signal", None)
+    return result
+
+
 def render_vehicle_form(request: Request, *, user: User, form: dict[str, str], vehicle: Vehicle | None = None, error: str | None = None):
     return render(request, "vehicle_form.html", {"user": user, "form": form, "vehicle": vehicle, "error": error})
 
 
 @app.get("/fuel")
 def fuel_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    stations = db.scalars(
-        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
-            FuelStation.owner_id == user.id, FuelStation.enabled.is_(True)
-        ).order_by(FuelStation.updated_at.desc())
+    subscriptions = db.scalars(
+        select(FuelStationSubscription).options(selectinload(FuelStationSubscription.station)).where(
+            FuelStationSubscription.user_id == user.id,
+            FuelStationSubscription.enabled.is_(True),
+        ).order_by(FuelStationSubscription.updated_at.desc())
     ).all()
+    stations = [item.station for item in subscriptions]
+    tracked_by_station = {item.station_id: set(_tracked_fuels(item)) for item in subscriptions}
     station_ids = [station.id for station in stations]
     latest: dict[tuple[int, str], FuelObservation] = {}
     forecasts: dict[tuple[int, str], FuelForecast] = {}
@@ -2602,13 +2769,21 @@ def fuel_page(request: Request, user: User = Depends(get_current_user), db: Sess
             )
         ).all()
         forecasts = {(item.station_id, item.fuel_type): item for item in current_forecasts}
-    upcoming = sorted((item for item in forecasts.values() if item and item.range_to >= utc_now_naive()), key=lambda item: item.expected_at)
+    upcoming = sorted(
+        (
+            item for item in forecasts.values()
+            if item and item.fuel_type in tracked_by_station.get(item.station_id, set())
+            and item.range_to >= utc_now_naive()
+        ),
+        key=lambda item: item.expected_at,
+    )
     persistent_success = max((item.last_successful_poll_at for item in stations if item.last_successful_poll_at), default=None)
     runtime = get_fuel_runtime_settings(db)
     return render(request, "fuel.html", {"user": user, "stations": stations,
         "station_by_id": {item.id: item for item in stations}, "latest": latest, "forecasts": forecasts,
         "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
-        "persistent_success": persistent_success})
+        "persistent_success": persistent_success, "subscriptions": subscriptions,
+        "tracked_by_station": tracked_by_station})
 
 
 def render_fuel_settings(
@@ -2620,15 +2795,15 @@ def render_fuel_settings(
     error: str | None = None,
 ):
     runtime = runtime or get_fuel_runtime_settings(db)
-    stations = db.scalars(
-        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
-            FuelStation.owner_id == user.id
-        ).order_by(FuelStation.enabled.desc(), FuelStation.updated_at.desc())
+    subscriptions = db.scalars(
+        select(FuelStationSubscription).options(selectinload(FuelStationSubscription.station)).where(
+            FuelStationSubscription.user_id == user.id
+        ).order_by(FuelStationSubscription.enabled.desc(), FuelStationSubscription.updated_at.desc())
     ).all()
     response = render(request, "fuel_settings.html", {
         "user": user,
         "runtime": runtime,
-        "stations": stations,
+        "subscriptions": subscriptions,
         "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
         "error": error,
         "poll_options": (60, 120, 300, 600, 900, 1800),
@@ -2714,14 +2889,10 @@ def fuel_station_settings_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    station = db.scalar(
-        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
-            FuelStation.id == station_id, FuelStation.owner_id == user.id
-        )
-    )
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
-    return render(request, "fuel_station_settings.html", {"user": user, "station": station})
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    return render(request, "fuel_station_settings.html", {
+        "user": user, "station": subscription.station, "subscription": subscription,
+    })
 
 
 @app.post("/fuel/{station_id}/settings")
@@ -2732,27 +2903,17 @@ def fuel_station_settings_update(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    station = db.scalar(
-        select(FuelStation).options(selectinload(FuelStation.fuels)).where(
-            FuelStation.id == station_id, FuelStation.owner_id == user.id
-        )
-    )
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
     chosen = set(fuel_types).intersection(FUEL_TYPES)
     if not chosen:
         raise HTTPException(status_code=400, detail="Выберите хотя бы один вид топлива")
-    station.enabled = enabled == "on"
-    by_type = {item.fuel_type: item for item in station.fuels}
-    for fuel_type in FUEL_TYPES:
-        item = by_type.get(fuel_type)
-        if item is None:
-            db.add(FuelStationFuel(station_id=station.id, fuel_type=fuel_type, enabled=fuel_type in chosen))
-        else:
-            item.enabled = fuel_type in chosen
+    subscription.enabled = enabled == "on"
+    subscription.track_95 = "95" in chosen
+    subscription.track_98 = "98" in chosen
+    subscription.track_100 = "100" in chosen
     db.commit()
     fuel_scheduler_wakeup.set()
-    destination = f"/fuel/{station.id}" if station.enabled else "/fuel/settings"
+    destination = f"/fuel/{station_id}" if subscription.enabled else "/fuel/settings"
     return redirect_notice(destination, "Настройки АЗС сохранены; история не изменена")
 
 
@@ -2797,20 +2958,42 @@ async def fuel_station_add(
     if not chosen:
         raise HTTPException(status_code=400, detail="Выберите хотя бы один вид топлива")
     station = db.scalar(select(FuelStation).where(
-        FuelStation.owner_id == user.id, FuelStation.provider == provider, FuelStation.provider_station_id == provider_station_id.strip()
+        FuelStation.provider == provider,
+        FuelStation.provider_station_id == provider_station_id.strip(),
     ))
     if station is None:
-        station = FuelStation(owner_id=user.id, provider=provider, provider_station_id=provider_station_id.strip(), latitude=latitude, longitude=longitude)
+        station = FuelStation(
+            owner_id=user.id,
+            provider=provider,
+            provider_station_id=provider_station_id.strip(),
+            brand=clean_optional_text(brand, 120),
+            name=clean_optional_text(name, 180),
+            address=clean_optional_text(address, 300),
+            latitude=latitude,
+            longitude=longitude,
+        )
         db.add(station)
-    station.brand, station.name, station.address, station.enabled = clean_optional_text(brand, 120), clean_optional_text(name, 180), clean_optional_text(address, 300), True
-    db.flush()
-    existing = {item.fuel_type: item for item in station.fuels}
-    for fuel in FUEL_TYPES:
-        item = existing.get(fuel)
-        if item is None:
-            db.add(FuelStationFuel(station_id=station.id, fuel_type=fuel, enabled=fuel in chosen))
-        else:
-            item.enabled = fuel in chosen
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            station = db.scalar(select(FuelStation).where(
+                FuelStation.provider == provider,
+                FuelStation.provider_station_id == provider_station_id.strip(),
+            ))
+            if station is None:
+                raise
+    subscription = db.scalar(select(FuelStationSubscription).where(
+        FuelStationSubscription.user_id == user.id,
+        FuelStationSubscription.station_id == station.id,
+    ))
+    if subscription is None:
+        subscription = FuelStationSubscription(user_id=user.id, station_id=station.id)
+        db.add(subscription)
+    subscription.enabled = True
+    subscription.track_95 = "95" in chosen
+    subscription.track_98 = "98" in chosen
+    subscription.track_100 = "100" in chosen
     db.commit()
     if settings.background_jobs_enabled:
         fuel_scheduler_wakeup.set()
@@ -2819,20 +3002,24 @@ async def fuel_station_add(
 
 @app.post("/fuel/stations/{station_id}/delete")
 def fuel_station_disable(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
-    station.enabled = False
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    subscription.enabled = False
     db.commit()
+    fuel_scheduler_wakeup.set()
     return redirect_notice("/fuel", "Мониторинг АЗС отключён; история сохранена")
 
 
 @app.get("/api/fuel/stations")
 def fuel_stations_api(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    stations = db.scalars(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.owner_id == user.id)).all()
-    return [{"id": item.id, "provider_station_id": item.provider_station_id, "brand": item.brand, "name": item.name,
-             "address": item.address, "latitude": item.latitude, "longitude": item.longitude, "enabled": item.enabled,
-             "fuel_types": [fuel.fuel_type for fuel in item.fuels if fuel.enabled]} for item in stations]
+    subscriptions = db.scalars(
+        select(FuelStationSubscription).options(selectinload(FuelStationSubscription.station)).where(
+            FuelStationSubscription.user_id == user.id
+        )
+    ).all()
+    return [{"id": item.station.id, "provider_station_id": item.station.provider_station_id,
+             "brand": item.station.brand, "name": item.station.name, "address": item.station.address,
+             "latitude": item.station.latitude, "longitude": item.station.longitude, "enabled": item.enabled,
+             "fuel_types": list(_tracked_fuels(item))} for item in subscriptions]
 
 
 @app.get("/api/fuel/status")
@@ -2846,13 +3033,17 @@ def fuel_collector_status(user: User = Depends(get_current_user), db: Session = 
 def fuel_observations_api(
     station_id: int, fuel_type: str | None = None, limit: int = 100, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    tracked = set(_tracked_fuels(subscription))
     if fuel_type is not None and fuel_type not in FUEL_TYPES:
         raise HTTPException(status_code=400, detail="Некорректный вид топлива")
+    if fuel_type is not None and fuel_type not in tracked:
+        raise HTTPException(status_code=404, detail="АЗС не найдена")
     limit = max(1, min(limit, 500))
-    query = select(FuelObservation).where(FuelObservation.station_id == station.id)
+    query = select(FuelObservation).where(
+        FuelObservation.station_id == station_id,
+        FuelObservation.fuel_type.in_(tracked),
+    )
     if fuel_type:
         query = query.where(FuelObservation.fuel_type == fuel_type)
     items = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(limit)).all()
@@ -2863,10 +3054,11 @@ def fuel_observations_api(
 
 @app.get("/api/fuel/stations/{station_id}/deliveries")
 def fuel_deliveries_api(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
-    items = db.scalars(select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id).order_by(
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    items = db.scalars(select(FuelDeliveryEvent).where(
+        FuelDeliveryEvent.station_id == station_id,
+        FuelDeliveryEvent.fuel_type.in_(_tracked_fuels(subscription)),
+    ).order_by(
         FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
     return [{"id": item.id, "fuel_type": item.fuel_type, "event_type": item.event_type,
              "appearance_confidence": item.appearance_confidence, "delivery_confidence": item.delivery_confidence,
@@ -2878,64 +3070,101 @@ def fuel_deliveries_api(station_id: int, user: User = Depends(get_current_user),
 
 @app.get("/api/fuel/stations/{station_id}/forecast")
 def fuel_forecast_api(station_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    station = db.scalar(select(FuelStation).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
-    if station is None:
-        raise HTTPException(status_code=404, detail="АЗС не найдена")
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    visible_station_ids = _user_fuel_station_ids(db, user)
     items = []
-    for fuel_type in FUEL_TYPES:
+    for fuel_type in _tracked_fuels(subscription):
         item = db.scalar(select(FuelForecast).where(
-            FuelForecast.station_id == station.id,
+            FuelForecast.station_id == station_id,
             FuelForecast.fuel_type == fuel_type,
             FuelForecast.model_version == FORECAST_VERSION,
         ).order_by(FuelForecast.generated_at.desc()).limit(1))
         if item:
             items.append({"fuel_type": fuel_type, "expected_at": item.expected_at, "range_from": item.range_from,
-                          "range_to": item.range_to, "confidence": item.confidence, "reason": item.reason_json})
+                          "range_to": item.range_to, "confidence": item.confidence,
+                          "reason": _private_forecast_reason(item.reason_json, visible_station_ids)})
     return items
 
 
 @app.get("/api/fuel/forecasts")
 def fuel_forecasts_api(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    station_ids = select(FuelStation.id).where(FuelStation.owner_id == user.id, FuelStation.enabled.is_(True))
+    subscriptions = db.scalars(select(FuelStationSubscription).where(
+        FuelStationSubscription.user_id == user.id,
+        FuelStationSubscription.enabled.is_(True),
+    )).all()
+    tracked_by_station = {item.station_id: set(_tracked_fuels(item)) for item in subscriptions}
+    visible_station_ids = set(tracked_by_station)
+    station_ids = list(tracked_by_station)
+    if not station_ids:
+        return []
     items = db.scalars(select(FuelForecast).where(
         FuelForecast.station_id.in_(station_ids), FuelForecast.model_version == FORECAST_VERSION
     ).order_by(
         FuelForecast.generated_at.desc()).limit(200)).all()
     latest = {}
     for item in items:
+        if item.fuel_type not in tracked_by_station[item.station_id]:
+            continue
         latest.setdefault((item.station_id, item.fuel_type), item)
     return [{"station_id": item.station_id, "fuel_type": item.fuel_type, "expected_at": item.expected_at,
              "range_from": item.range_from, "range_to": item.range_to, "confidence": item.confidence,
-             "reason": item.reason_json} for item in latest.values()]
+             "reason": _private_forecast_reason(item.reason_json, visible_station_ids)} for item in latest.values()]
+
+
+@app.get("/api/fuel/stations/{station_id}/timeline")
+def fuel_timeline_api(
+    station_id: int,
+    hours: int = 24,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    if not 1 <= hours <= 168:
+        raise HTTPException(status_code=400, detail="Период должен быть от 1 до 168 часов")
+    runtime = get_fuel_runtime_settings(db)
+    return load_fuel_timeline(
+        db, station_id, _tracked_fuels(subscription), hours=hours,
+        stale_after_minutes=runtime.stale_after_minutes,
+    )
 
 
 @app.get("/fuel/{station_id}")
 def fuel_station_history(request: Request, station_id: int, fuel_type: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    station = db.scalar(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.id == station_id, FuelStation.owner_id == user.id))
-    if station is None:
+    subscription = get_user_fuel_subscription_or_404(db, station_id, user)
+    station = subscription.station
+    tracked_fuels = _tracked_fuels(subscription)
+    if fuel_type is not None and fuel_type not in FUEL_TYPES:
+        raise HTTPException(status_code=400, detail="Некорректный вид топлива")
+    if fuel_type is not None and fuel_type not in tracked_fuels:
         raise HTTPException(status_code=404, detail="АЗС не найдена")
-    query = select(FuelObservation).where(FuelObservation.station_id == station.id)
-    if fuel_type in FUEL_TYPES:
+    query = select(FuelObservation).where(
+        FuelObservation.station_id == station.id,
+        FuelObservation.fuel_type.in_(tracked_fuels),
+    )
+    if fuel_type:
         query = query.where(FuelObservation.fuel_type == fuel_type)
     observations = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(200)).all()
     latest = {fuel: db.scalar(select(FuelObservation).where(FuelObservation.station_id == station.id,
-        FuelObservation.fuel_type == fuel).order_by(FuelObservation.observed_at.desc()).limit(1)) for fuel in FUEL_TYPES}
-    delivery_query = select(FuelDeliveryEvent).where(FuelDeliveryEvent.station_id == station.id)
-    if fuel_type in FUEL_TYPES:
+        FuelObservation.fuel_type == fuel).order_by(FuelObservation.observed_at.desc()).limit(1)) for fuel in tracked_fuels}
+    delivery_query = select(FuelDeliveryEvent).where(
+        FuelDeliveryEvent.station_id == station.id,
+        FuelDeliveryEvent.fuel_type.in_(tracked_fuels),
+    )
+    if fuel_type:
         delivery_query = delivery_query.where(FuelDeliveryEvent.fuel_type == fuel_type)
     deliveries = db.scalars(delivery_query.order_by(FuelDeliveryEvent.estimated_at.desc()).limit(100)).all()
     latest_appearances = {fuel: db.scalar(select(FuelDeliveryEvent).where(
         FuelDeliveryEvent.station_id == station.id, FuelDeliveryEvent.fuel_type == fuel
-    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in tracked_fuels}
     latest_deliveries = {fuel: db.scalar(select(FuelDeliveryEvent).where(
         FuelDeliveryEvent.station_id == station.id,
         FuelDeliveryEvent.fuel_type == fuel,
         FuelDeliveryEvent.event_type.in_(DELIVERY_EVENT_TYPES),
         FuelDeliveryEvent.delivery_confidence >= MIN_DELIVERY_CONFIDENCE,
-    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    ).order_by(FuelDeliveryEvent.estimated_at.desc()).limit(1)) for fuel in tracked_fuels}
     forecasts = {fuel: db.scalar(select(FuelForecast).where(FuelForecast.station_id == station.id,
         FuelForecast.fuel_type == fuel, FuelForecast.model_version == FORECAST_VERSION
-    ).order_by(FuelForecast.generated_at.desc()).limit(1)) for fuel in FUEL_TYPES}
+    ).order_by(FuelForecast.generated_at.desc()).limit(1)) for fuel in tracked_fuels}
     event_counts = {
         fuel: {
             "appearances": sum(item.fuel_type == fuel for item in deliveries),
@@ -2946,23 +3175,40 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
                 for item in deliveries
             ),
         }
-        for fuel in FUEL_TYPES
+        for fuel in tracked_fuels
     }
-    correlations = {fuel: station_correlations(db, station, fuel) for fuel in FUEL_TYPES}
-    station_names = {item.id: (item.address or item.brand or item.name or "АЗС") for item in db.scalars(
-        select(FuelStation).where(FuelStation.owner_id == user.id)).all()}
+    visible_station_ids = _user_fuel_station_ids(db, user)
+    correlations = {
+        fuel: [
+            relation for relation in station_correlations(db, station, fuel)
+            if relation.source_station_id in visible_station_ids
+        ]
+        for fuel in tracked_fuels
+    }
+    user_stations = db.scalars(
+        select(FuelStation).join(FuelStationSubscription).where(
+            FuelStationSubscription.user_id == user.id
+        )
+    ).all()
+    station_names = {item.id: (item.address or item.brand or item.name or "АЗС") for item in user_stations}
     marks = db.scalars(select(FuelStationMark).where(FuelStationMark.station_id == station.id).order_by(
         FuelStationMark.source_created_at.desc(), FuelStationMark.id.desc()
     ).limit(30)).all()
     chat_messages = db.scalars(select(FuelStationChatMessage).where(
         FuelStationChatMessage.station_id == station.id
     ).order_by(FuelStationChatMessage.source_created_at.desc(), FuelStationChatMessage.id.desc()).limit(12)).all()
+    runtime = get_fuel_runtime_settings(db)
+    timeline = load_fuel_timeline(
+        db, station.id, tracked_fuels, stale_after_minutes=runtime.stale_after_minutes
+    )
+    timeline_ticks = [timeline["from"] + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 24)]
     return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
         "marks": marks, "chat_messages": chat_messages, "fuel_type": fuel_type, "latest": latest,
         "deliveries": deliveries,
         "latest_appearances": latest_appearances, "latest_deliveries": latest_deliveries,
         "event_counts": event_counts, "forecasts": forecasts, "correlations": correlations,
-        "station_names": station_names})
+        "station_names": station_names, "subscription": subscription,
+        "tracked_fuels": tracked_fuels, "timeline": timeline, "timeline_ticks": timeline_ticks})
 
 
 @app.get("/vehicles")

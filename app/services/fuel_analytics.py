@@ -17,16 +17,19 @@ from ..models import (
     FuelStation,
     FuelStationChatMessage,
     FuelStationMark,
+    FuelStationSubscription,
 )
 from ..timezone import UTC, now_utc, to_msk
 
-DETECTOR_VERSION = "appearance-rules-v2"
-CLASSIFIER_VERSION = "delivery-rules-v1"
+DETECTOR_VERSION = "appearance-rules-v3"
+CLASSIFIER_VERSION = "delivery-rules-v2"
 FORECAST_VERSION = "median-v2"
 MAX_TRANSITION_GAP = timedelta(minutes=90)
 MAX_CORRELATION_LAG = timedelta(hours=6)
 MERGE_APPEARANCE_WINDOW = timedelta(minutes=60)
 MULTI_FUEL_WINDOW = timedelta(minutes=15)
+EVIDENCE_WINDOW = timedelta(minutes=30)
+CONFIRMED_AVAILABILITY_THRESHOLD = 0.7
 MIN_FORECAST_EVENTS = 3
 MIN_CORRELATION_MATCHES = 3
 MIN_DELIVERY_CONFIDENCE = 0.6
@@ -37,6 +40,7 @@ DIRECT_DELIVERY_PATTERNS = (
     r"\bслил(?:и|ся)?\b",
     r"\bпривез(?:ли|ла)?\b",
     r"\bзавезли\b",
+    r"\bпоставк\w*\b",
     r"\bзаправк\w*\s+начал\w*\b",
     r"\bначал\w*\s+(?:заправк\w*|отпуска\w*)\b",
 )
@@ -86,7 +90,6 @@ def chat_delivery_signal(
     weight = 0.34 if mentioned_fuels else 0.22
     weight += 0.06 if message.on_site else 0
     weight += 0.06 if message.author_reliable else 0
-    weight += min(message.author_tier or 0, 3) * 0.015
     return weight
 
 
@@ -104,7 +107,7 @@ def _nearby_chat_evidence(
     positive_authors: set[str] = set()
     for message in messages:
         point = message.source_created_at
-        if abs(point - transition_at) > timedelta(hours=2):
+        if abs(point - transition_at) > EVIDENCE_WINDOW:
             continue
         signal = chat_delivery_signal(message, fuel_type, allow_station_level=allow_station_level)
         if signal:
@@ -112,8 +115,9 @@ def _nearby_chat_evidence(
             keys.append(message.provider_message_id)
             if signal > 0:
                 direct_times.append(point)
-                positive_authors.add(message.author_id or f"message:{message.provider_message_id}")
-            if signal > 0 and (message.on_site or message.author_reliable):
+                if message.author_id:
+                    positive_authors.add(message.author_id)
+            if signal > 0 and message.on_site and message.author_reliable:
                 trusted_confirmation = True
     if len(positive_authors) > 1:
         score += min(0.1, (len(positive_authors) - 1) * 0.05)
@@ -123,19 +127,19 @@ def _nearby_chat_evidence(
 def mark_evidence_weight(mark: FuelStationMark, fuel_type: str, transition_at: datetime) -> float:
     point = mark.source_created_at or mark.fetched_at
     age_minutes = abs((point - transition_at).total_seconds()) / 60
-    if age_minutes > 60:
+    if age_minutes > EVIDENCE_WINDOW.total_seconds() / 60:
         return 0.0
-    freshness = max(0.1, 1 - age_minutes / 70)
+    freshness = max(0.1, 1 - age_minutes / 35)
     raw = mark.raw_data or {}
     trust = 1.0
-    trust += 0.35 if raw.get("on_site") else 0
-    trust += 0.35 if raw.get("author_reliable") else 0
-    trust += min(int(raw.get("author_tier") or 0), 3) * 0.08
-    trust += 0.1 if raw.get("acct_ok") else -0.05
+    trust += 0.65 if raw.get("on_site") else 0
+    trust += 0.65 if raw.get("author_reliable") else 0
     text = (mark.text or "").lower().replace("аи-", "")
     fuels = _mentioned_fuels(text)
     status = str(raw.get("status") or "").lower()
-    base = 0.035 * freshness * trust
+    # ``author_tier`` and ``acct_ok`` are retained but deliberately not scored:
+    # GdeBenz does not document their semantics. A mark is evidence, not fact.
+    base = 0.12 * freshness * trust
     if fuel_type in fuels and status not in {"no", "unavailable"}:
         return base
     if status in {"no", "unavailable"} or (fuels and fuel_type not in fuels):
@@ -145,21 +149,25 @@ def mark_evidence_weight(mark: FuelStationMark, fuel_type: str, transition_at: d
 
 def _nearby_mark_evidence(
     marks: list[FuelStationMark], fuel_type: str, transition_at: datetime
-) -> tuple[float, list[str], int, int, bool]:
+) -> tuple[float, list[str], int, int, bool, bool]:
     score = 0.0
     keys: list[str] = []
     supports = 0
     conflicts = 0
     stale_feed = False
+    trusted_on_site = False
     for mark in marks:
         raw = mark.raw_data or {}
-        stale_feed = stale_feed or bool(raw.get("_feed_stale"))
         signal = mark_evidence_weight(mark, fuel_type, transition_at)
         if signal:
+            stale_feed = stale_feed or bool(raw.get("_feed_stale"))
             score += signal
             keys.append(mark.source_key)
             if signal > 0:
                 supports += 1
+                trusted_on_site = trusted_on_site or bool(
+                    raw.get("on_site") and raw.get("author_reliable")
+                )
             else:
                 conflicts += 1
     if supports > 1:
@@ -168,24 +176,28 @@ def _nearby_mark_evidence(
         score -= 0.05
     if stale_feed:
         score -= 0.05
-    return max(-0.2, min(0.18, score)), keys, supports, conflicts, stale_feed
+    return max(-0.5, min(0.5, score)), keys, supports, conflicts, stale_feed, trusted_on_site
 
 
 def _availability_run(
     ordered: list[FuelObservation], start_index: int
-) -> tuple[float, datetime | None, int, int]:
+) -> tuple[float, datetime | None, int, int, int]:
     after = ordered[start_index]
     last_positive_at = after.observed_at
     disappeared_at = None
     positive_count = 0
+    source_snapshots: set[datetime] = set()
     toggles = 0
     previous_group = "positive"
     episode_end = after.observed_at + MERGE_APPEARANCE_WINDOW
     for item in ordered[start_index:]:
         if item.state in {"available", "low"}:
-            positive_count += 1
-            last_positive_at = item.observed_at
             current_group = "positive"
+            if disappeared_at is None:
+                positive_count += 1
+                last_positive_at = item.observed_at
+                if item.source_updated_at is not None:
+                    source_snapshots.add(item.source_updated_at)
         elif item.state == "unavailable":
             current_group = "unavailable"
             if disappeared_at is None:
@@ -195,11 +207,88 @@ def _availability_run(
         if item.observed_at <= episode_end and current_group != previous_group:
             toggles += 1
         previous_group = current_group
-        if disappeared_at is not None and item.observed_at > episode_end:
-            break
     duration_end = disappeared_at or last_positive_at
     duration = max(0.0, (duration_end - after.observed_at).total_seconds() / 60)
-    return duration, disappeared_at, positive_count, toggles
+    return duration, disappeared_at, positive_count, toggles, len(source_snapshots)
+
+
+def calculate_appearance_confidence(
+    candidate: dict[str, Any],
+    *,
+    mark_score: float,
+    mark_supports: int,
+    mark_conflicts: int,
+    marks_feed_stale: bool,
+    trusted_on_site_mark: bool,
+    trusted_delivery_chat: bool,
+) -> tuple[float, list[str], list[str]]:
+    """Score independent source evidence; repeated HomeOS polls add no evidence."""
+    evidence = candidate["evidence_json"]
+    duration = float(candidate["availability_duration_minutes"] or 0)
+    source_snapshots = int(evidence["distinct_positive_source_snapshots"])
+    score = 0.18
+    reasons = ["GdeBenz сообщил о наличии топлива"]
+    caveats: list[str] = []
+
+    if evidence["source_timestamp_changed"]:
+        score += 0.08
+        reasons.append("Источник обновился при появлении топлива")
+    score += min(max(float(evidence["source_confidence"]), 0), 1) * 0.08
+    score += min(int(evidence["confirmations"]), 10) * 0.006
+    score += mark_score
+    if mark_supports:
+        reasons.append(f"Свежих подтверждающих отметок: {mark_supports}")
+    else:
+        caveats.append("Нет свежих подтверждающих отметок")
+    if mark_conflicts:
+        caveats.append(f"Противоречащих отметок: {mark_conflicts}")
+    if trusted_on_site_mark:
+        score += 0.12
+        reasons.append("Есть надёжная отметка «На месте»")
+    else:
+        caveats.append("Нет надёжной отметки «На месте»")
+    if trusted_delivery_chat:
+        score += 0.45
+        reasons.append("Есть надёжное сообщение с АЗС")
+
+    if source_snapshots > 1:
+        score += min(0.2, (source_snapshots - 1) * 0.1)
+        reasons.append(f"Наличие подтверждают {source_snapshots} обновления источника")
+    elif candidate["evidence_json"]["following_available_count"] > 1:
+        caveats.append("Повторные опросы прочитали тот же snapshot источника")
+
+    if duration >= 45 and source_snapshots > 1:
+        score += 0.22
+        reasons.append(f"Наличие сохранялось {round(duration)} мин")
+    elif duration >= 20 and source_snapshots > 1:
+        score += 0.14
+        reasons.append(f"Наличие наблюдалось {round(duration)} мин")
+    elif duration >= 10 and source_snapshots > 1:
+        score += 0.06
+        reasons.append(f"Наличие наблюдалось {round(duration)} мин")
+    elif duration < 5:
+        caveats.append(f"Наличие наблюдается только {round(duration)} мин")
+
+    toggles = int(evidence["instability_toggle_count"])
+    if toggles:
+        score -= min(0.24, toggles * 0.08)
+        caveats.append("Статус наличия был нестабилен")
+    if marks_feed_stale:
+        score -= 0.08
+        caveats.append("Лента отметок могла быть устаревшей")
+    if mark_conflicts > mark_supports:
+        score = min(score, 0.44)
+    if candidate["disappeared_at"] is not None and duration < 5:
+        score = min(score, 0.35)
+    elif candidate["disappeared_at"] is not None and duration < 15:
+        score = min(score, 0.48)
+    return round(max(0.02, min(0.99, score)), 3), reasons, caveats
+
+
+def classify_availability(appearance_confidence: float) -> str:
+    if appearance_confidence >= CONFIRMED_AVAILABILITY_THRESHOLD:
+        return "confirmed_availability"
+    return "candidate_appearance"
 
 
 def _classify_delivery(
@@ -211,7 +300,6 @@ def _classify_delivery(
     evidence = candidate["evidence_json"]
     duration = candidate["availability_duration_minutes"] or 0.0
     disappeared_at = candidate["disappeared_at"]
-    appearance_confidence = candidate["appearance_confidence"]
     confirmations = int(evidence["confirmations"])
     source_quality = float(evidence["source_confidence"])
     toggles = int(evidence["instability_toggle_count"])
@@ -222,15 +310,28 @@ def _classify_delivery(
         candidate["window_end"],
         allow_station_level=allow_station_level,
     )
-    mark_score, mark_keys, mark_supports, mark_conflicts, marks_feed_stale = _nearby_mark_evidence(
+    mark_score, mark_keys, mark_supports, mark_conflicts, marks_feed_stale, trusted_on_site_mark = _nearby_mark_evidence(
         marks, candidate["fuel_type"], candidate["window_end"]
     )
 
-    score = 0.10 + appearance_confidence * 0.15
-    positive_reasons = ["Топливо появилось после двух отметок об отсутствии"]
+    appearance_confidence, appearance_reasons, appearance_caveats = calculate_appearance_confidence(
+        candidate,
+        mark_score=mark_score,
+        mark_supports=mark_supports,
+        mark_conflicts=mark_conflicts,
+        marks_feed_stale=marks_feed_stale,
+        trusted_on_site_mark=trusted_on_site_mark,
+        trusted_delivery_chat=trusted_chat,
+    )
+    availability_type = classify_availability(appearance_confidence)
+    candidate["appearance_confidence"] = appearance_confidence
+    candidate["confidence"] = appearance_confidence
+
+    score = 0.05 + appearance_confidence * 0.1
+    positive_reasons: list[str] = []
     caveats: list[str] = []
     if duration >= 45:
-        score += 0.33
+        score += 0.25
         positive_reasons.append(f"Доступность сохранялась {round(duration)} мин")
     elif duration >= 20:
         score += 0.16
@@ -258,29 +359,32 @@ def _classify_delivery(
         caveats.append("В чате говорят только об ожидании поставки")
     else:
         caveats.append("В чате нет прямого подтверждения поставки")
-    score += mark_score
     if mark_supports:
-        positive_reasons.append(f"Свежих подтверждающих отметок: {mark_supports}")
+        positive_reasons.append(f"Наличие поддерживают свежие отметки: {mark_supports}")
     if mark_conflicts:
         caveats.append(f"Отметок, расходящихся с появлением: {mark_conflicts}")
     if marks_feed_stale:
         caveats.append("Лента отметок могла быть устаревшей")
-    score += min(confirmations, 20) * 0.003
+    score += min(confirmations, 20) * 0.002
     score += min(max(source_quality, 0.0), 1.0) * 0.04
     if toggles >= 2:
         score -= min(0.3, toggles * 0.08)
         caveats.append("После появления статус был нестабилен")
     score = round(max(0.0, min(0.99, score)), 3)
     direct_chat = bool(direct_times)
-    if direct_chat and ((trusted_chat and score >= 0.65) or score >= 0.72):
+    if availability_type == "candidate_appearance":
+        score = min(score, appearance_confidence, 0.49)
+        event_type = availability_type
+        reason = "Возможное появление топлива; ожидаем подтверждения"
+    elif direct_chat and ((trusted_chat and score >= 0.55) or score >= 0.72):
         event_type = "confirmed_delivery"
         reason = "Поставка подтверждена прямым сообщением в чате"
     elif score >= MIN_DELIVERY_CONFIDENCE:
         event_type = "probable_delivery"
         reason = "По совокупности признаков это вероятная поставка"
     else:
-        event_type = "availability_appearance"
-        reason = "Зафиксировано появление топлива; поставка не подтверждена"
+        event_type = availability_type
+        reason = "Наличие топлива подтверждено; поставка не подтверждена"
     candidate["event_type"] = event_type
     candidate["delivery_confidence"] = score
     candidate["detection_reason"] = reason
@@ -302,6 +406,11 @@ def _classify_delivery(
     evidence["mark_support_count"] = mark_supports
     evidence["mark_conflict_count"] = mark_conflicts
     evidence["marks_feed_stale"] = marks_feed_stale
+    evidence["trusted_on_site_mark"] = trusted_on_site_mark
+    evidence["availability_state"] = availability_type
+    evidence["appearance_score"] = appearance_confidence
+    evidence["appearance_evidence"] = appearance_reasons
+    evidence["appearance_caveats"] = appearance_caveats
     evidence["delivery_score"] = score
     evidence["delivery_evidence"] = positive_reasons
     evidence["delivery_caveats"] = caveats
@@ -322,13 +431,13 @@ def detect_delivery_events(
     for items in grouped.values():
         ordered = sorted(items, key=lambda item: (item.observed_at, item.id or 0))
         last_appearance_at: datetime | None = None
-        for index in range(2, len(ordered) - 1):
-            before2, before, after, confirm = ordered[index - 2 : index + 2]
-            if before.state != "unavailable" or before2.state != "unavailable":
+        for index in range(1, len(ordered)):
+            before, after = ordered[index - 1 : index + 1]
+            if before.state != "unavailable":
                 continue
-            if after.state not in {"available", "low"} or confirm.state not in {"available", "low"}:
+            if after.state not in {"available", "low"}:
                 continue
-            if any(item.is_stale for item in (before2, before, after, confirm)):
+            if before.is_stale or after.is_stale:
                 continue
             gap = after.observed_at - before.observed_at
             if gap <= timedelta(0) or gap > MAX_TRANSITION_GAP:
@@ -337,38 +446,50 @@ def detect_delivery_events(
             if last_appearance_at and estimated_at - last_appearance_at <= MERGE_APPEARANCE_WINDOW:
                 continue
             last_appearance_at = estimated_at
-            quality_values = [value for value in (after.confidence, confirm.confidence) if value is not None]
+            run: list[FuelObservation] = []
+            for item in ordered[index:]:
+                if item.state in {"available", "low"}:
+                    run.append(item)
+                elif item.state == "unavailable":
+                    break
+            quality_values = [
+                item.confidence
+                for item in run
+                if item.state in {"available", "low"} and item.confidence is not None
+            ]
             source_quality = statistics.mean(quality_values) if quality_values else 0.5
-            confirmations = max(after.confirmations or 0, confirm.confirmations or 0)
+            confirmations = max(
+                (item.confirmations or 0 for item in run if item.state in {"available", "low"}),
+                default=0,
+            )
             source_timestamp_changed = bool(
                 before.source_updated_at
                 and after.source_updated_at
                 and before.source_updated_at < after.source_updated_at <= after.observed_at
             )
-            appearance_confidence = 0.85 + min(source_quality, 1) * 0.1 + min(confirmations, 10) / 200
-            if source_timestamp_changed:
-                appearance_confidence += 0.04
-            appearance_confidence -= min(gap.total_seconds() / MAX_TRANSITION_GAP.total_seconds(), 1) * 0.1
-            appearance_confidence = round(max(0.0, min(0.99, appearance_confidence)), 3)
-            duration, disappeared_at, positive_count, toggles = _availability_run(ordered, index)
+            duration, disappeared_at, positive_count, toggles, source_snapshots = _availability_run(ordered, index)
             results.append({
                 "station_id": after.station_id,
                 "fuel_type": after.fuel_type,
                 "window_start": before.observed_at,
                 "window_end": after.observed_at,
                 "estimated_at": estimated_at,
-                "event_type": "availability_appearance",
-                "confidence": appearance_confidence,
-                "appearance_confidence": appearance_confidence,
+                "event_type": "candidate_appearance",
+                "confidence": 0.0,
+                "appearance_confidence": 0.0,
                 "delivery_confidence": 0.0,
                 "availability_duration_minutes": round(duration, 1),
                 "disappeared_at": disappeared_at,
                 "before_observation_id": before.id,
                 "after_observation_id": after.id,
-                "detection_reason": "Зафиксировано появление топлива",
+                "detection_reason": "Возможное появление топлива; ожидаем подтверждения",
                 "classifier_version": CLASSIFIER_VERSION,
                 "evidence_json": {
-                    "previous_unavailable_count": 2,
+                    "previous_unavailable_count": sum(
+                        1
+                        for item in reversed(ordered[:index])
+                        if item.state == "unavailable"
+                    ),
                     "following_available_count": positive_count,
                     "gap_minutes": round(gap.total_seconds() / 60, 1),
                     "source_confidence": round(source_quality, 3),
@@ -376,6 +497,7 @@ def detect_delivery_events(
                     "source_timestamp_changed": source_timestamp_changed,
                     "source_before_at": before.source_updated_at.isoformat() if before.source_updated_at else None,
                     "source_after_at": after.source_updated_at.isoformat() if after.source_updated_at else None,
+                    "distinct_positive_source_snapshots": source_snapshots,
                     "instability_toggle_count": toggles,
                 },
             })
@@ -467,10 +589,13 @@ def correlate_event_series(
 
 
 def station_correlations(db: Session, target: FuelStation, fuel_type: str) -> list[Correlation]:
-    peers = db.scalars(select(FuelStation).where(
-        FuelStation.owner_id == target.owner_id, FuelStation.brand == target.brand,
-        FuelStation.id != target.id, FuelStation.enabled.is_(True)
-    )).all()
+    peers = db.scalars(
+        select(FuelStation).join(FuelStationSubscription).where(
+            FuelStation.brand == target.brand,
+            FuelStation.id != target.id,
+            FuelStationSubscription.enabled.is_(True),
+        ).distinct()
+    ).all()
     target_events = list(db.scalars(select(FuelDeliveryEvent.estimated_at).where(
         FuelDeliveryEvent.station_id == target.id,
         FuelDeliveryEvent.fuel_type == fuel_type,
@@ -578,18 +703,24 @@ def build_forecast(db: Session, station: FuelStation, fuel_type: str, generated_
 
 
 def refresh_forecasts(db: Session, station_id: int | None = None) -> int:
-    query = select(FuelStation).where(FuelStation.enabled.is_(True))
+    query = select(FuelStation).join(FuelStationSubscription).where(
+        FuelStationSubscription.enabled.is_(True)
+    ).distinct()
     if station_id is not None:
         query = query.where(FuelStation.id == station_id)
     created = 0
     for station in db.scalars(query).all():
         for fuel_type in ("95", "98", "100"):
+            db.execute(delete(FuelForecast).where(
+                FuelForecast.station_id == station.id,
+                FuelForecast.fuel_type == fuel_type,
+                FuelForecast.model_version != FORECAST_VERSION,
+            ))
             values = build_forecast(db, station, fuel_type)
             if values is None:
                 db.execute(delete(FuelForecast).where(
                     FuelForecast.station_id == station.id,
                     FuelForecast.fuel_type == fuel_type,
-                    FuelForecast.model_version == FORECAST_VERSION,
                 ))
                 continue
             latest = db.scalar(select(FuelForecast).where(
@@ -638,12 +769,13 @@ def process_fuel_history(db: Session, station_id: int | None = None) -> tuple[in
     if events and station_id is not None:
         source = db.get(FuelStation, station_id)
         if source and source.brand:
-            peer_ids = db.scalars(select(FuelStation.id).where(
-                FuelStation.owner_id == source.owner_id,
-                FuelStation.brand == source.brand,
-                FuelStation.id != source.id,
-                FuelStation.enabled.is_(True),
-            )).all()
+            peer_ids = db.scalars(
+                select(FuelStation.id).join(FuelStationSubscription).where(
+                    FuelStation.brand == source.brand,
+                    FuelStation.id != source.id,
+                    FuelStationSubscription.enabled.is_(True),
+                ).distinct()
+            ).all()
             for peer_id in peer_ids:
                 forecasts += refresh_forecasts(db, peer_id)
     db.commit()

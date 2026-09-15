@@ -18,7 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, selectinload
 
-from ..models import FuelObservation, FuelStation, FuelStationChatMessage, FuelStationMark
+from ..models import (
+    FuelObservation,
+    FuelStation,
+    FuelStationChatMessage,
+    FuelStationMark,
+    FuelStationSubscription,
+)
 from ..timezone import now_utc
 
 logger = logging.getLogger(__name__)
@@ -514,10 +520,24 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
     chat_totals = {"received": 0, "new": 0, "latest": None}
     try:
         with session_factory() as db:
-            stations = db.scalars(select(FuelStation).options(selectinload(FuelStation.fuels)).where(FuelStation.enabled.is_(True))).all()
+            stations = db.scalars(
+                select(FuelStation)
+                .join(FuelStationSubscription)
+                .options(selectinload(FuelStation.subscriptions))
+                .where(FuelStationSubscription.enabled.is_(True))
+                .distinct()
+            ).all()
         summary["stations"] = len(stations)
         for saved in stations:
             try:
+                required_fuels = {
+                    fuel_type
+                    for subscription in saved.subscriptions
+                    if subscription.enabled
+                    for fuel_type in subscription.tracked_fuel_types
+                }
+                if not required_fuels:
+                    continue
                 candidates = await provider.get_stations_near(saved.latitude, saved.longitude, nearby_radius_km)
                 candidate = next((item for item in candidates if item.provider_station_id == saved.provider_station_id), None)
                 if candidate is None:
@@ -533,15 +553,14 @@ async def run_fuel_poll_cycle(*, session_factory: Any, provider: FuelDataProvide
                 states = normalize_fuel_states(raw, stale_after_minutes=stale_after_minutes)
                 with session_factory() as db:
                     station = db.get(FuelStation, saved.id)
-                    if station is None or not station.enabled:
+                    if station is None:
                         continue
-                    for fuel in station.fuels:
-                        if fuel.enabled:
-                            db.add(FuelObservation(station_id=station.id, fuel_type=fuel.fuel_type, state=states[fuel.fuel_type],
-                                observed_at=observed_at, source_updated_at=source_updated_at, source_status=str(raw.get("status") or "") or None,
-                                confirmations=int(raw["confirmations"]) if str(raw.get("confirmations", "")).isdigit() else None,
-                                confidence=_source_confidence(raw), is_stale=source_is_stale(source_updated_at, stale_after_minutes, observed_at), raw_data=raw))
-                            summary["observations"] += 1
+                    for fuel_type in sorted(required_fuels):
+                        db.add(FuelObservation(station_id=station.id, fuel_type=fuel_type, state=states[fuel_type],
+                            observed_at=observed_at, source_updated_at=source_updated_at, source_status=str(raw.get("status") or "") or None,
+                            confirmations=int(raw["confirmations"]) if str(raw.get("confirmations", "")).isdigit() else None,
+                            confidence=_source_confidence(raw), is_stale=source_is_stale(source_updated_at, stale_after_minutes, observed_at), raw_data=raw))
+                        summary["observations"] += 1
                     station.last_successful_poll_at = observed_at
                     if marks_chat_due:
                         try:

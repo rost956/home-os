@@ -5,12 +5,12 @@
 <a class="fuel-back-link" href="/fuel">← Бензин</a>
 <div class="page-head compact-head fuel-detail-head">
     <div><h1>{{ station.brand or station.name or 'АЗС' }}</h1><div class="subline">{{ station.address or 'Адрес не указан' }}</div></div>
-    <div class="actions"><a class="btn secondary" href="/fuel/{{ station.id }}/settings">Изменить</a>{% if station.enabled %}<form method="post" action="/fuel/stations/{{ station.id }}/delete"><button class="btn secondary" type="submit">Отключить</button></form>{% endif %}</div>
+    <div class="actions"><a class="btn secondary" href="/fuel/{{ station.id }}/settings">Изменить</a>{% if subscription.enabled %}<form method="post" action="/fuel/stations/{{ station.id }}/delete"><button class="btn secondary" type="submit">Отключить</button></form>{% endif %}</div>
 </div>
-{% if not station.enabled %}<div class="alert">Мониторинг этой АЗС выключен. История сохранена.</div>{% endif %}
+{% if not subscription.enabled %}<div class="alert">Мониторинг этой АЗС выключен. История сохранена.</div>{% endif %}
 
 <div class="fuel-detail-grid">
-    {% for fuel in ('95','98','100') %}
+    {% for fuel in tracked_fuels %}
     {% set item = latest[fuel] %}
     {% set forecast = forecasts[fuel] %}
     {% set appearance = latest_appearances.get(fuel) %}
@@ -22,14 +22,14 @@
         <dl>
             <div><dt>Наблюдение источника</dt><dd>{{ item.observed_at|fuel_age if item else 'Пока нет данных' }}</dd></div>
             {% if delivery %}<div><dt>{{ 'Последняя подтверждённая поставка' if delivery.event_type == 'confirmed_delivery' else 'Последняя вероятная поставка' }}</dt><dd>{{ delivery.estimated_at|msk_datetime('%d.%m ~%H:%M') }}</dd></div>
-            {% elif appearance %}<div><dt>Последнее появление топлива</dt><dd>{{ appearance.estimated_at|msk_datetime('%d.%m ~%H:%M') }}</dd></div>
+            {% elif appearance %}<div><dt>{{ 'Возможное появление топлива' if appearance.event_type in ('candidate_appearance', 'availability_appearance') else 'Наличие топлива подтверждено' }}</dt><dd>{{ appearance.estimated_at|msk_datetime('%d.%m ~%H:%M') }}</dd></div>
             {% else %}<div><dt>Последнее появление топлива</dt><dd>Пока не обнаружено</dd></div>{% endif %}
         </dl>
         {% if appearance %}
         <div class="fuel-appearance-summary">
             <span>Наблюдалось: {% if appearance.availability_duration_minutes is not none %}около {{ appearance.availability_duration_minutes|round|int }} мин{% else %}длительность неизвестна{% endif %}</span>
-            <span>Достоверность появления: {{ ((appearance.appearance_confidence or appearance.confidence) * 100)|round|int }}%</span>
-            {% if appearance.event_type == 'availability_appearance' %}<span>Поставка: не подтверждена · вероятность {{ ((appearance.delivery_confidence or 0) * 100)|round|int }}%</span>{% endif %}
+            {% set appearance_score = appearance.appearance_confidence or appearance.confidence %}<span>Достоверность: {% if appearance_score >= 0.8 %}высокая{% elif appearance_score >= 0.55 %}средняя{% else %}низкая{% endif %} · {{ (appearance_score * 100)|round|int }}%</span>
+            {% if appearance.event_type in ('candidate_appearance', 'availability_appearance') %}<span>Ожидаем подтверждения</span>{% elif appearance.event_type == 'confirmed_availability' %}<span>Поставка не подтверждена · вероятность {{ ((appearance.delivery_confidence or 0) * 100)|round|int }}%</span>{% endif %}
         </div>
         {% endif %}
         {% if forecast %}
@@ -40,16 +40,33 @@
     {% endfor %}
 </div>
 
+<section class="card fuel-timeline-card">
+    <div class="card-head"><div><h2>Наличие за последние 24 часа</h2><p class="subline">Интервалы наблюдений; пробелы и устаревшие данные показаны отдельно</p></div></div>
+    <div class="fuel-timeline-legend" aria-label="Обозначения"><span class="unavailable">— Нет</span><span class="candidate">? Возможное появление</span><span class="confirmed_available">✓ Подтверждено</span><span class="unknown">· Нет данных</span></div>
+    <div class="fuel-timeline-axis" aria-hidden="true">{% for tick in timeline_ticks %}<time>{{ tick|msk_datetime('%H:%M') if not loop.last else 'сейчас' }}</time>{% endfor %}</div>
+    <div class="fuel-timeline" data-fuel-timeline>
+        {% for fuel in tracked_fuels %}<div class="fuel-timeline-row">
+            <b>АИ-{{ fuel }}</b>
+            <div class="fuel-timeline-track" aria-label="История наличия АИ-{{ fuel }} за 24 часа">
+                {% for interval in timeline.fuels[fuel] %}<button type="button" class="fuel-timeline-segment {{ interval.state }}{{ ' low' if interval.low else '' }}" data-left="{{ interval.left_percent }}" data-width="{{ interval.width_percent }}" aria-label="АИ-{{ fuel }}: {{ interval.label }}, {{ interval.start|msk_datetime('%H:%M') }}–{{ interval.end|msk_datetime('%H:%M') }}">
+                    <span class="fuel-timeline-symbol" aria-hidden="true">{% if interval.state == 'confirmed_available' %}✓{% elif interval.state == 'candidate' %}?{% elif interval.state == 'unavailable' %}—{% else %}·{% endif %}</span>
+                    <span class="fuel-timeline-popover"><b>АИ-{{ fuel }} · {{ interval.label }}</b><time>{{ interval.start|msk_datetime('%H:%M') }}–{{ interval.end|msk_datetime('%H:%M') }}</time><span>Длительность: {{ interval.duration_label }}</span>{% if interval.confidence is not none %}<span>Достоверность: {{ (interval.confidence * 100)|round|int }}%</span>{% endif %}{% if interval.supporting_marks %}<span>Подтверждающих отметок: {{ interval.supporting_marks }}</span>{% endif %}{% if interval.contradicting_marks %}<span>Противоречащих отметок: {{ interval.contradicting_marks }}</span>{% endif %}{% if interval.trusted_marks %}<span>Надёжных «На месте»: {{ interval.trusted_marks }}</span>{% endif %}</span>
+                </button>{% endfor %}
+            </div>
+        </div>{% endfor %}
+    </div>
+</section>
+
 <section class="card fuel-deliveries">
-    <div class="card-head"><div><h2>История появления топлива</h2><p class="subline">Наблюдаемые появления и отдельно классифицированные поставки</p></div><nav class="fuel-tabs" aria-label="Фильтр топлива"><a class="{{ 'active' if not fuel_type else '' }}" href="/fuel/{{ station.id }}">Все</a>{% for fuel in ('95','98','100') %}<a class="{{ 'active' if fuel_type == fuel else '' }}" href="/fuel/{{ station.id }}?fuel_type={{ fuel }}">{{ fuel }}</a>{% endfor %}</nav></div>
+    <div class="card-head"><div><h2>История появления топлива</h2><p class="subline">Наблюдаемые появления и отдельно классифицированные поставки</p></div><nav class="fuel-tabs" aria-label="Фильтр топлива"><a class="{{ 'active' if not fuel_type else '' }}" href="/fuel/{{ station.id }}">Все</a>{% for fuel in tracked_fuels %}<a class="{{ 'active' if fuel_type == fuel else '' }}" href="/fuel/{{ station.id }}?fuel_type={{ fuel }}">{{ fuel }}</a>{% endfor %}</nav></div>
     {% if deliveries %}
     <div class="fuel-delivery-chart" aria-label="График времени появлений: дата по горизонтали, время суток по вертикали"><div class="chart-time-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div><div class="chart-points">{% for event in deliveries|reverse %}<i class="delivery-dot fuel-{{ event.fuel_type }} {{ event.event_type }}" data-x="{{ loop.index0 / ([deliveries|length - 1, 1]|max) * 100 }}" data-y="{{ event.estimated_at|msk_hour_percent }}" title="АИ-{{ event.fuel_type }} · {{ event.estimated_at|msk_datetime }}"></i>{% endfor %}</div><div class="chart-date-axis"><span>{{ deliveries[-1].estimated_at|msk_datetime('%d.%m') }}</span><span>Дата</span><span>{{ deliveries[0].estimated_at|msk_datetime('%d.%m') }}</span></div></div>
     <div class="fuel-delivery-list">
         {% for event in deliveries %}<article>
             <div><time>{{ event.estimated_at|msk_datetime('%d.%m.%Y') }}</time><span class="pill">АИ-{{ event.fuel_type }}</span></div>
             <b>~{{ event.estimated_at|msk_datetime('%H:%M') }}</b>
-            <small>{% if event.event_type == 'confirmed_delivery' %}Подтверждённая поставка{% elif event.event_type == 'probable_delivery' %}Вероятная поставка{% else %}Появление топлива{% endif %} · наблюдалось {{ event.availability_duration_minutes|round|int if event.availability_duration_minutes is not none else '—' }} мин</small>
-            <details class="fuel-event-evidence"><summary>Почему?</summary><div>{% for reason in event.evidence_json.delivery_evidence or [] %}<span>✓ {{ reason }}</span>{% endfor %}{% for caveat in event.evidence_json.delivery_caveats or [] %}<span>— {{ caveat }}</span>{% endfor %}<span>Достоверность появления {{ ((event.appearance_confidence or event.confidence) * 100)|round|int }}% · вероятность поставки {{ ((event.delivery_confidence or 0) * 100)|round|int }}%</span></div></details>
+            <small>{% if event.event_type == 'confirmed_delivery' %}Поставка подтверждена{% elif event.event_type == 'probable_delivery' %}Вероятная поставка{% elif event.event_type == 'confirmed_availability' %}Наличие подтверждено{% else %}Возможное появление · ожидаем подтверждения{% endif %} · наблюдалось {{ event.availability_duration_minutes|round|int if event.availability_duration_minutes is not none else '—' }} мин</small>
+            <details class="fuel-event-evidence"><summary>Почему?</summary><div>{% for reason in event.evidence_json.appearance_evidence or [] %}<span>✓ {{ reason }}</span>{% endfor %}{% for caveat in event.evidence_json.appearance_caveats or [] %}<span>— {{ caveat }}</span>{% endfor %}{% if event.event_type in ('probable_delivery', 'confirmed_delivery') %}{% for reason in event.evidence_json.delivery_evidence or [] %}<span>✓ {{ reason }}</span>{% endfor %}{% for caveat in event.evidence_json.delivery_caveats or [] %}<span>— {{ caveat }}</span>{% endfor %}{% endif %}<span>Достоверность появления {{ ((event.appearance_confidence or event.confidence) * 100)|round|int }}% · вероятность поставки {{ ((event.delivery_confidence or 0) * 100)|round|int }}%</span></div></details>
         </article>{% endfor %}
     </div>
     {% else %}<div class="empty small">Появлений топлива пока не обнаружено</div>{% endif %}
@@ -60,4 +77,4 @@
 {% if chat_messages %}<section class="card fuel-comments-section"><h2>Чат GdeBenz</h2><div class="fuel-comments">{% for message in chat_messages %}<p><time>{{ message.source_created_at|msk_datetime('%d.%m %H:%M') }}</time><span><b>{{ message.author_name or 'Водитель' }}</b><br>«{{ message.body }}»{% if message.on_site %} <small class="pill">На месте</small>{% endif %}{% if message.author_reliable %} <small class="pill">Надёжный{% if message.author_tier %} · {{ message.author_tier }} ур.{% endif %}</small>{% endif %}</span></p>{% endfor %}</div></section>{% endif %}
 <details class="card fuel-secondary"><summary><b>Техническая история</b><span>{{ observations|length }}</span></summary><div class="table-scroll"><table class="fuel-table"><thead><tr><th>Наш опрос</th><th>Источник</th><th>Топливо</th><th>Состояние</th><th>Confidence</th><th>Подтверждения</th><th>Stale</th></tr></thead><tbody>{% for item in observations %}<tr><td>{{ item.observed_at|msk_datetime }}</td><td>{{ item.source_updated_at|msk_datetime or '—' }}</td><td>АИ-{{ item.fuel_type }}</td><td>{{ item.state }}</td><td>{{ item.confidence if item.confidence is not none else '—' }}</td><td>{{ item.confirmations if item.confirmations is not none else '—' }}</td><td>{{ 'да' if item.is_stale else 'нет' }}</td></tr>{% else %}<tr><td colspan="7">История пока пуста.</td></tr>{% endfor %}</tbody></table></div></details>
 {% endblock %}
-{% block scripts %}<script>document.querySelectorAll('.delivery-dot').forEach((dot) => { dot.style.left = `${dot.dataset.x}%`; dot.style.top = `${dot.dataset.y}%`; });</script>{% endblock %}
+{% block scripts %}<script>document.querySelectorAll('.delivery-dot').forEach((dot) => { dot.style.left = `${dot.dataset.x}%`; dot.style.top = `${dot.dataset.y}%`; }); document.querySelectorAll('.fuel-timeline-segment').forEach((segment) => { segment.style.left = `${segment.dataset.left}%`; segment.style.width = `${segment.dataset.width}%`; segment.addEventListener('click', () => { const wasOpen = segment.classList.contains('open'); document.querySelectorAll('.fuel-timeline-segment.open').forEach((item) => item.classList.remove('open')); if (!wasOpen) segment.classList.add('open'); }); }); document.addEventListener('click', (event) => { if (!event.target.closest('.fuel-timeline-segment')) document.querySelectorAll('.fuel-timeline-segment.open').forEach((item) => item.classList.remove('open')); });</script>{% endblock %}

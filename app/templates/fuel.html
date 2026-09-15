@@ -24,17 +24,17 @@
     </div>{% else %}<div class="card fuel-empty-inline"><span aria-hidden="true">◷</span><div><b>Недостаточно подтверждённых поставок</b><small>Краткие появления топлива не используются для прогноза.</small></div></div>{% endif %}
 </section>
 {% if stations %}
-<div class="card-head fuel-stations-head"><h2>Отслеживаемые АЗС</h2></div>
+<div class="card-head fuel-stations-head"><h2>Мои АЗС</h2></div>
 <div class="fuel-station-grid">
-    {% for station in stations %}<article class="card fuel-station-card">
+    {% for subscription in subscriptions %}{% set station = subscription.station %}<article class="card fuel-station-card">
         <header><div class="fuel-brand-mark" aria-hidden="true">⛽</div><div><h2>{{ station.brand or station.name or 'АЗС' }}</h2><p>{{ station.address or 'Адрес не указан источником' }}</p></div></header>
         <div class="fuel-status-list">
-            {% for fuel in station.fuels if fuel.enabled %}{% set item = latest.get((station.id, fuel.fuel_type)) %}{% set forecast = forecasts.get((station.id, fuel.fuel_type)) %}
-            <div class="fuel-status-row {{ item.state if item else 'unknown' }}"><b class="fuel-grade">{{ fuel.fuel_type }}</b><div class="fuel-status-copy"><div class="fuel-status-line"><strong>{% if not item %}Нет данных{% elif item.state == 'available' %}Есть{% elif item.state == 'low' %}Мало{% elif item.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong>{% if item and item.is_stale %}<span class="pill fuel-stale-badge">Данные устарели</span>{% endif %}</div><small>{% if item %}обновлено {{ item.observed_at|fuel_age }}{% else %}ожидаем первый опрос{% endif %}</small>{% if forecast %}<span>Вероятная поставка: {{ forecast.range_from|msk_datetime('%d.%m %H:%M') }}–{{ forecast.range_to|msk_datetime('%H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span>{% else %}<span>Недостаточно подтверждённых поставок</span>{% endif %}</div></div>
+            {% for fuel_type in subscription.tracked_fuel_types %}{% set item = latest.get((station.id, fuel_type)) %}{% set forecast = forecasts.get((station.id, fuel_type)) %}
+            <div class="fuel-status-row {{ item.state if item else 'unknown' }}"><b class="fuel-grade">{{ fuel_type }}</b><div class="fuel-status-copy"><div class="fuel-status-line"><strong>{% if not item %}Нет данных{% elif item.state == 'available' %}Есть{% elif item.state == 'low' %}Мало{% elif item.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong>{% if item and item.is_stale %}<span class="pill fuel-stale-badge">Данные устарели</span>{% endif %}</div><small>{% if item %}обновлено {{ item.observed_at|fuel_age }}{% else %}ожидаем первый опрос{% endif %}</small>{% if forecast %}<span>Вероятная поставка: {{ forecast.range_from|msk_datetime('%d.%m %H:%M') }}–{{ forecast.range_to|msk_datetime('%H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span>{% else %}<span>Недостаточно подтверждённых поставок</span>{% endif %}</div></div>
             {% endfor %}
         </div>
         <footer><span>Опрос {{ station.last_successful_poll_at|fuel_age if station.last_successful_poll_at else 'ещё не выполнялся' }}</span><div class="actions"><a class="btn secondary" href="/fuel/{{ station.id }}">Подробнее</a><a class="icon-btn" href="/fuel/{{ station.id }}/settings" aria-label="Настроить АЗС" title="Настроить АЗС">⋯</a></div></footer>
     </article>{% endfor %}
 </div>
-{% else %}<section class="card vehicle-empty"><div><h2>Пока ничего не отслеживается</h2><p>АЗС пока не выбраны. Добавьте станцию, чтобы HomeOS начал собирать историю топлива.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
+{% else %}<section class="card vehicle-empty"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС, чтобы HomeOS начал показывать наличие и прогнозы.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
 {% endblock %}

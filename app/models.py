@@ -57,6 +57,9 @@ class User(Base):
     temporary_file_transfers: Mapped[list["TemporaryFileTransfer"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
+    fuel_station_subscriptions: Mapped[list["FuelStationSubscription"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class TemporaryFileTransfer(Base):
@@ -749,13 +752,15 @@ class ShoppingCategoryRule(Base):
 
 
 class FuelStation(Base):
-    """A station selected explicitly by a household user."""
+    """A physical provider station with source history shared inside the backend."""
 
     __tablename__ = "fuel_stations"
-    __table_args__ = (UniqueConstraint("owner_id", "provider", "provider_station_id", name="uq_fuel_station_provider"),)
+    __table_args__ = (UniqueConstraint("provider", "provider_station_id", name="uq_fuel_station_provider"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Kept as migration provenance for installations created before subscriptions.
+    # Authorization and collection must never rely on this legacy owner.
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_station_id: Mapped[str] = mapped_column(String(128), nullable=False)
     brand: Mapped[str | None] = mapped_column(String(120))
@@ -769,7 +774,49 @@ class FuelStation(Base):
     last_successful_poll_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     fuels: Mapped[list["FuelStationFuel"]] = relationship(back_populates="station", cascade="all, delete-orphan")
+    subscriptions: Mapped[list["FuelStationSubscription"]] = relationship(
+        back_populates="station", cascade="all, delete-orphan"
+    )
     observations: Mapped[list["FuelObservation"]] = relationship(back_populates="station", cascade="all, delete-orphan")
+
+
+class FuelStationSubscription(Base):
+    """A user's private selection and fuel preferences for a physical station."""
+
+    __tablename__ = "fuel_station_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "station_id", name="uq_fuel_subscription_user_station"),
+        Index("ix_fuel_subscription_station_enabled", "station_id", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id: Mapped[int] = mapped_column(
+        ForeignKey("fuel_stations.id", ondelete="CASCADE"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    track_95: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    track_98: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    track_100: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="fuel_station_subscriptions")
+    station: Mapped[FuelStation] = relationship(back_populates="subscriptions")
+
+    @property
+    def tracked_fuel_types(self) -> tuple[str, ...]:
+        return tuple(
+            fuel_type
+            for fuel_type, enabled in (
+                ("95", self.track_95),
+                ("98", self.track_98),
+                ("100", self.track_100),
+            )
+            if enabled
+        )
 
 
 class FuelMonitorSettings(Base):
@@ -886,7 +933,7 @@ class FuelDeliveryEvent(Base):
     window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     window_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     estimated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    event_type: Mapped[str] = mapped_column(String(32), default="availability_appearance", nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), default="candidate_appearance", nullable=False)
     confidence: Mapped[float] = mapped_column(nullable=False)
     appearance_confidence: Mapped[float | None] = mapped_column()
     delivery_confidence: Mapped[float | None] = mapped_column()
