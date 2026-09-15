@@ -3120,7 +3120,6 @@ async def fuel_route_stations_api(
     db: Session = Depends(get_db),
 ):
     """Return public provider stations in a corridor around a straight route."""
-    del user
     radius = radius_km or float(get_fuel_runtime_settings(db).nearby_radius_km)
     try:
         stations = await find_stations_near_route(
@@ -3138,6 +3137,22 @@ async def fuel_route_stations_api(
             status_code=503,
             detail="Источник данных об АЗС временно недоступен",
         ) from exc
+    provider_ids = [str(item["provider_station_id"]) for item in stations]
+    subscriptions = db.scalars(
+        select(FuelStationSubscription)
+        .options(selectinload(FuelStationSubscription.station))
+        .join(FuelStationSubscription.station)
+        .where(
+            FuelStationSubscription.user_id == user.id,
+            FuelStation.provider == "gdebenz",
+            FuelStation.provider_station_id.in_(provider_ids),
+        )
+    ).all() if provider_ids else []
+    own_station_ids = {
+        item.station.provider_station_id: item.station_id for item in subscriptions
+    }
+    for station in stations:
+        station["station_id"] = own_station_ids.get(str(station["provider_station_id"]))
     return {
         "start": {"latitude": start_lat, "longitude": start_lon},
         "end": {"latitude": end_lat, "longitude": end_lon},

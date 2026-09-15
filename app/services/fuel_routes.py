@@ -3,12 +3,52 @@
 from __future__ import annotations
 
 import math
+from datetime import timezone
+from typing import Any
 
-from .fuel import FuelDataProvider, FuelStationCandidate
+from .fuel import (
+    FUEL_TYPES,
+    FuelDataProvider,
+    FuelStationCandidate,
+    normalize_fuel_states,
+    parse_source_datetime,
+)
 
 EARTH_RADIUS_KM = 6_371.0
 MAX_ROUTE_LENGTH_KM = 250.0
 MAX_ROUTE_REQUESTS = 50
+ROUTE_STATUS_LABELS = {
+    "available": "ЕСТЬ",
+    "low": "МАЛО / ОЧЕРЕДЬ",
+    "unavailable": "НЕТ",
+    "unknown": "НЕТ ДАННЫХ",
+}
+ROUTE_STATUS_SYMBOLS = {
+    "available": "✓",
+    "low": "!",
+    "unavailable": "×",
+    "unknown": "·",
+}
+
+
+def _route_fuel_statuses(raw: dict[str, Any]) -> list[dict[str, str]]:
+    states = normalize_fuel_states(raw)
+    return [
+        {
+            "fuel_type": fuel_type,
+            "state": states[fuel_type],
+            "label": ROUTE_STATUS_LABELS[states[fuel_type]],
+            "symbol": ROUTE_STATUS_SYMBOLS[states[fuel_type]],
+        }
+        for fuel_type in FUEL_TYPES
+    ]
+
+
+def _route_updated_at(raw: dict[str, Any]) -> str | None:
+    value = parse_source_datetime(raw.get("last_at") or raw.get("updated"))
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def haversine_km(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
@@ -147,6 +187,8 @@ async def find_stations_near_route(
                 "address": station.address,
                 "latitude": station.latitude,
                 "longitude": station.longitude,
+                "fuels": _route_fuel_statuses(station.raw),
+                "updated_at": _route_updated_at(station.raw),
                 "distance_to_route_km": round(route_distance, 2),
                 "distance_from_start_km": round(
                     haversine_km(

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -131,6 +132,7 @@ def test_route_lookup_samples_corridor_filters_and_deduplicates():
                     address="У маршрута",
                     latitude=59.84,
                     longitude=30.15,
+                    raw={"status": "yes", "fuels_now": "95,100", "last_at": "2026-09-15T09:30:00Z"},
                 ),
                 FuelStationCandidate(
                     provider="gdebenz",
@@ -154,11 +156,13 @@ def test_route_lookup_samples_corridor_filters_and_deduplicates():
     assert {call[2] for call in provider.calls} == {3}
     assert [station["provider_station_id"] for station in stations] == ["on-route"]
     assert stations[0]["distance_to_route_km"] == 0
+    assert [fuel["state"] for fuel in stations[0]["fuels"]] == ["available", "unavailable", "available"]
+    assert stations[0]["updated_at"] == "2026-09-15T09:30:00Z"
     assert distance_to_route_km(59.84, 30.15, 59.84, 30.10, 59.84, 30.20) < 0.01
     assert route_sample_points(59.84, 30.10, 59.84, 30.20, 3)[0] == (59.84, 30.10)
 
 
-def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_user, monkeypatch):
+def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_user, monkeypatch, db):
     class RouteProvider:
         async def get_stations_near(self, latitude, longitude, radius_km):
             return [FuelStationCandidate(
@@ -169,11 +173,24 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
                 address="пр-кт Ветеранов, 188/1",
                 latitude=59.8348,
                 longitude=30.1211,
+                raw={"status": "queue", "fuels_now": "95,98", "updated": "2026-09-15T10:00:00Z"},
             )]
 
     url = "/api/fuel/route-stations?start_lat=59.83&start_lon=30.10&end_lat=59.84&end_lon=30.14&radius_km=3"
     assert client.get(url, follow_redirects=False).status_code in {302, 303, 307}
     user = make_user("fuel-route-api")
+    saved = FuelStation(
+        owner_id=user.id,
+        provider="gdebenz",
+        provider_station_id="route-api",
+        brand="Teboil",
+        latitude=59.8348,
+        longitude=30.1211,
+    )
+    db.add(saved)
+    db.flush()
+    add_subscription(db, user, saved)
+    db.commit()
     login(user.username)
     monkeypatch.setattr(main_module, "make_gdebenz_provider", RouteProvider)
     response = client.get(url)
@@ -181,6 +198,8 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
     payload = response.json()
     assert payload["radius_km"] == 3
     assert payload["stations"][0]["provider_station_id"] == "route-api"
+    assert payload["stations"][0]["fuels"][0]["state"] == "low"
+    assert payload["stations"][0]["station_id"] == saved.id
     assert "raw" not in payload["stations"][0]
     invalid = client.get(
         "/api/fuel/route-stations?start_lat=91&start_lon=30&end_lat=59&end_lon=30"
@@ -1732,12 +1751,14 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
 
     leaflet_stub = r"""
     window.fuelGeoCalls = 0;
+    window.fuelRouteLines = 0;
     Object.defineProperty(navigator, 'geolocation', {configurable: true, value: {
       getCurrentPosition(success){ window.fuelGeoCalls += 1; success({coords: {latitude: 59.84, longitude: 30.12}}); }
     }});
     window.L = {
-      map: id => ({invalidateSize(){}, setView(){}, fitBounds(){}}),
+      map: id => ({invalidateSize(){}, setView(){}, fitBounds(){}, closePopup(){ document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); }}),
       tileLayer: () => ({addTo(){ return this; }}),
+      polyline: () => ({addTo(){ window.fuelRouteLines += 1; return this; }, remove(){}}),
       layerGroup: () => ({
         elements: [], addTo(){ return this; },
         clearLayers(){ this.elements.forEach(item => item.remove()); this.elements = []; document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); }
@@ -1761,6 +1782,36 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
         shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
     ] + [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
     executable = next((path for path in browser_paths if path and Path(path).exists()), None)
+    route_payload = {
+        "start": {"latitude": 59.83, "longitude": 30.10},
+        "end": {"latitude": 59.90, "longitude": 30.30},
+        "radius_km": 3,
+        "stations": [
+            {
+                "provider": "gdebenz", "provider_station_id": "route-first",
+                "station_id": stations[0].id, "brand": "Teboil", "name": "Тебойл",
+                "address": "Ветеранов, 188/1", "latitude": 59.835, "longitude": 30.121,
+                "distance_from_start_km": 2.1, "distance_to_route_km": 0.2,
+                "updated_at": "2026-09-15T09:30:00Z",
+                "fuels": [
+                    {"fuel_type": "95", "state": "available", "label": "ЕСТЬ", "symbol": "✓"},
+                    {"fuel_type": "98", "state": "low", "label": "МАЛО / ОЧЕРЕДЬ", "symbol": "!"},
+                    {"fuel_type": "100", "state": "unavailable", "label": "НЕТ", "symbol": "×"},
+                ],
+            },
+            {
+                "provider": "gdebenz", "provider_station_id": "route-second",
+                "station_id": None, "brand": "Газпромнефть", "name": "АЗС",
+                "address": "У маршрута", "latitude": 59.88, "longitude": 30.25,
+                "distance_from_start_km": 7.5, "distance_to_route_km": 0.5,
+                "updated_at": None,
+                "fuels": [
+                    {"fuel_type": fuel, "state": "unknown", "label": "НЕТ ДАННЫХ", "symbol": "·"}
+                    for fuel in ("95", "98", "100")
+                ],
+            },
+        ],
+    }
     with playwright.sync_playwright() as manager:
         try:
             browser = manager.chromium.launch(headless=True, executable_path=executable) if executable else manager.chromium.launch(headless=True)
@@ -1791,6 +1842,8 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
                         content_type="text/css",
                         body=Path("app/static/style.css").read_text(encoding="utf-8"),
                     )
+                elif path == "http://homeos.test/api/fuel/route-stations":
+                    route.fulfill(content_type="application/json", body=json.dumps(route_payload))
                 elif path.endswith("/api/notifications/unread"):
                     route.fulfill(content_type="application/json", body='{"unread_total":0,"threads":[]}')
                 else:
@@ -1833,9 +1886,36 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert page.locator(".leaflet-popup").is_visible()
             assert page.locator(".leaflet-popup .btn").get_attribute("href").startswith("/fuel/")
 
+            page.locator('[data-view="route"]').click()
+            assert page.locator("[data-route-panel]").is_visible()
+            page.locator('[name="start_lat"]').fill("59.83")
+            page.locator('[name="start_lon"]').fill("30.10")
+            page.locator('[name="end_lat"]').fill("59.90")
+            page.locator('[name="end_lon"]').fill("30.30")
+            page.locator("[data-route-form] [type=submit]").click()
+            page.locator(".fuel-route-card").first.wait_for()
+            assert page.locator(".fuel-route-card").count() == 2
+            assert "2.1 км от начала" in page.locator(".fuel-route-card").first.text_content()
+            assert "отклонение 0.2 км" in page.locator(".fuel-route-card").first.text_content()
+            assert page.locator(".fuel-route-card").first.locator(".fuel-route-card-statuses span").count() == 3
+            assert page.locator(".fuel-map-marker").count() == 2
+            assert page.evaluate("window.fuelRouteLines") == 1
+            page.locator(".fuel-map-marker").first.click()
+            assert "2.1 км от начала" in page.locator(".leaflet-popup").text_content()
+
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
+            page.locator('[data-view="route"]').click()
+            assert page.locator("[data-route-panel]").is_visible()
+            assert page.locator(".fuel-route-card").count() == 2
+            assert page.locator("#fuelMap").is_visible()
+            page.locator(".fuel-map-marker").first.click()
+            assert page.locator("[data-map-sheet]").is_visible()
+            assert "2.1 км от начала" in page.locator("[data-map-sheet]").text_content()
+            page.locator("[data-map-sheet-close]").click()
+            assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
             page.locator('[data-view="list"]').click()
+            assert page.locator("[data-fuel-map-panel]").evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
             page.locator('[data-fuel="98"]').click()
             page.locator(".fuel-filter-open").click()
             assert page.locator(".fuel-filter-panel").is_visible()
@@ -1843,13 +1923,20 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             page.locator("[data-filter-apply]").click()
             assert not page.locator(".fuel-filter-panel").is_visible()
             page.locator('[data-view="map"]').click()
+            assert page.locator("[data-fuel-list]").evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
+            assert page.locator("#fuelMap").evaluate("element => { const box = element.getBoundingClientRect(); return box.top < innerHeight && box.bottom > 0; }")
             assert page.locator(".fuel-map-marker").count() == 1
+            page.locator(".fuel-map-marker").scroll_into_view_if_needed()
+            scroll_before_marker = page.evaluate("scrollY")
             page.locator(".fuel-map-marker").click()
             assert page.locator("[data-map-sheet]").is_visible()
+            assert page.locator(".leaflet-popup").count() == 0
+            assert page.evaluate("scrollY") == scroll_before_marker
             assert "ВОЗМОЖНО" in page.locator("[data-map-sheet]").text_content()
             assert page.locator("[data-map-sheet] dt").all_text_contents() == ["95", "98", "100"]
             assert "Расстояние:" in page.locator("[data-map-distance]").text_content()
             assert page.locator("[data-map-sheet]").evaluate("element => element.parentElement === document.body")
+            assert page.locator("[data-map-sheet]").evaluate("element => getComputedStyle(element).position === 'fixed' && Number(getComputedStyle(element).zIndex) > 700")
             assert page.locator("#fuelMap").is_visible()
             assert page.locator("#fuelMap").bounding_box()["y"] < page.locator("[data-map-sheet]").bounding_box()["y"]
             assert page.locator('[data-map-sheet]:not([hidden])').count() == 1

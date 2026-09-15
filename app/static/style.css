@@ -2726,6 +2726,8 @@ html[data-theme="dark"] .success-alert {
 .fuel-quick-filters button, .fuel-view-toggle button { min-height: 36px; padding: 7px 14px; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
 .fuel-quick-filters button[aria-pressed="true"], .fuel-view-toggle button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 12%, transparent); }
 .fuel-toolbar-line { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.fuel-dashboard-controls.route-mode .fuel-quick-filters, .fuel-dashboard-controls.route-mode .fuel-filter-open, .fuel-dashboard-controls.route-mode .fuel-filter-panel { display: none; }
+.fuel-dashboard-controls.route-mode .fuel-toolbar-line { justify-content: flex-end; }
 .fuel-filter-open { display: none; }
 .fuel-filter-backdrop { display: none; }
 .fuel-filter-panel { display: flex; min-width: 0; align-items: end; gap: 10px; }
@@ -2739,7 +2741,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-collector-link.error span { color: var(--danger); }
 .fuel-collector-link.off span { color: var(--muted); }
 .fuel-dashboard-list { align-items: stretch; }
-.fuel-dashboard-list > [hidden], .fuel-map-panel[hidden], .fuel-map-empty[hidden], .fuel-filter-empty[hidden] { display: none !important; }
+.fuel-dashboard-list[hidden], .fuel-dashboard-list > [hidden], .fuel-map-panel[hidden], .fuel-map-empty[hidden], .fuel-filter-empty[hidden] { display: none !important; }
 .fuel-compact-station-card { color: inherit; text-decoration: none; }
 .fuel-compact-station-card:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); text-decoration: none; }
 .fuel-compact-station-card:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset: 2px; }
@@ -2756,7 +2758,30 @@ html[data-theme="dark"] .success-alert {
 .fuel-compact-status.unavailable { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 .fuel-compact-status.unknown { border-style: dotted; color: var(--muted); }
 .fuel-compact-station-card footer { margin-top: auto; }
-.fuel-map-panel { position: relative; width: 100%; max-width: 100%; min-width: 0; }
+.fuel-map-panel { position: relative; width: 100%; max-width: 100%; min-width: 0; isolation: isolate; }
+.fuel-route-panel { display: grid; min-width: 0; gap: 12px; margin-bottom: 12px; }
+.fuel-route-panel[hidden], .fuel-route-results[hidden] { display: none; }
+.fuel-route-heading h2, .fuel-route-heading p, .fuel-route-card h3, .fuel-route-card p { margin: 0; }
+.fuel-route-heading p { margin-top: 3px; color: var(--muted); }
+.fuel-route-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; min-width: 0; align-items: end; gap: 12px; }
+.fuel-route-form fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 8px; margin: 0; padding: 0; border: 0; }
+.fuel-route-form legend { margin-bottom: 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.fuel-route-form label { display: grid; min-width: 0; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.fuel-route-form input { width: 100%; min-width: 0; }
+.fuel-route-status { margin: 0; }
+.fuel-route-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; gap: 12px; margin-top: 12px; }
+.fuel-route-card { display: grid; min-width: 0; gap: 9px; }
+.fuel-route-card-heading { display: flex; min-width: 0; align-items: start; justify-content: space-between; gap: 12px; }
+.fuel-route-card-heading h3 { min-width: 0; overflow-wrap: anywhere; }
+.fuel-route-card-heading p { flex: 0 0 auto; color: var(--muted); font-size: 12px; text-align: right; }
+.fuel-route-card-statuses { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.fuel-route-card-statuses span { min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); font-size: 11px; font-weight: 900; overflow-wrap: anywhere; }
+.fuel-route-card-statuses .available { color: #15803d; }
+.fuel-route-card-statuses .low, .fuel-map-card .low { color: #b45309; }
+.fuel-route-card-statuses .low { border-style: dashed; }
+.fuel-route-card-statuses .unavailable { color: #b91c1c; }
+.fuel-route-card-statuses .unknown { color: var(--muted); border-style: dotted; }
+.fuel-route-card footer { color: var(--muted); font-size: 12px; }
 .fuel-map { width: 100%; max-width: 100%; height: min(58vh, 560px); min-height: 360px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
 .fuel-map-empty { min-height: 180px; place-content: center; text-align: center; }
 .fuel-filter-empty { display: grid; min-height: 160px; place-items: center; text-align: center; }
@@ -2764,6 +2789,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-map-marker { display: grid; place-items: center; box-sizing: border-box; width: 44px; height: 44px; border: 3px solid var(--card); border-radius: 50%; box-shadow: 0 2px 8px rgba(15, 23, 42, .32); color: #fff; font-size: 21px; font-weight: 900; line-height: 1; }
 .fuel-map-marker.available { background: #15803d; }
 .fuel-map-marker.candidate { border-style: dashed; background: #d97706; }
+.fuel-map-marker.low { border-style: double; background: #b45309; }
 .fuel-map-marker.unavailable { background: #b91c1c; }
 .fuel-map-marker.unknown { border-style: dotted; background: #64748b; }
 .fuel-map-card { display: grid; min-width: 210px; gap: 8px; color: var(--text); }
@@ -2778,7 +2804,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-map-card small { color: var(--muted); }
 .fuel-map-card .btn { justify-content: center; }
 .fuel-map-distance { font-weight: 800; color: var(--text) !important; }
-.fuel-map-sheet { position: fixed; z-index: 48; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px; display: none; max-height: min(70vh, 430px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+.fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px; display: none; max-height: min(70vh, 430px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
 .fuel-map-sheet > .icon-btn { position: absolute; top: 8px; right: 8px; }
 .fuel-map-sheet-handle { display: none; }
 .fuel-map-sheet[hidden] { display: none; }
@@ -2801,6 +2827,7 @@ html[data-theme="dark"] .success-alert {
     .fuel-filter-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .fuel-filter-actions .btn { width: 100%; justify-content: center; }
     .fuel-location-status:not(:empty) { display: block; margin: 0; }
+    .fuel-route-form { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
     .fuel-head, .fuel-detail-head { flex-direction: column; align-items: stretch; }
@@ -2829,6 +2856,14 @@ html[data-theme="dark"] .success-alert {
     .fuel-quick-filters button { min-width: 0; flex: 1; padding-inline: 8px; }
     .fuel-dashboard-meta { align-items: flex-start; flex-direction: column; }
     .fuel-dashboard-list { grid-template-columns: 1fr; }
+    .fuel-view-toggle { width: 100%; }
+    .fuel-view-toggle button { min-width: 0; flex: 1; padding-inline: 8px; }
+    .fuel-route-panel { padding: 14px; }
+    .fuel-route-form fieldset { gap: 7px; }
+    .fuel-route-form .btn { width: 100%; justify-content: center; }
+    .fuel-route-results { grid-template-columns: 1fr; }
+    .fuel-route-card-heading { flex-direction: column; gap: 4px; }
+    .fuel-route-card-heading p { text-align: left; }
     .fuel-map { height: 52vh; min-height: 330px; }
     .fuel-map-sheet { right: 0; bottom: 0; left: 0; width: 100%; max-width: 100%; max-height: min(48dvh, 390px); padding: 10px 18px calc(16px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 20px 20px 0 0; box-shadow: 0 -10px 30px rgba(15, 23, 42, .2); }
     .fuel-map-sheet:not([hidden]) { display: block; }

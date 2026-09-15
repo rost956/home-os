@@ -29,11 +29,21 @@
             <p class="subline fuel-location-status" aria-live="polite"></p>
             <div class="actions fuel-filter-actions"><button class="btn" type="button" data-filter-apply>Применить</button><button class="btn secondary" type="button" data-filter-reset>Сбросить</button></div>
         </div>
-        <div class="fuel-view-toggle" role="group" aria-label="Режим отображения"><button type="button" data-view="list" aria-pressed="true">Список</button><button type="button" data-view="map" aria-pressed="false">Карта</button></div>
+        <div class="fuel-view-toggle" role="group" aria-label="Режим отображения"><button type="button" data-view="list" aria-pressed="true">Список</button><button type="button" data-view="map" aria-pressed="false">Карта</button><button type="button" data-view="route" aria-pressed="false">Маршрут</button></div>
     </div>
 </section>
 
-<div class="fuel-dashboard-meta">
+<section class="card fuel-route-panel" data-route-panel hidden aria-labelledby="fuelRouteTitle">
+    <div class="fuel-route-heading"><div><h2 id="fuelRouteTitle">АЗС вдоль маршрута</h2><p>Укажите координаты начала и конца прямого участка маршрута.</p></div></div>
+    <form class="fuel-route-form" data-route-form>
+        <fieldset><legend>Начало</legend><label>Широта<input name="start_lat" type="number" min="-90" max="90" step="any" inputmode="decimal" required placeholder="59.8348"></label><label>Долгота<input name="start_lon" type="number" min="-180" max="180" step="any" inputmode="decimal" required placeholder="30.1211"></label></fieldset>
+        <fieldset><legend>Конец</legend><label>Широта<input name="end_lat" type="number" min="-90" max="90" step="any" inputmode="decimal" required placeholder="59.9000"></label><label>Долгота<input name="end_lon" type="number" min="-180" max="180" step="any" inputmode="decimal" required placeholder="30.3000"></label></fieldset>
+        <button class="btn" type="submit">Найти АЗС</button>
+    </form>
+    <p class="subline fuel-route-status" data-route-status aria-live="polite">Маршрут ещё не построен.</p>
+</section>
+
+<div class="fuel-dashboard-meta" data-dashboard-meta>
     <span><b data-visible-count>{{ dashboard.stations|length }}</b> АЗС · {% if dashboard.last_updated_at %}обновлено {{ dashboard.last_updated_at|fuel_age }}{% else %}данных пока нет{% endif %}</span>
     <a class="fuel-collector-link {{ 'off' if not collector.enabled else ('error' if collector.last_error else 'ok') }}" href="/fuel/settings"><span aria-hidden="true">●</span> {% if not collector.enabled %}Мониторинг выключен{% elif collector.last_error %}Обновление задерживается{% else %}Данные обновляются{% endif %}</a>
 </div>
@@ -54,9 +64,10 @@
     <div id="fuelMap" class="fuel-map" aria-label="Карта АЗС"></div>
     <div class="empty small fuel-map-empty" hidden>По выбранным фильтрам АЗС не найдено.</div>
 </section>
+<section class="fuel-route-results" data-route-results hidden aria-label="АЗС вдоль маршрута"></section>
 <section class="card fuel-filter-empty" hidden><h2>По выбранным фильтрам АЗС не найдено</h2><button class="btn secondary" type="button" data-filter-reset>Сбросить фильтры</button></section>
 
-<section class="card slim fuel-today-summary">
+<section class="card slim fuel-today-summary" data-dashboard-summary>
     <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ dashboard.confirmed_appearances }} · возможных: {{ dashboard.candidates }} · поставок: {{ dashboard.confirmed_deliveries + dashboard.probable_deliveries }} · подтверждённое наличие: {{ dashboard.confirmed_duration_minutes }} мин</span></div>
 </section>
 
@@ -91,17 +102,29 @@
     const onlyAvailable = document.getElementById('fuelOnlyAvailable');
     const locationStatus = document.querySelector('.fuel-location-status');
     const mapSheet = document.querySelector('[data-map-sheet]');
-    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet];
+    const routePanel = document.querySelector('[data-route-panel]');
+    const routeForm = document.querySelector('[data-route-form]');
+    const routeStatus = document.querySelector('[data-route-status]');
+    const routeResults = document.querySelector('[data-route-results]');
+    const dashboardControls = document.querySelector('.fuel-dashboard-controls');
+    const dashboardMeta = document.querySelector('[data-dashboard-meta]');
+    const dashboardSummary = document.querySelector('[data-dashboard-summary]');
+    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet, routePanel, routeForm, routeStatus, routeResults, dashboardControls, dashboardMeta, dashboardSummary];
     if (required.some(element => !element)) { console.error('Fuel dashboard markup is incomplete'); return; }
     let leafletMap = null;
     let markerLayer = null;
+    let routeLine = null;
     let userLocation = null;
     let filteredStations = [];
+    let routeStations = [];
+    let routePoints = [];
+    let routeLoaded = false;
     let activeMapStationId = null;
-    const mobileMap = () => matchMedia('(max-width: 600px)').matches;
+    const mobileMapQuery = matchMedia('(max-width: 600px)');
+    const mobileMap = () => mobileMapQuery.matches;
     document.body.append(mapSheet);
     function savedView() { try { return localStorage.getItem('fuel-dashboard-view'); } catch (error) { return null; } }
-    const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map']};
+    const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map', 'route']};
     const params = new URLSearchParams(location.search);
     const state = {
         fuel: allowed.fuel.includes(params.get('fuel')) ? params.get('fuel') : 'all',
@@ -114,7 +137,7 @@
     if (!allowed.view.includes(state.view)) state.view = 'list';
 
     function fuelEntry(station) { return state.fuel === 'all' ? null : station.fuels.find(item => item.fuel_type === state.fuel); }
-    function stationState(station) { return state.fuel === 'all' ? station.summary_state : (fuelEntry(station) || {}).state; }
+    function stationState(station) { return station.route || state.fuel === 'all' ? station.summary_state : (fuelEntry(station) || {}).state; }
     function matches(station) {
         const current = stationState(station);
         if (!current) return false;
@@ -148,6 +171,12 @@
         const query = next.toString();
         try { history.replaceState(null, '', location.pathname + (query ? '?' + query : '')); } catch (error) {}
     }
+    function routeUpdatedText(value) {
+        if (!value) return 'Время обновления неизвестно';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return 'Время обновления неизвестно';
+        return `Обновлено ${new Intl.DateTimeFormat('ru-RU', {timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}).format(parsed)}`;
+    }
     function formatDistance(station) {
         const value = distance(station);
         if (!Number.isFinite(value)) return 'Расстояние: определяем…';
@@ -157,7 +186,9 @@
         const root = document.createElement('div'); root.className = 'fuel-map-card';
         const title = document.createElement('b'); title.className = 'fuel-map-card-title'; title.textContent = station.name; root.append(title);
         const address = document.createElement('p'); address.textContent = station.address; root.append(address);
-        if (mobile) {
+        if (station.route) {
+            const routeDistance = document.createElement('p'); routeDistance.className = 'fuel-map-distance'; routeDistance.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · отклонение ${station.distance_to_route_km.toFixed(1)} км`; root.append(routeDistance);
+        } else if (mobile) {
             const distanceLabel = document.createElement('p'); distanceLabel.className = 'fuel-map-distance'; distanceLabel.dataset.mapDistance = ''; distanceLabel.textContent = formatDistance(station); root.append(distanceLabel);
         }
         const statuses = document.createElement('dl'); statuses.className = 'fuel-map-statuses';
@@ -169,7 +200,7 @@
         });
         root.append(statuses);
         const updated = document.createElement('small'); updated.textContent = station.updated_text; root.append(updated);
-        const link = document.createElement('a'); link.className = 'btn'; link.href = `/fuel/${station.id}`; link.textContent = 'Подробнее'; root.append(link);
+        if (station.id) { const link = document.createElement('a'); link.className = 'btn'; link.href = `/fuel/${station.id}`; link.textContent = 'Подробнее'; root.append(link); }
         return root;
     }
     function closeMobileSheet() { mapSheet.hidden = true; activeMapStationId = null; document.querySelectorAll('.fuel-map-marker[aria-expanded="true"]').forEach(marker => marker.setAttribute('aria-expanded', 'false')); }
@@ -192,14 +223,35 @@
         if (markerElement) markerElement.setAttribute('aria-expanded', 'true');
         mapSheet.querySelector('[data-map-sheet-content]').replaceChildren(popupContent(station, true));
         mapSheet.hidden = false;
-        requestSheetLocation(station);
+        if (!station.route) requestSheetLocation(station);
+    }
+    function routeCard(station) {
+        const card = document.createElement('article'); card.className = 'card fuel-route-card';
+        const heading = document.createElement('div'); heading.className = 'fuel-route-card-heading';
+        const title = document.createElement('h3'); title.textContent = station.name; heading.append(title);
+        const metrics = document.createElement('p'); metrics.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · отклонение ${station.distance_to_route_km.toFixed(1)} км`; heading.append(metrics); card.append(heading);
+        if (station.address) { const address = document.createElement('p'); address.className = 'subline'; address.textContent = station.address; card.append(address); }
+        const statuses = document.createElement('div'); statuses.className = 'fuel-route-card-statuses';
+        station.fuels.forEach(fuel => { const item = document.createElement('span'); item.className = fuel.state; item.textContent = `${fuel.fuel_type}: ${fuel.symbol} ${fuel.label}`; statuses.append(item); }); card.append(statuses);
+        const footer = document.createElement('footer'); footer.textContent = station.updated_text; card.append(footer);
+        return card;
+    }
+    function renderRouteResults() {
+        routeResults.replaceChildren(...routeStations.map(routeCard));
+        routeResults.hidden = state.view !== 'route' || !routeLoaded || routeStations.length === 0;
+        if (!routeLoaded) routeStatus.textContent = 'Маршрут ещё не построен.';
+        else if (!routeStations.length) routeStatus.textContent = 'В выбранном коридоре АЗС не найдены.';
+        else routeStatus.textContent = `Найдено АЗС: ${routeStations.length}. Список отсортирован от начала маршрута.`;
     }
     function renderMap() {
-        if (state.view !== 'map') return;
-        mapEmpty.hidden = filteredStations.length > 0;
-        mapEmpty.textContent = 'По выбранным фильтрам АЗС не найдено.';
-        document.getElementById('fuelMap').hidden = filteredStations.length === 0;
-        if (!filteredStations.length) return;
+        if (!['map', 'route'].includes(state.view)) return;
+        const isRoute = state.view === 'route';
+        const mapStations = isRoute ? routeStations : filteredStations;
+        const hasMap = isRoute ? routeLoaded : mapStations.length > 0;
+        mapEmpty.hidden = hasMap;
+        mapEmpty.textContent = isRoute ? 'Укажите координаты и нажмите «Найти АЗС».' : 'По выбранным фильтрам АЗС не найдено.';
+        document.getElementById('fuelMap').hidden = !hasMap;
+        if (!hasMap) return;
         if (!window.L) {
             document.getElementById('fuelMap').hidden = true;
             mapEmpty.textContent = 'Не удалось загрузить карту. Список АЗС продолжает работать.';
@@ -212,11 +264,13 @@
             markerLayer = window.L.layerGroup().addTo(leafletMap);
         }
         markerLayer.clearLayers();
-        const points = [];
-        filteredStations.forEach(station => {
+        if (routeLine) { routeLine.remove(); routeLine = null; }
+        const points = isRoute ? [...routePoints] : [];
+        if (isRoute && routePoints.length === 2) routeLine = window.L.polyline(routePoints, {color: '#2563eb', weight: 5, opacity: .78}).addTo(leafletMap);
+        mapStations.forEach(station => {
             const current = stationState(station) || 'unknown';
-            const symbol = ({available: '✓', candidate: '?', unavailable: '×', unknown: '·'})[current];
-            const stateLabel = ({available: 'есть', candidate: 'возможное наличие', unavailable: 'нет', unknown: 'нет данных'})[current];
+            const symbol = ({available: '✓', candidate: '?', low: '!', unavailable: '×', unknown: '·'})[current] || '·';
+            const stateLabel = ({available: 'есть', candidate: 'возможное наличие', low: 'мало или очередь', unavailable: 'нет', unknown: 'нет данных'})[current] || 'нет данных';
             const description = `${station.name}, ${station.address}, ${stateLabel}`;
             const icon = window.L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [44, 44], iconAnchor: [22, 22]});
             const marker = window.L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
@@ -237,15 +291,16 @@
         cards.forEach(card => { card.hidden = true; });
         filteredStations.forEach(station => { const card = cards.get(station.id); card.hidden = false; list.append(card); });
         document.querySelector('[data-visible-count]').textContent = filteredStations.length;
-        list.hidden = state.view !== 'list'; mapPanel.hidden = state.view !== 'map';
-        if (state.view !== 'map' || (activeMapStationId && !filteredStations.some(station => station.id === activeMapStationId))) closeMobileSheet();
-        filterEmpty.hidden = filteredStations.length > 0 || state.view === 'map';
+        list.hidden = state.view !== 'list'; mapPanel.hidden = !['map', 'route'].includes(state.view); routePanel.hidden = state.view !== 'route';
+        dashboardControls.classList.toggle('route-mode', state.view === 'route'); dashboardMeta.hidden = state.view === 'route'; dashboardSummary.hidden = state.view === 'route';
+        if (!['map', 'route'].includes(state.view) || (activeMapStationId && ![...filteredStations, ...routeStations].some(station => station.id === activeMapStationId))) closeMobileSheet();
+        filterEmpty.hidden = filteredStations.length > 0 || state.view !== 'list';
         document.querySelectorAll('[data-fuel]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.fuel === state.fuel)); });
         document.querySelectorAll('[data-view]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
         statusFilter.value = state.status; brandFilter.value = [...brandFilter.options].some(option => option.value === state.brand) ? state.brand : 'all'; state.brand = brandFilter.value;
         sortSelect.value = state.sort; onlyAvailable.checked = state.only;
         try { localStorage.setItem('fuel-dashboard-view', state.view); } catch (error) {}
-        syncUrl(); renderMap();
+        syncUrl(); renderRouteResults(); renderMap();
     }
     function closeFilters() { panel.classList.remove('open'); document.body.classList.remove('fuel-filters-open'); filterOpen.setAttribute('aria-expanded', 'false'); }
     function requestLocation() {
@@ -256,7 +311,33 @@
         }, () => { locationStatus.textContent = 'Нет доступа к геолокации — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
     }
     document.querySelectorAll('.fuel-dashboard-controls [data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
-    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; render(); }));
+    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; if (state.view === 'route') closeFilters(); render(); }));
+    routeForm.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!routeForm.reportValidity()) return;
+        const submit = routeForm.querySelector('[type="submit"]');
+        const values = new FormData(routeForm);
+        const query = new URLSearchParams();
+        ['start_lat', 'start_lon', 'end_lat', 'end_lon'].forEach(name => query.set(name, values.get(name)));
+        submit.disabled = true; routeStatus.textContent = 'Ищем АЗС вдоль маршрута…';
+        try {
+            const response = await fetch(`/api/fuel/route-stations?${query.toString()}`, {headers: {'Accept': 'application/json'}});
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.detail || 'Не удалось построить маршрут');
+            routePoints = [[Number(payload.start.latitude), Number(payload.start.longitude)], [Number(payload.end.latitude), Number(payload.end.longitude)]];
+            routeStations = payload.stations.map(item => {
+                const fuels = item.fuels || [];
+                const fuelStates = fuels.map(fuel => fuel.state);
+                const summary = fuelStates.includes('available') ? 'available' : (fuelStates.includes('low') ? 'low' : (fuelStates.length && fuelStates.every(value => value === 'unavailable') ? 'unavailable' : 'unknown'));
+                return {...item, id: item.station_id, route: true, name: item.brand || item.name || 'АЗС', address: item.address || 'Адрес не указан', fuels, summary_state: summary, updated_text: routeUpdatedText(item.updated_at), distance_from_start_km: Number(item.distance_from_start_km), distance_to_route_km: Number(item.distance_to_route_km)};
+            });
+            routeLoaded = true; closeMobileSheet(); render();
+        } catch (error) {
+            routeLoaded = false; routeStations = []; routePoints = []; routeResults.hidden = true;
+            routeStatus.textContent = error instanceof Error ? error.message : 'Не удалось построить маршрут';
+            document.getElementById('fuelMap').hidden = true; mapEmpty.hidden = false; mapEmpty.textContent = 'Не удалось показать маршрут. Проверьте координаты и повторите попытку.';
+        } finally { submit.disabled = false; }
+    });
     statusFilter.addEventListener('change', () => { state.status = statusFilter.value; render(); });
     brandFilter.addEventListener('change', () => { state.brand = brandFilter.value; render(); });
     onlyAvailable.addEventListener('change', () => { state.only = onlyAvailable.checked; render(); });
@@ -269,9 +350,14 @@
     document.querySelector('[data-filter-close]').addEventListener('click', closeFilters);
     document.addEventListener('pointerdown', event => { if (!mapSheet.hidden && !mapSheet.contains(event.target) && !event.target.closest('.fuel-map-marker')) closeMobileSheet(); });
     document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); closeMobileSheet(); } });
-    window.addEventListener('fuel:leaflet-ready', () => { if (state.view === 'map') renderMap(); });
-    window.addEventListener('fuel:leaflet-error', () => { if (state.view === 'map') renderMap(); });
-    window.addEventListener('load', () => { if (state.view === 'map') renderMap(); });
+    window.addEventListener('fuel:leaflet-ready', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
+    window.addEventListener('fuel:leaflet-error', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
+    window.addEventListener('load', () => { if (['map', 'route'].includes(state.view)) renderMap(); });
+    mobileMapQuery.addEventListener('change', () => {
+        closeMobileSheet();
+        if (leafletMap && leafletMap.closePopup) leafletMap.closePopup();
+        if (['map', 'route'].includes(state.view)) renderMap();
+    });
     render();
 })();
 </script>{% endif %}{% endblock %}
