@@ -1,44 +1,229 @@
 {% extends "base.html" %}
 {% block title %}Бензин{% endblock %}
-{% block body_class %}fuel-page{% endblock %}
+{% block body_class %}fuel-page fuel-dashboard-page{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+{% endblock %}
 {% block content %}
-<div class="page-head compact-head fuel-head">
-    <div><h1>Бензин</h1><div class="subline">Наличие топлива и прогноз поставок</div></div>
-    <div class="actions dashboard-actions"><a class="btn secondary" href="/fuel/settings">Настройки</a><a class="btn" href="/fuel/add">+ Добавить АЗС</a></div>
+<div class="page-head compact-head fuel-head fuel-dashboard-head">
+    <div><h1>Бензин</h1><div class="subline">Где сейчас есть нужное топливо</div></div>
+    <div class="actions dashboard-actions"><a class="btn" href="/fuel/add"><span aria-hidden="true">+</span> АЗС</a><a class="btn secondary" href="/fuel/settings">Настройки</a></div>
 </div>
-{% set last_success = collector.last_successful_poll_at or persistent_success %}
-<section class="card slim fuel-collector {{ 'off' if not collector.enabled else ('error' if collector.last_error else ('ok' if last_success else 'warn')) }}">
-    <span class="fuel-collector-dot" aria-hidden="true"></span>
-    <div>
-        <b>{% if not collector.enabled %}Мониторинг выключен{% elif collector.running %}Идёт проверка станций{% elif collector.last_error %}Мониторинг задерживается{% elif last_success %}Мониторинг работает{% else %}Ожидаем первый опрос{% endif %}</b>
-        <small>{% if last_success %}Последний успешный опрос {{ last_success|fuel_age }}{% else %}История ещё не получена{% endif %}{% if collector.next_poll_at and collector.enabled %} · следующий запуск {{ collector.next_poll_at|msk_datetime('%H:%M') }}{% endif %}</small>
-        {% if collector.last_error %}<small class="fuel-collector-error">{{ collector.last_error }}</small>{% endif %}
+
+{% if dashboard.stations %}
+<section class="fuel-dashboard-controls" aria-label="Фильтры АЗС">
+    <div class="fuel-quick-filters" role="group" aria-label="Вид топлива">
+        <button type="button" data-fuel="all" aria-pressed="true">Все</button>
+        {% for fuel_type in ('95', '98', '100') %}<button type="button" data-fuel="{{ fuel_type }}" aria-pressed="false">{{ fuel_type }}</button>{% endfor %}
+    </div>
+    <div class="fuel-toolbar-line">
+        <button class="btn secondary fuel-filter-open" type="button" aria-controls="fuelFilterPanel" aria-expanded="false">Фильтры</button>
+        <div class="fuel-filter-panel" id="fuelFilterPanel" role="dialog" aria-labelledby="fuelFilterTitle">
+            <div class="fuel-filter-panel-head"><b id="fuelFilterTitle">Фильтры</b><button class="icon-btn fuel-filter-close" type="button" aria-label="Закрыть фильтры">×</button></div>
+            <label>Состояние<select id="fuelStatusFilter"><option value="all">Все состояния</option><option value="available">Есть</option><option value="candidate">Возможное</option><option value="unavailable">Нет</option><option value="unknown">Нет данных</option></select></label>
+            <label>Сеть<select id="fuelBrandFilter"><option value="all">Все сети</option>{% for brand in dashboard.brands %}<option value="{{ brand }}">{{ brand }}</option>{% endfor %}</select></label>
+            <label>Сортировка<select id="fuelSort"><option value="usefulness">По наличию</option><option value="freshness">По свежести</option><option value="name">По названию</option><option value="distance">По расстоянию</option></select></label>
+            <label class="check-row fuel-only-available"><input id="fuelOnlyAvailable" type="checkbox"> Только где сейчас есть топливо</label>
+            <p class="subline fuel-location-status" aria-live="polite"></p>
+            <div class="actions fuel-filter-actions"><button class="btn" type="button" data-filter-apply>Применить</button><button class="btn secondary" type="button" data-filter-reset>Сбросить</button></div>
+        </div>
+        <div class="fuel-view-toggle" role="group" aria-label="Режим отображения"><button type="button" data-view="list" aria-pressed="true">Список</button><button type="button" data-view="map" aria-pressed="false">Карта</button></div>
     </div>
 </section>
-<section class="card slim fuel-today-summary">
-    <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ today_digest.confirmed_appearances }} · возможных: {{ today_digest.candidates }} · поставок: {{ today_digest.confirmed_deliveries + today_digest.probable_deliveries }} · подтверждённое наличие: {{ today_digest.confirmed_duration_minutes }} мин</span></div>
-    <a class="btn secondary" href="/fuel/settings">Уведомления</a>
-</section>
-<section class="fuel-upcoming">
-    <div class="card-head"><div><h2>Ближайшие вероятные поставки</h2><p class="subline">Прогноз только по событиям с достаточными признаками поставки</p></div></div>
-    {% if upcoming %}<div class="fuel-forecast-strip">
-        {% for forecast in upcoming %}{% set station = station_by_id[forecast.station_id] %}
-        <a class="card fuel-upcoming-card" href="/fuel/{{ station.id }}"><span class="pill">АИ-{{ forecast.fuel_type }}</span><b>{{ station.brand or station.name or 'АЗС' }}</b><small>{{ station.address or '' }}</small><strong>~{{ forecast.expected_at|msk_datetime('%d.%m %H:%M') }}</strong><span>{{ forecast.range_from|msk_datetime('%H:%M') }}–{{ forecast.range_to|msk_datetime('%H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span></a>
-        {% endfor %}
-    </div>{% else %}<div class="card fuel-empty-inline"><span aria-hidden="true">◷</span><div><b>Недостаточно подтверждённых поставок</b><small>Краткие появления топлива не используются для прогноза.</small></div></div>{% endif %}
-</section>
-{% if stations %}
-<div class="card-head fuel-stations-head"><h2>Мои АЗС</h2></div>
-<div class="fuel-station-grid">
-    {% for subscription in subscriptions %}{% set station = subscription.station %}<article class="card fuel-station-card">
-        <header><div class="fuel-brand-mark" aria-hidden="true">⛽</div><div><h2>{{ station.brand or station.name or 'АЗС' }}</h2><p>{{ station.address or 'Адрес не указан источником' }}</p></div></header>
-        <div class="fuel-status-list">
-            {% for fuel_type in subscription.tracked_fuel_types %}{% set item = latest.get((station.id, fuel_type)) %}{% set forecast = forecasts.get((station.id, fuel_type)) %}
-            <div class="fuel-status-row {{ item.state if item else 'unknown' }}"><b class="fuel-grade">{{ fuel_type }}</b><div class="fuel-status-copy"><div class="fuel-status-line"><strong>{% if not item %}Нет данных{% elif item.state == 'available' %}Есть{% elif item.state == 'low' %}Мало{% elif item.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong>{% if item and item.is_stale %}<span class="pill fuel-stale-badge">Данные устарели</span>{% endif %}</div><small>{% if item %}обновлено {{ item.observed_at|fuel_age }}{% else %}ожидаем первый опрос{% endif %}</small>{% if forecast %}<span>Вероятная поставка: {{ forecast.range_from|msk_datetime('%d.%m %H:%M') }}–{{ forecast.range_to|msk_datetime('%H:%M') }} · {{ (forecast.confidence * 100)|round|int }}%</span>{% else %}<span>Недостаточно подтверждённых поставок</span>{% endif %}</div></div>
-            {% endfor %}
-        </div>
-        <footer><span>Опрос {{ station.last_successful_poll_at|fuel_age if station.last_successful_poll_at else 'ещё не выполнялся' }}</span><div class="actions"><a class="btn secondary" href="/fuel/{{ station.id }}">Подробнее</a><a class="icon-btn" href="/fuel/{{ station.id }}/settings" aria-label="Настроить АЗС" title="Настроить АЗС">⋯</a></div></footer>
-    </article>{% endfor %}
+
+<div class="fuel-dashboard-meta">
+    <span><b data-visible-count>{{ dashboard.stations|length }}</b> АЗС · {% if dashboard.last_updated_at %}обновлено {{ dashboard.last_updated_at|fuel_age }}{% else %}данных пока нет{% endif %}</span>
+    <a class="fuel-collector-link {{ 'off' if not collector.enabled else ('error' if collector.last_error else 'ok') }}" href="/fuel/settings"><span aria-hidden="true">●</span> {% if not collector.enabled %}Мониторинг выключен{% elif collector.last_error %}Обновление задерживается{% else %}Данные обновляются{% endif %}</a>
 </div>
-{% else %}<section class="card vehicle-empty"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС, чтобы HomeOS начал показывать наличие и прогнозы.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
+
+<div class="fuel-station-grid fuel-dashboard-list" data-fuel-list>
+    {% for station in dashboard.stations %}
+    <a class="card fuel-station-card fuel-compact-station-card" href="/fuel/{{ station.id }}" data-station-id="{{ station.id }}" data-brand="{{ station.brand }}" data-summary-state="{{ station.summary_state }}" data-updated="{{ station.updated_epoch }}" aria-label="{{ station.name }}, {{ station.address }}">
+        <header><div><h2>{{ station.name }}</h2><p>{{ station.address }}</p></div><span aria-hidden="true">›</span></header>
+        <div class="fuel-compact-statuses">
+            {% for fuel in station.fuels %}<div class="fuel-compact-status {{ fuel.state }}" data-fuel-type="{{ fuel.fuel_type }}" data-state="{{ fuel.state }}"><b>{{ fuel.fuel_type }}</b><span><i aria-hidden="true">{{ fuel.symbol }}</i> {{ fuel.label }}</span></div>{% endfor %}
+        </div>
+        <footer>{{ station.updated_text }}</footer>
+    </a>
+    {% endfor %}
+</div>
+
+<section class="fuel-map-panel" data-fuel-map-panel hidden aria-label="Карта отслеживаемых АЗС">
+    <div id="fuelMap" class="fuel-map" aria-label="Карта АЗС"></div>
+    <div class="empty small fuel-map-empty" hidden>По выбранным фильтрам АЗС не найдено.</div>
+</section>
+<section class="card fuel-filter-empty" hidden><h2>По выбранным фильтрам АЗС не найдено</h2><button class="btn secondary" type="button" data-filter-reset>Сбросить фильтры</button></section>
+
+<section class="card slim fuel-today-summary">
+    <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ dashboard.confirmed_appearances }} · возможных: {{ dashboard.candidates }} · поставок: {{ dashboard.confirmed_deliveries + dashboard.probable_deliveries }} · подтверждённое наличие: {{ dashboard.confirmed_duration_minutes }} мин</span></div>
+</section>
+
+<aside class="fuel-map-sheet" data-map-sheet hidden aria-live="polite">
+    <button class="icon-btn" type="button" data-map-sheet-close aria-label="Закрыть карточку">×</button>
+    <div data-map-sheet-content></div>
+</aside>
+<script id="fuelDashboardData" type="application/json">{{ dashboard.stations|tojson }}</script>
+{% else %}
+<section class="card vehicle-empty fuel-no-stations"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>
+{% endif %}
 {% endblock %}
+
+{% block scripts %}{% if dashboard.stations %}<script>
+(function () {
+    const stations = JSON.parse(document.getElementById('fuelDashboardData').textContent);
+    const cards = new Map([...document.querySelectorAll('[data-station-id]')].map(card => [Number(card.dataset.stationId), card]));
+    const list = document.querySelector('[data-fuel-list]');
+    const mapPanel = document.querySelector('[data-fuel-map-panel]');
+    const mapEmpty = document.querySelector('.fuel-map-empty');
+    const filterEmpty = document.querySelector('.fuel-filter-empty');
+    const panel = document.getElementById('fuelFilterPanel');
+    const filterOpen = document.querySelector('.fuel-filter-open');
+    const statusFilter = document.getElementById('fuelStatusFilter');
+    const brandFilter = document.getElementById('fuelBrandFilter');
+    const sortSelect = document.getElementById('fuelSort');
+    const onlyAvailable = document.getElementById('fuelOnlyAvailable');
+    const locationStatus = document.querySelector('.fuel-location-status');
+    const mapSheet = document.querySelector('[data-map-sheet]');
+    let leafletMap = null;
+    let markerLayer = null;
+    let userLocation = null;
+    let filteredStations = [];
+    function savedView() { try { return localStorage.getItem('fuel-dashboard-view'); } catch (error) { return null; } }
+    const allowed = {fuel: ['all', '95', '98', '100'], status: ['all', 'available', 'candidate', 'unavailable', 'unknown'], sort: ['usefulness', 'freshness', 'name', 'distance'], view: ['list', 'map']};
+    const params = new URLSearchParams(location.search);
+    const state = {
+        fuel: allowed.fuel.includes(params.get('fuel')) ? params.get('fuel') : 'all',
+        status: allowed.status.includes(params.get('status')) ? params.get('status') : 'all',
+        brand: params.get('brand') || 'all',
+        sort: allowed.sort.includes(params.get('sort')) ? params.get('sort') : 'usefulness',
+        only: params.get('only') === '1',
+        view: allowed.view.includes(params.get('view')) ? params.get('view') : (savedView() || 'list')
+    };
+    if (!allowed.view.includes(state.view)) state.view = 'list';
+
+    function fuelEntry(station) { return state.fuel === 'all' ? null : station.fuels.find(item => item.fuel_type === state.fuel); }
+    function stationState(station) { return state.fuel === 'all' ? station.summary_state : (fuelEntry(station) || {}).state; }
+    function matches(station) {
+        const current = stationState(station);
+        if (!current) return false;
+        return (state.status === 'all' || current === state.status)
+            && (state.brand === 'all' || station.brand === state.brand)
+            && (!state.only || current === 'available');
+    }
+    function usefulness(station) { return ({available: 0, candidate: 1, unavailable: 2, unknown: 3})[stationState(station)] ?? 4; }
+    function distance(station) {
+        if (!userLocation) return Infinity;
+        const radians = value => value * Math.PI / 180;
+        const dLat = radians(station.latitude - userLocation.latitude);
+        const dLon = radians(station.longitude - userLocation.longitude);
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(userLocation.latitude)) * Math.cos(radians(station.latitude)) * Math.sin(dLon / 2) ** 2;
+        return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+    function compare(a, b) {
+        if (state.sort === 'name') return a.name.localeCompare(b.name, 'ru');
+        if (state.sort === 'freshness') return b.updated_epoch - a.updated_epoch;
+        if (state.sort === 'distance') return distance(a) - distance(b);
+        return usefulness(a) - usefulness(b) || b.updated_epoch - a.updated_epoch;
+    }
+    function syncUrl() {
+        const next = new URLSearchParams();
+        if (state.fuel !== 'all') next.set('fuel', state.fuel);
+        if (state.status !== 'all') next.set('status', state.status);
+        if (state.brand !== 'all') next.set('brand', state.brand);
+        if (state.sort !== 'usefulness') next.set('sort', state.sort);
+        if (state.only) next.set('only', '1');
+        if (state.view !== 'list') next.set('view', state.view);
+        try { history.replaceState(null, '', location.pathname + (next.size ? '?' + next : '')); } catch (error) {}
+    }
+    function popupContent(station) {
+        const root = document.createElement('div'); root.className = 'fuel-map-card';
+        const title = document.createElement('b'); title.textContent = station.name; root.append(title);
+        const address = document.createElement('p'); address.textContent = station.address; root.append(address);
+        const statuses = document.createElement('dl');
+        station.fuels.forEach(fuel => {
+            const row = document.createElement('div'); const term = document.createElement('dt'); const value = document.createElement('dd');
+            term.textContent = fuel.fuel_type; value.textContent = `${fuel.symbol} ${fuel.label}`; value.className = fuel.state;
+            row.append(term, value); statuses.append(row);
+        });
+        root.append(statuses);
+        const updated = document.createElement('small'); updated.textContent = cards.get(station.id).querySelector('footer').textContent; root.append(updated);
+        const link = document.createElement('a'); link.className = 'btn'; link.href = `/fuel/${station.id}`; link.textContent = 'Подробнее'; root.append(link);
+        return root;
+    }
+    function openMobileSheet(station) { const content = mapSheet.querySelector('[data-map-sheet-content]'); content.replaceChildren(popupContent(station)); mapSheet.hidden = false; }
+    function renderMap() {
+        if (state.view !== 'map') return;
+        mapEmpty.hidden = filteredStations.length > 0;
+        mapEmpty.textContent = 'По выбранным фильтрам АЗС не найдено.';
+        document.getElementById('fuelMap').hidden = filteredStations.length === 0;
+        if (!filteredStations.length) return;
+        if (!window.L) {
+            document.getElementById('fuelMap').hidden = true;
+            mapEmpty.textContent = 'Не удалось загрузить карту. Список АЗС продолжает работать.';
+            mapEmpty.hidden = false;
+            return;
+        }
+        if (!leafletMap) {
+            leafletMap = L.map('fuelMap', {zoomControl: true});
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(leafletMap);
+            markerLayer = L.layerGroup().addTo(leafletMap);
+        }
+        markerLayer.clearLayers();
+        const points = [];
+        filteredStations.forEach(station => {
+            const current = stationState(station) || 'unknown';
+            const symbol = ({available: '✓', candidate: '?', unavailable: '×', unknown: '·'})[current];
+            const stateLabel = ({available: 'есть', candidate: 'возможное наличие', unavailable: 'нет', unknown: 'нет данных'})[current];
+            const description = `${station.name}, ${station.address}, ${stateLabel}`;
+            const icon = L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [34, 34], iconAnchor: [17, 17]});
+            const marker = L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
+            if (marker.getElement()) marker.getElement().setAttribute('aria-label', description);
+            if (matchMedia('(max-width: 600px)').matches) marker.on('click', () => openMobileSheet(station));
+            else marker.bindPopup(popupContent(station), {maxWidth: 280});
+            points.push([station.latitude, station.longitude]);
+        });
+        setTimeout(() => {
+            leafletMap.invalidateSize();
+            if (points.length === 1) leafletMap.setView(points[0], 15);
+            else leafletMap.fitBounds(points, {padding: [28, 28], maxZoom: 15});
+        }, 0);
+    }
+    function render() {
+        filteredStations = stations.filter(matches).sort(compare);
+        cards.forEach(card => { card.hidden = true; });
+        filteredStations.forEach(station => { const card = cards.get(station.id); card.hidden = false; list.append(card); });
+        document.querySelector('[data-visible-count]').textContent = filteredStations.length;
+        list.hidden = state.view !== 'list'; mapPanel.hidden = state.view !== 'map';
+        filterEmpty.hidden = filteredStations.length > 0 || state.view === 'map';
+        document.querySelectorAll('[data-fuel]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.fuel === state.fuel)); });
+        document.querySelectorAll('[data-view]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
+        statusFilter.value = state.status; brandFilter.value = [...brandFilter.options].some(option => option.value === state.brand) ? state.brand : 'all'; state.brand = brandFilter.value;
+        sortSelect.value = state.sort; onlyAvailable.checked = state.only;
+        try { localStorage.setItem('fuel-dashboard-view', state.view); } catch (error) {}
+        syncUrl(); renderMap();
+    }
+    function closeFilters() { panel.classList.remove('open'); filterOpen.setAttribute('aria-expanded', 'false'); }
+    function requestLocation() {
+        if (!navigator.geolocation) { locationStatus.textContent = 'Геолокация недоступна — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); return; }
+        locationStatus.textContent = 'Определяем местоположение…';
+        navigator.geolocation.getCurrentPosition(position => {
+            userLocation = position.coords; locationStatus.textContent = 'Сортировка по расстоянию включена.'; render();
+        }, () => { locationStatus.textContent = 'Нет доступа к геолокации — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
+    }
+    document.querySelectorAll('[data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
+    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; render(); }));
+    statusFilter.addEventListener('change', () => { state.status = statusFilter.value; render(); });
+    brandFilter.addEventListener('change', () => { state.brand = brandFilter.value; render(); });
+    onlyAvailable.addEventListener('change', () => { state.only = onlyAvailable.checked; render(); });
+    sortSelect.addEventListener('change', () => { state.sort = sortSelect.value; if (state.sort === 'distance' && !userLocation) requestLocation(); else render(); });
+    filterOpen.addEventListener('click', () => { panel.classList.add('open'); filterOpen.setAttribute('aria-expanded', 'true'); panel.querySelector('select').focus(); });
+    panel.querySelector('.fuel-filter-close').addEventListener('click', closeFilters);
+    panel.querySelector('[data-filter-apply]').addEventListener('click', closeFilters);
+    document.querySelectorAll('[data-filter-reset]').forEach(button => button.addEventListener('click', () => { state.fuel = state.status = state.brand = 'all'; state.sort = 'usefulness'; state.only = false; locationStatus.textContent = ''; closeFilters(); render(); }));
+    mapSheet.querySelector('[data-map-sheet-close]').addEventListener('click', () => { mapSheet.hidden = true; });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeFilters(); mapSheet.hidden = true; } });
+    window.addEventListener('load', () => { if (state.view === 'map') renderMap(); });
+    render();
+})();
+</script>{% endif %}{% endblock %}

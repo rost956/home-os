@@ -6,6 +6,7 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from sqlalchemy import event
 
 import app.main as main_module
 import app.services.fuel as fuel_module
@@ -44,6 +45,7 @@ from app.services.fuel_analytics import (
     refresh_forecasts,
     station_correlations,
 )
+from app.services.fuel_dashboard import load_fuel_dashboard
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 from app.services.fuel_timeline import build_fuel_timeline
 from app.timezone import format_msk
@@ -162,10 +164,68 @@ def test_fuel_dashboard_renders_forecast_stale_and_collector_error(client, login
     finally:
         main_module.collector_health.last_error = previous_error
     assert response.status_code == 200
-    assert "Мониторинг задерживается" in response.text
-    assert "GdeBenz HTTP 503" in response.text
-    assert "Данные устарели" in response.text
-    assert "72%" in response.text
+    assert "Обновление задерживается" in response.text
+    assert "GdeBenz HTTP 503" not in response.text
+    assert "НЕТ ДАННЫХ" in response.text
+    assert "72%" not in response.text
+
+
+def test_fuel_dashboard_states_brands_and_privacy_are_built_in_batches(db, make_user):
+    first = make_user("fuel-dashboard-a")
+    second = make_user("fuel-dashboard-b")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    shared = FuelStation(
+        owner_id=first.id, provider="gdebenz", provider_station_id="shared-dashboard",
+        brand="Teboil", address="Ветеранов, 188/1", latitude=59.8, longitude=30.1,
+    )
+    private = FuelStation(
+        owner_id=second.id, provider="gdebenz", provider_station_id="private-dashboard",
+        brand="Татнефть", address="Чужая АЗС", latitude=59.7, longitude=30.2,
+    )
+    db.add_all([shared, private])
+    db.flush()
+    add_subscription(db, first, shared, ("95", "98"))
+    add_subscription(db, second, shared, ("100",))
+    add_subscription(db, second, private, ("95",))
+    before = FuelObservation(
+        station_id=shared.id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=8)
+    )
+    available = FuelObservation(
+        station_id=shared.id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=3)
+    )
+    candidate = FuelObservation(
+        station_id=shared.id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=2)
+    )
+    db.add_all([before, available, candidate])
+    db.flush()
+    db.add(FuelDeliveryEvent(
+        station_id=shared.id, fuel_type="98", window_start=before.observed_at,
+        window_end=candidate.observed_at, estimated_at=candidate.observed_at,
+        event_type="candidate_appearance", confidence=.4, appearance_confidence=.4,
+        before_observation_id=before.id, after_observation_id=candidate.id,
+        detection_reason="dashboard candidate", evidence_json={}, detector_version="test",
+    ))
+    db.commit()
+    first_id = first.id
+
+    statements = []
+
+    def record(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    event.listen(app_engine, "before_cursor_execute", record)
+    try:
+        dashboard = load_fuel_dashboard(db, first_id, stale_after_minutes=120, current_at=now)
+    finally:
+        event.remove(app_engine, "before_cursor_execute", record)
+
+    assert len(statements) == 4
+    assert [station["id"] for station in dashboard.stations] == [shared.id]
+    assert dashboard.brands == ["Teboil"]
+    assert {fuel["fuel_type"]: fuel["state"] for fuel in dashboard.stations[0]["fuels"]} == {
+        "95": "available", "98": "candidate"
+    }
+    assert dashboard.stations[0]["summary_state"] == "available"
 
 
 def test_fuel_settings_default_to_env_and_database_override_persists(db):
@@ -1546,5 +1606,131 @@ def test_mobile_timeline_stress_layout_and_single_popover(client, login, make_us
             assert page.evaluate(
                 "() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth"
             )
+        finally:
+            browser.close()
+
+
+def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, make_user, db):
+    playwright = pytest.importorskip("playwright.sync_api")
+    user = make_user("fuel-dashboard-browser")
+    other = make_user("fuel-dashboard-private")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stations = [
+        FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="ui-a", brand="Teboil", address="Ветеранов, 188/1", latitude=59.835, longitude=30.121),
+        FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="ui-b", brand="Газпромнефть", address="Ленинский, 90", latitude=59.85, longitude=30.15),
+        FuelStation(owner_id=user.id, provider="gdebenz", provider_station_id="ui-c", brand="Татнефть", address="Маршала Жукова, 10", latitude=59.82, longitude=30.17),
+        FuelStation(owner_id=other.id, provider="gdebenz", provider_station_id="ui-private", brand="Скрытая сеть", address="Чужая АЗС", latitude=60.0, longitude=30.0),
+    ]
+    db.add_all(stations)
+    db.flush()
+    add_subscription(db, user, stations[0], ("95", "98"))
+    add_subscription(db, user, stations[1], ("95",))
+    add_subscription(db, user, stations[2], ("100",))
+    add_subscription(db, other, stations[0], ("100",))
+    add_subscription(db, other, stations[3], ("95",))
+    before = FuelObservation(station_id=stations[0].id, fuel_type="98", state="unavailable", observed_at=now - timedelta(minutes=9))
+    available_95 = FuelObservation(station_id=stations[0].id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=2))
+    candidate_98 = FuelObservation(station_id=stations[0].id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=1))
+    unavailable_95 = FuelObservation(station_id=stations[1].id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=3))
+    db.add_all([before, available_95, candidate_98, unavailable_95])
+    db.flush()
+    db.add(FuelDeliveryEvent(
+        station_id=stations[0].id, fuel_type="98", window_start=before.observed_at,
+        window_end=candidate_98.observed_at, estimated_at=candidate_98.observed_at,
+        event_type="candidate_appearance", confidence=.35, appearance_confidence=.35,
+        before_observation_id=before.id, after_observation_id=candidate_98.id,
+        detection_reason="browser candidate", evidence_json={}, detector_version="test",
+    ))
+    db.commit()
+    login(user.username)
+    response = client.get("/fuel")
+    assert response.status_code == 200
+    assert "Скрытая сеть" not in response.text
+    assert "Чужая АЗС" not in response.text
+
+    leaflet_stub = r"""
+    window.fuelGeoCalls = 0;
+    Object.defineProperty(navigator, 'geolocation', {configurable: true, value: {
+      getCurrentPosition(success){ window.fuelGeoCalls += 1; success({coords: {latitude: 59.84, longitude: 30.12}}); }
+    }});
+    window.L = {
+      map: id => ({invalidateSize(){}, setView(){}, fitBounds(){}}),
+      tileLayer: () => ({addTo(){ return this; }}),
+      layerGroup: () => ({
+        elements: [], addTo(){ return this; },
+        clearLayers(){ this.elements.forEach(item => item.remove()); this.elements = []; document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); }
+      }),
+      divIcon: options => options,
+      marker: (point, options) => {
+        const handlers = {};
+        const element = document.createElement('button');
+        element.type = 'button'; element.className = options.icon.className; element.innerHTML = options.icon.html; element.title = options.title;
+        const marker = {
+          addTo(layer){ document.getElementById('fuelMap').append(element); layer.elements.push(element); return marker; },
+          getElement(){ return element; },
+          on(name, callback){ handlers[name] = callback; element.addEventListener(name, callback); return marker; },
+          bindPopup(content){ element.addEventListener('click', () => { document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); const popup = document.createElement('div'); popup.className = 'leaflet-popup'; popup.append(content); document.getElementById('fuelMap').append(popup); }); return marker; }
+        };
+        return marker;
+      }
+    };
+    """
+    browser_paths = [
+        shutil.which(name) for name in ("msedge", "google-chrome", "chromium", "chromium-browser")
+    ] + [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]
+    executable = next((path for path in browser_paths if path and Path(path).exists()), None)
+    with playwright.sync_playwright() as manager:
+        try:
+            browser = manager.chromium.launch(headless=True, executable_path=executable) if executable else manager.chromium.launch(headless=True)
+        except playwright.Error as exc:
+            pytest.skip(f"Chromium browser is unavailable: {exc}")
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.evaluate(leaflet_stub)
+            page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", lambda route: route.fulfill(content_type="text/css", body=""))
+            page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", lambda route: route.abort())
+            page.set_content(response.text, wait_until="load")
+            page.add_style_tag(content=Path("app/static/style.css").read_text(encoding="utf-8"))
+
+            assert page.locator("[data-station-id]:visible").count() == 3
+            assert page.evaluate("window.fuelGeoCalls") == 0
+            page.locator('[data-fuel="95"]').click()
+            assert page.locator("[data-station-id]:visible").count() == 2
+            page.locator("#fuelOnlyAvailable").check()
+            assert page.locator("[data-station-id]:visible").count() == 1
+            page.locator("#fuelOnlyAvailable").uncheck()
+            page.locator("#fuelStatusFilter").select_option("available")
+            assert page.locator("[data-station-id]:visible").count() == 1
+            assert "Teboil" in page.locator("[data-station-id]:visible").text_content()
+            page.locator('[data-fuel="98"]').click()
+            page.locator("#fuelStatusFilter").select_option("candidate")
+            assert page.locator("[data-station-id]:visible").count() == 1
+            assert "ВОЗМОЖНО" in page.locator("[data-station-id]:visible").text_content()
+            page.locator("#fuelBrandFilter").select_option("Газпромнефть")
+            assert page.locator(".fuel-filter-empty").is_visible()
+            page.locator(".fuel-filter-empty [data-filter-reset]").click()
+            page.locator("#fuelSort").select_option("distance")
+            assert page.evaluate("window.fuelGeoCalls") == 1
+
+            page.locator('[data-view="map"]').click()
+            assert page.locator(".fuel-map-marker").count() == 3
+            page.locator(".fuel-map-marker").first.click()
+            assert page.locator(".leaflet-popup").is_visible()
+            assert page.locator(".leaflet-popup .btn").get_attribute("href").startswith("/fuel/")
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
+            page.locator('[data-view="list"]').click()
+            page.locator(".fuel-filter-open").click()
+            assert page.locator(".fuel-filter-panel").is_visible()
+            page.locator('[data-fuel="98"]').click()
+            page.locator("#fuelStatusFilter").select_option("candidate")
+            page.locator("[data-filter-apply]").click()
+            page.locator('[data-view="map"]').click()
+            assert page.locator(".fuel-map-marker").count() == 1
+            page.locator(".fuel-map-marker").click()
+            assert page.locator("[data-map-sheet]").is_visible()
+            assert "ВОЗМОЖНО" in page.locator("[data-map-sheet]").text_content()
+            assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
         finally:
             browser.close()

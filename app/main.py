@@ -128,13 +128,11 @@ from .services.fuel_analytics import (
     MIN_DELIVERY_CONFIDENCE,
     station_correlations,
 )
-from .services.fuel_notifications import (
-    build_daily_fuel_digest,
-    run_fuel_notification_cycle,
-)
+from .services.fuel_dashboard import load_fuel_dashboard
 from .services.fuel_notifications import (
     get_or_create_settings as get_fuel_notification_settings,
 )
+from .services.fuel_notifications import run_fuel_notification_cycle
 from .services.fuel_settings import (
     FuelRuntimeSettings,
     get_fuel_runtime_settings,
@@ -2766,76 +2764,15 @@ def render_vehicle_form(request: Request, *, user: User, form: dict[str, str], v
 
 @app.get("/fuel")
 def fuel_page(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    subscriptions = db.scalars(
-        select(FuelStationSubscription).options(selectinload(FuelStationSubscription.station)).where(
-            FuelStationSubscription.user_id == user.id,
-            FuelStationSubscription.enabled.is_(True),
-        ).order_by(FuelStationSubscription.updated_at.desc())
-    ).all()
-    stations = [item.station for item in subscriptions]
-    tracked_by_station = {item.station_id: set(_tracked_fuels(item)) for item in subscriptions}
-    station_ids = [station.id for station in stations]
-    latest: dict[tuple[int, str], FuelObservation] = {}
-    forecasts: dict[tuple[int, str], FuelForecast] = {}
-    if station_ids:
-        observation_times = select(
-            FuelObservation.station_id,
-            FuelObservation.fuel_type,
-            func.max(FuelObservation.observed_at).label("latest_at"),
-        ).where(FuelObservation.station_id.in_(station_ids)).group_by(
-            FuelObservation.station_id, FuelObservation.fuel_type
-        ).subquery()
-        current_observations = db.scalars(
-            select(FuelObservation).join(
-                observation_times,
-                and_(
-                    FuelObservation.station_id == observation_times.c.station_id,
-                    FuelObservation.fuel_type == observation_times.c.fuel_type,
-                    FuelObservation.observed_at == observation_times.c.latest_at,
-                ),
-            )
-        ).all()
-        latest = {(item.station_id, item.fuel_type): item for item in current_observations}
-
-        forecast_times = select(
-            FuelForecast.station_id,
-            FuelForecast.fuel_type,
-            func.max(FuelForecast.generated_at).label("latest_at"),
-        ).where(
-            FuelForecast.station_id.in_(station_ids),
-            FuelForecast.model_version == FORECAST_VERSION,
-        ).group_by(
-            FuelForecast.station_id, FuelForecast.fuel_type
-        ).subquery()
-        current_forecasts = db.scalars(
-            select(FuelForecast).join(
-                forecast_times,
-                and_(
-                    FuelForecast.station_id == forecast_times.c.station_id,
-                    FuelForecast.fuel_type == forecast_times.c.fuel_type,
-                    FuelForecast.generated_at == forecast_times.c.latest_at,
-                ),
-            )
-        ).all()
-        forecasts = {(item.station_id, item.fuel_type): item for item in current_forecasts}
-    upcoming = sorted(
-        (
-            item for item in forecasts.values()
-            if item and item.fuel_type in tracked_by_station.get(item.station_id, set())
-            and item.range_to >= utc_now_naive()
-        ),
-        key=lambda item: item.expected_at,
-    )
-    persistent_success = max((item.last_successful_poll_at for item in stations if item.last_successful_poll_at), default=None)
     runtime = get_fuel_runtime_settings(db)
-    today_digest = build_daily_fuel_digest(
-        db, user.id, msk_today(), stale_after_minutes=runtime.stale_after_minutes
+    dashboard = load_fuel_dashboard(
+        db, user.id, stale_after_minutes=runtime.stale_after_minutes
     )
-    return render(request, "fuel.html", {"user": user, "stations": stations,
-        "station_by_id": {item.id: item for item in stations}, "latest": latest, "forecasts": forecasts,
-        "upcoming": upcoming[:6], "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
-        "persistent_success": persistent_success, "subscriptions": subscriptions,
-        "tracked_by_station": tracked_by_station, "today_digest": today_digest})
+    return render(request, "fuel.html", {
+        "user": user,
+        "dashboard": dashboard,
+        "collector": collector_health.as_dict(enabled=runtime.monitor_enabled),
+    })
 
 
 def render_fuel_settings(
