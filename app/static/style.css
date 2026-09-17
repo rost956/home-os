@@ -2725,7 +2725,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-quick-filters, .fuel-view-toggle { display: flex; width: fit-content; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
 .fuel-quick-filters button, .fuel-view-toggle button { min-height: 36px; padding: 7px 14px; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
 .fuel-quick-filters button[aria-pressed="true"], .fuel-view-toggle button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 12%, transparent); }
-.fuel-toolbar-line { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.fuel-toolbar-line { display: flex; width: 100%; max-width: 100%; min-width: 0; align-items: end; justify-content: space-between; gap: 12px; }
 .fuel-dashboard-controls.trip-mode .fuel-quick-filters, .fuel-dashboard-controls.trip-mode .fuel-filter-open, .fuel-dashboard-controls.trip-mode .fuel-filter-panel { display: none; }
 .fuel-dashboard-controls.trip-mode .fuel-toolbar-line { justify-content: flex-end; }
 .fuel-filter-open { display: none; }
@@ -2864,7 +2864,8 @@ html[data-theme="dark"] .success-alert {
     .fuel-quick-filters button { min-width: 0; flex: 1; padding-inline: 8px; }
     .fuel-dashboard-meta { align-items: flex-start; flex-direction: column; }
     .fuel-dashboard-list { grid-template-columns: 1fr; }
-    .fuel-view-toggle { width: 100%; }
+    .fuel-toolbar-line > .fuel-filter-open { flex: 0 0 auto; }
+    .fuel-view-toggle { width: auto; max-width: 100%; min-width: 0; flex: 1 1 0; }
     .fuel-view-toggle button { min-width: 0; flex: 1; padding-inline: 8px; }
     .fuel-trip-panel { padding: 14px; }
     .fuel-trip-form .form-row, .fuel-trip-form .three-cols { grid-template-columns: 1fr; }
