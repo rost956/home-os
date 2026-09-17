@@ -342,7 +342,7 @@
         try { localStorage.setItem('fuel-dashboard-view', mode); } catch (error) {}
         syncUrl();
         renderTripPlan();
-        if (mapMode) requestAnimationFrame(() => renderMap());
+        if (mapMode) renderMap();
     }
     function render() {
         filteredStations = stations.filter(matches).sort(compare);
