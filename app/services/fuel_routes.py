@@ -19,26 +19,34 @@ MAX_ROUTE_LENGTH_KM = 250.0
 MAX_ROUTE_REQUESTS = 50
 ROUTE_STATUS_LABELS = {
     "available": "ЕСТЬ",
-    "low": "МАЛО / ОЧЕРЕДЬ",
+    "candidate": "ВОЗМОЖНО",
+    "low": "ЕСТЬ",
     "unavailable": "НЕТ",
     "unknown": "НЕТ ДАННЫХ",
 }
 ROUTE_STATUS_SYMBOLS = {
     "available": "✓",
+    "candidate": "?",
     "low": "!",
     "unavailable": "×",
     "unknown": "·",
 }
 
 
-def _route_fuel_statuses(raw: dict[str, Any]) -> list[dict[str, str]]:
+def _route_fuel_statuses(raw: dict[str, Any]) -> list[dict[str, Any]]:
     states = normalize_fuel_states(raw)
+    has_queue = str(raw.get("status") or "").lower() == "queue"
     return [
         {
             "fuel_type": fuel_type,
-            "state": states[fuel_type],
-            "label": ROUTE_STATUS_LABELS[states[fuel_type]],
-            "symbol": ROUTE_STATUS_SYMBOLS[states[fuel_type]],
+            "state": "candidate" if states[fuel_type] == "available" else states[fuel_type],
+            "label": ROUTE_STATUS_LABELS[
+                "candidate" if states[fuel_type] == "available" else states[fuel_type]
+            ],
+            "symbol": ROUTE_STATUS_SYMBOLS[
+                "candidate" if states[fuel_type] == "available" else states[fuel_type]
+            ],
+            "has_queue": has_queue and states[fuel_type] == "available",
         }
         for fuel_type in FUEL_TYPES
     ]

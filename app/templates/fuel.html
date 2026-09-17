@@ -32,7 +32,41 @@
     </div>
 </section>
 
-<section class="card fuel-trip-panel" data-trip-panel hidden aria-labelledby="fuelTripTitle">
+<section class="fuel-view fuel-view-list" data-fuel-view="list">
+<div class="fuel-dashboard-meta" data-dashboard-meta>
+    <span><b data-visible-count>{{ dashboard.stations|length }}</b> АЗС · {% if dashboard.last_updated_at %}обновлено {{ dashboard.last_updated_at|fuel_age }}{% else %}данных пока нет{% endif %}</span>
+    <a class="fuel-collector-link {{ 'off' if not collector.enabled else ('error' if collector.last_error else 'ok') }}" href="/fuel/settings"><span aria-hidden="true">●</span> {% if not collector.enabled %}Мониторинг выключен{% elif collector.last_error %}Обновление задерживается{% else %}Данные обновляются{% endif %}</a>
+</div>
+
+<div class="fuel-station-grid fuel-dashboard-list" data-fuel-list>
+    {% for station in dashboard.stations %}
+    <a class="card fuel-station-card fuel-compact-station-card" href="/fuel/{{ station.id }}" data-station-id="{{ station.id }}" data-brand="{{ station.brand }}" data-summary-state="{{ station.summary_state }}" data-updated="{{ station.updated_epoch }}" aria-label="{{ station.name }}, {{ station.address }}">
+        <header><div><h2>{{ station.name }}</h2><p>{{ station.address }}</p></div><span aria-hidden="true">›</span></header>
+        <div class="fuel-compact-statuses">
+            {% for fuel in station.fuels %}<div class="fuel-compact-status {{ fuel.state }}" data-fuel-type="{{ fuel.fuel_type }}" data-state="{{ fuel.state }}"><b>{{ fuel.fuel_type }}</b><span><i aria-hidden="true">{{ fuel.symbol }}</i> {{ fuel.label }}</span>{% if fuel.has_queue %}<small>Очередь</small>{% endif %}</div>{% endfor %}
+        </div>
+        <footer>{{ station.updated_text }}</footer>
+    </a>
+    {% endfor %}
+    {% if not dashboard.stations %}<section class="card vehicle-empty fuel-no-stations"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС или рассчитайте поездку.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
+</div>
+<section class="card fuel-filter-empty" hidden><h2>По выбранным фильтрам АЗС не найдено</h2><button class="btn secondary" type="button" data-filter-reset>Сбросить фильтры</button></section>
+<section class="card slim fuel-today-summary" data-dashboard-summary>
+    <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ dashboard.confirmed_appearances }} · возможных: {{ dashboard.candidates }} · поставок: {{ dashboard.confirmed_deliveries + dashboard.probable_deliveries }} · подтверждённое наличие: {{ dashboard.confirmed_duration_minutes }} мин</span></div>
+</section>
+</section>
+
+<section class="fuel-view fuel-view-map" data-fuel-view="map" hidden>
+    <div data-fuel-map-host="map">
+        <section class="fuel-map-panel" data-fuel-map-panel aria-label="Карта отслеживаемых АЗС">
+            <div id="fuelMap" class="fuel-map" aria-label="Карта АЗС"></div>
+            <div class="empty small fuel-map-empty" hidden>По выбранным фильтрам АЗС не найдено.</div>
+        </section>
+    </div>
+</section>
+
+<section class="fuel-view fuel-view-trip" data-fuel-view="trip" hidden>
+<section class="card fuel-trip-panel" data-trip-panel aria-labelledby="fuelTripTitle">
     <div class="fuel-trip-heading"><h2 id="fuelTripTitle">Планирование поездки</h2><p>Расчёт использует безопасный остаток топлива и актуальные данные АЗС.</p></div>
     <form class="form fuel-trip-form" data-trip-form>
         <div class="form-row two-cols"><label>Автомобиль<select name="vehicle_id" required><option value="">Выберите автомобиль</option>{% for vehicle in trip_vehicles %}<option value="{{ vehicle.id }}" data-consumption="{{ vehicle.consumption_l_per_100km or '' }}">{{ vehicle.title }}</option>{% endfor %}</select></label><label>Топливо<select name="fuel_type" required><option value="95">АИ-95</option><option value="98">АИ-98</option><option value="100">АИ-100</option></select></label></div>
@@ -44,34 +78,8 @@
     <p class="subline fuel-trip-status" data-trip-status aria-live="polite">Поездка ещё не рассчитана.</p>
 </section>
 <section class="fuel-trip-summary" data-trip-summary hidden aria-label="Расчёт поездки"></section>
-
-<div class="fuel-dashboard-meta" data-dashboard-meta>
-    <span><b data-visible-count>{{ dashboard.stations|length }}</b> АЗС · {% if dashboard.last_updated_at %}обновлено {{ dashboard.last_updated_at|fuel_age }}{% else %}данных пока нет{% endif %}</span>
-    <a class="fuel-collector-link {{ 'off' if not collector.enabled else ('error' if collector.last_error else 'ok') }}" href="/fuel/settings"><span aria-hidden="true">●</span> {% if not collector.enabled %}Мониторинг выключен{% elif collector.last_error %}Обновление задерживается{% else %}Данные обновляются{% endif %}</a>
-</div>
-
-<div class="fuel-station-grid fuel-dashboard-list" data-fuel-list>
-    {% for station in dashboard.stations %}
-    <a class="card fuel-station-card fuel-compact-station-card" href="/fuel/{{ station.id }}" data-station-id="{{ station.id }}" data-brand="{{ station.brand }}" data-summary-state="{{ station.summary_state }}" data-updated="{{ station.updated_epoch }}" aria-label="{{ station.name }}, {{ station.address }}">
-        <header><div><h2>{{ station.name }}</h2><p>{{ station.address }}</p></div><span aria-hidden="true">›</span></header>
-        <div class="fuel-compact-statuses">
-            {% for fuel in station.fuels %}<div class="fuel-compact-status {{ fuel.state }}" data-fuel-type="{{ fuel.fuel_type }}" data-state="{{ fuel.state }}"><b>{{ fuel.fuel_type }}</b><span><i aria-hidden="true">{{ fuel.symbol }}</i> {{ fuel.label }}</span></div>{% endfor %}
-        </div>
-        <footer>{{ station.updated_text }}</footer>
-    </a>
-    {% endfor %}
-    {% if not dashboard.stations %}<section class="card vehicle-empty fuel-no-stations"><div><h2>Пока ничего не отслеживается</h2><p>Добавьте интересующие АЗС или рассчитайте поездку.</p><a class="btn" href="/fuel/add">Добавить АЗС</a></div></section>{% endif %}
-</div>
-
-<section class="fuel-map-panel" data-fuel-map-panel hidden aria-label="Карта отслеживаемых АЗС">
-    <div id="fuelMap" class="fuel-map" aria-label="Карта АЗС"></div>
-    <div class="empty small fuel-map-empty" hidden>По выбранным фильтрам АЗС не найдено.</div>
-</section>
+<div data-fuel-map-host="trip"></div>
 <section class="fuel-trip-results" data-trip-results hidden aria-label="Рекомендуемые остановки"></section>
-<section class="card fuel-filter-empty" hidden><h2>По выбранным фильтрам АЗС не найдено</h2><button class="btn secondary" type="button" data-filter-reset>Сбросить фильтры</button></section>
-
-<section class="card slim fuel-today-summary" data-dashboard-summary>
-    <div><b>Итоги сегодня</b><span>Подтверждённых появлений: {{ dashboard.confirmed_appearances }} · возможных: {{ dashboard.candidates }} · поставок: {{ dashboard.confirmed_deliveries + dashboard.probable_deliveries }} · подтверждённое наличие: {{ dashboard.confirmed_duration_minutes }} мин</span></div>
 </section>
 
 <aside class="fuel-map-sheet" data-map-sheet hidden role="dialog" aria-modal="false" aria-live="polite" aria-label="Информация об АЗС">
@@ -110,7 +118,9 @@
     const dashboardControls = document.querySelector('.fuel-dashboard-controls');
     const dashboardMeta = document.querySelector('[data-dashboard-meta]');
     const dashboardSummary = document.querySelector('[data-dashboard-summary]');
-    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet, tripPanel, tripForm, tripStatus, tripSummary, tripResults, dashboardControls, dashboardMeta, dashboardSummary];
+    const fuelViews = new Map([...document.querySelectorAll('[data-fuel-view]')].map(view => [view.dataset.fuelView, view]));
+    const mapHosts = new Map([...document.querySelectorAll('[data-fuel-map-host]')].map(host => [host.dataset.fuelMapHost, host]));
+    const required = [list, mapPanel, mapEmpty, filterEmpty, panel, filterOpen, statusFilter, brandFilter, sortSelect, onlyAvailable, locationStatus, mapSheet, tripPanel, tripForm, tripStatus, tripSummary, tripResults, dashboardControls, dashboardMeta, dashboardSummary, fuelViews.get('list'), fuelViews.get('map'), fuelViews.get('trip'), mapHosts.get('map'), mapHosts.get('trip')];
     if (required.some(element => !element)) { console.error('Fuel dashboard markup is incomplete'); return; }
     let leafletMap = null;
     let markerLayer = null;
@@ -121,6 +131,7 @@
     let tripPoints = [];
     let tripPlan = null;
     let activeMapStationId = null;
+    let renderedView = null;
     const mobileMapQuery = matchMedia('(max-width: 600px)');
     const mobileMap = () => mobileMapQuery.matches;
     document.body.append(mapSheet);
@@ -196,7 +207,7 @@
         ['95', '98', '100'].forEach(fuelType => {
             const fuel = station.fuels.find(item => item.fuel_type === fuelType) || {fuel_type: fuelType, state: 'untracked', symbol: '—', label: 'НЕ ОТСЛЕЖИВАЕТСЯ'};
             const row = document.createElement('div'); const term = document.createElement('dt'); const value = document.createElement('dd');
-            term.textContent = fuel.fuel_type; value.textContent = `${fuel.symbol} ${fuel.label}`; value.className = fuel.state;
+            term.textContent = fuel.fuel_type; value.textContent = `${fuel.symbol} ${fuel.label}${fuel.has_queue ? ' · ОЧЕРЕДЬ' : ''}`; value.className = fuel.state;
             row.append(term, value); statuses.append(row);
         });
         root.append(statuses);
@@ -292,7 +303,7 @@
         mapStations.forEach(station => {
             const current = stationState(station) || 'unknown';
             const symbol = ({available: '✓', candidate: '?', low: '!', unavailable: '×', unknown: '·'})[current] || '·';
-            const stateLabel = ({available: 'есть', candidate: 'возможное наличие', low: 'мало или очередь', unavailable: 'нет', unknown: 'нет данных'})[current] || 'нет данных';
+            const stateLabel = ({available: 'есть', candidate: 'возможное наличие', low: 'есть', unavailable: 'нет', unknown: 'нет данных'})[current] || 'нет данных';
             const description = `${station.name}, ${station.address}, ${stateLabel}`;
             const icon = window.L.divIcon({className: `fuel-map-marker ${current}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [44, 44], iconAnchor: [22, 22]});
             const marker = window.L.marker([station.latitude, station.longitude], {icon, title: description, alt: description}).addTo(markerLayer);
@@ -308,21 +319,42 @@
             else leafletMap.fitBounds(points, {padding: [28, 28], maxZoom: 15});
         }, 0);
     }
+    function setFuelView(mode) {
+        if (!allowed.view.includes(mode)) mode = 'list';
+        const changed = renderedView !== mode;
+        state.view = mode;
+        if (changed) {
+            closeMobileSheet();
+            if (leafletMap && leafletMap.closePopup) leafletMap.closePopup();
+        }
+        fuelViews.forEach((view, name) => { view.hidden = name !== mode; });
+        const mapMode = mode === 'map' || mode === 'trip';
+        if (mapMode) {
+            const host = mapHosts.get(mode);
+            if (mapPanel.parentElement !== host) host.append(mapPanel);
+            mapPanel.hidden = false;
+        }
+        dashboardControls.classList.toggle('trip-mode', mode === 'trip');
+        document.querySelectorAll('[data-view]').forEach(button => {
+            button.setAttribute('aria-pressed', String(button.dataset.view === mode));
+        });
+        renderedView = mode;
+        try { localStorage.setItem('fuel-dashboard-view', mode); } catch (error) {}
+        syncUrl();
+        renderTripPlan();
+        if (mapMode) requestAnimationFrame(() => renderMap());
+    }
     function render() {
         filteredStations = stations.filter(matches).sort(compare);
         cards.forEach(card => { card.hidden = true; });
         filteredStations.forEach(station => { const card = cards.get(station.id); card.hidden = false; list.append(card); });
         document.querySelector('[data-visible-count]').textContent = filteredStations.length;
-        list.hidden = state.view !== 'list'; mapPanel.hidden = !['map', 'trip'].includes(state.view); tripPanel.hidden = state.view !== 'trip';
-        dashboardControls.classList.toggle('trip-mode', state.view === 'trip'); dashboardMeta.hidden = state.view === 'trip'; dashboardSummary.hidden = state.view === 'trip';
         if (!['map', 'trip'].includes(state.view) || (activeMapStationId && ![...filteredStations, ...tripStations].some(station => station.id === activeMapStationId))) closeMobileSheet();
         filterEmpty.hidden = stations.length === 0 || filteredStations.length > 0 || state.view !== 'list';
         document.querySelectorAll('[data-fuel]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.fuel === state.fuel)); });
-        document.querySelectorAll('[data-view]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.view === state.view)); });
         statusFilter.value = state.status; brandFilter.value = [...brandFilter.options].some(option => option.value === state.brand) ? state.brand : 'all'; state.brand = brandFilter.value;
         sortSelect.value = state.sort; onlyAvailable.checked = state.only;
-        try { localStorage.setItem('fuel-dashboard-view', state.view); } catch (error) {}
-        syncUrl(); renderTripPlan(); renderMap();
+        setFuelView(state.view);
     }
     function closeFilters() { panel.classList.remove('open'); document.body.classList.remove('fuel-filters-open'); filterOpen.setAttribute('aria-expanded', 'false'); }
     function requestLocation() {
@@ -333,7 +365,7 @@
         }, () => { locationStatus.textContent = 'Нет доступа к геолокации — сохранена сортировка по наличию.'; state.sort = 'usefulness'; render(); }, {enableHighAccuracy: false, timeout: 8000, maximumAge: 300000});
     }
     document.querySelectorAll('.fuel-dashboard-controls [data-fuel]').forEach(button => button.addEventListener('click', () => { state.fuel = button.dataset.fuel; render(); }));
-    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { state.view = button.dataset.view; if (state.view === 'trip') closeFilters(); render(); }));
+    document.querySelectorAll('.fuel-dashboard-controls [data-view]').forEach(button => button.addEventListener('click', () => { if (button.dataset.view === 'trip') closeFilters(); setFuelView(button.dataset.view); }));
     tripForm.querySelector('[name="vehicle_id"]').addEventListener('change', event => {
         const option = event.target.selectedOptions[0];
         const consumption = tripForm.querySelector('[name="consumption_l_per_100km"]');

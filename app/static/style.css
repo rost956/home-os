@@ -2627,6 +2627,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
 .fuel-detail-card { display: grid; min-width: 0; gap: 14px; border-top: 4px solid #94a3b8; box-shadow: none; }
 .fuel-detail-card.available { border-top-color: #16a34a; }
+.fuel-detail-card.candidate { border-top-color: #d97706; }
 .fuel-detail-card.low { border-top-color: #f59e0b; }
 .fuel-detail-card.unavailable { border-top-color: #dc2626; }
 .fuel-detail-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -2722,6 +2723,8 @@ html[data-theme="dark"] .success-alert {
 .fuel-today-summary span { color: var(--muted); font-size: 13px; }
 .fuel-station-fuel-setting { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(140px, 1fr); gap: 10px; }
 .fuel-dashboard-controls { display: grid; gap: 10px; margin-bottom: 10px; }
+.fuel-view { width: 100%; max-width: 100%; min-width: 0; }
+.fuel-view[hidden] { display: none !important; }
 .fuel-quick-filters, .fuel-view-toggle { display: flex; width: fit-content; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
 .fuel-quick-filters button, .fuel-view-toggle button { min-height: 36px; padding: 7px 14px; border: 0; border-radius: calc(var(--radius) - 3px); background: transparent; color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
 .fuel-quick-filters button[aria-pressed="true"], .fuel-view-toggle button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: 0 1px 4px color-mix(in srgb, var(--text) 12%, transparent); }
@@ -2753,6 +2756,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-compact-status { display: grid; min-width: 0; gap: 5px; padding: 9px 6px; border: 1px solid var(--line); border-radius: var(--radius); text-align: center; }
 .fuel-compact-status b { font-size: 13px; }
 .fuel-compact-status span { overflow-wrap: anywhere; font-size: 10px; font-weight: 900; }
+.fuel-compact-status small { color: var(--muted); font-size: 10px; font-weight: 800; }
 .fuel-compact-status i { font-style: normal; }
 .fuel-compact-status.available { border-style: solid; border-color: #16a34a; background: color-mix(in srgb, #22c55e 11%, var(--card)); }
 .fuel-compact-status.candidate { border-style: dashed; border-color: #d97706; background: repeating-linear-gradient(135deg, color-mix(in srgb, #f59e0b 12%, var(--card)) 0 5px, var(--card) 5px 10px); }
@@ -2812,7 +2816,7 @@ html[data-theme="dark"] .success-alert {
 .fuel-map-card small { color: var(--muted); }
 .fuel-map-card .btn { justify-content: center; }
 .fuel-map-distance { font-weight: 800; color: var(--text) !important; }
-.fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px; display: none; max-height: min(70vh, 430px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px; display: none; max-height: min(70vh, 430px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
 .fuel-map-sheet > .icon-btn { position: absolute; top: 8px; right: 8px; }
 .fuel-map-sheet-handle { display: none; }
 .fuel-map-sheet[hidden] { display: none; }

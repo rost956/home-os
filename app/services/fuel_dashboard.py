@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import FuelDeliveryEvent, FuelObservation, FuelStationSubscription
+from app.models import FuelDeliveryEvent, FuelObservation, FuelStationMark, FuelStationSubscription
+from app.services.fuel_availability import evaluate_fuel_availability
 from app.timezone import msk_day_bounds_utc, now_utc, to_msk
 
 STATUS_LABELS = {
@@ -30,26 +31,6 @@ class FuelDashboardData:
     probable_deliveries: int = 0
     confirmed_deliveries: int = 0
     confirmed_duration_minutes: int = 0
-
-
-def _presentation_state(
-    observation: FuelObservation | None,
-    event: FuelDeliveryEvent | None,
-    *,
-    stale_before: datetime,
-) -> str:
-    if (
-        observation is None
-        or observation.is_stale
-        or observation.observed_at < stale_before
-        or observation.state == "unknown"
-    ):
-        return "unknown"
-    if observation.state == "unavailable":
-        return "unavailable"
-    if event and event.event_type == "candidate_appearance":
-        return "candidate"
-    return "available"
 
 
 def _summary_state(states: list[str]) -> str:
@@ -98,27 +79,32 @@ def load_fuel_dashboard(
     if not station_ids:
         return FuelDashboardData()
 
-    latest_times = (
-        select(
-            FuelObservation.station_id,
-            FuelObservation.fuel_type,
-            func.max(FuelObservation.observed_at).label("latest_at"),
-        )
-        .where(FuelObservation.station_id.in_(station_ids), FuelObservation.observed_at <= current_at)
-        .group_by(FuelObservation.station_id, FuelObservation.fuel_type)
-        .subquery()
-    )
+    stale_before = current_at - timedelta(minutes=stale_after_minutes)
     observations = db.scalars(
-        select(FuelObservation).join(
-            latest_times,
-            and_(
-                FuelObservation.station_id == latest_times.c.station_id,
-                FuelObservation.fuel_type == latest_times.c.fuel_type,
-                FuelObservation.observed_at == latest_times.c.latest_at,
+        select(FuelObservation).where(
+            FuelObservation.station_id.in_(station_ids),
+            FuelObservation.observed_at >= stale_before,
+            FuelObservation.observed_at <= current_at,
+        )
+    ).all()
+    observations_by_pair: dict[tuple[int, str], list[FuelObservation]] = {}
+    for item in observations:
+        observations_by_pair.setdefault((item.station_id, item.fuel_type), []).append(item)
+    marks = db.scalars(
+        select(FuelStationMark).where(
+            FuelStationMark.station_id.in_(station_ids),
+            or_(
+                FuelStationMark.source_created_at >= stale_before,
+                and_(
+                    FuelStationMark.source_created_at.is_(None),
+                    FuelStationMark.fetched_at >= stale_before,
+                ),
             ),
         )
     ).all()
-    latest = {(item.station_id, item.fuel_type): item for item in observations}
+    marks_by_station: dict[int, list[FuelStationMark]] = {}
+    for mark in marks:
+        marks_by_station.setdefault(mark.station_id, []).append(mark)
 
     day_start, _day_end = msk_day_bounds_utc(to_msk(current_at).date())
     events = db.scalars(
@@ -134,13 +120,7 @@ def load_fuel_dashboard(
         )
         .order_by(FuelDeliveryEvent.estimated_at.desc())
     ).all()
-    active_events: dict[tuple[int, str], FuelDeliveryEvent] = {}
-    for event in events:
-        if event.disappeared_at is None or event.disappeared_at > current_at:
-            active_events.setdefault((event.station_id, event.fuel_type), event)
-
     result = FuelDashboardData()
-    stale_before = current_at - timedelta(minutes=stale_after_minutes)
     visible_pairs = {
         (subscription.station_id, fuel_type)
         for subscription in subscriptions
@@ -173,24 +153,30 @@ def load_fuel_dashboard(
         if brand:
             brand_values.add(brand)
         fuels = []
+        station_availability_times: list[datetime] = []
         for fuel_type in subscription.tracked_fuel_types:
-            observation = latest.get((station.id, fuel_type))
-            event = active_events.get((station.id, fuel_type))
-            state = _presentation_state(observation, event, stale_before=stale_before)
-            if observation:
-                updated_values.append(observation.observed_at)
+            availability = evaluate_fuel_availability(
+                observations_by_pair.get((station.id, fuel_type), ()),
+                marks_by_station.get(station.id, ()),
+                fuel_type,
+                current_at=current_at,
+                stale_after_minutes=stale_after_minutes,
+            )
+            state = availability.state
+            if availability.observed_at:
+                updated_values.append(availability.observed_at)
+                station_availability_times.append(availability.observed_at)
             fuels.append({
                 "fuel_type": fuel_type,
                 "state": state,
                 "label": STATUS_LABELS[state],
                 "symbol": STATUS_SYMBOLS[state],
-                "observed_at": observation.observed_at.isoformat() if observation else None,
+                "observed_at": availability.observed_at.isoformat() if availability.observed_at else None,
+                "has_queue": availability.has_queue,
+                "explanation": list(availability.explanation),
             })
         states = [item["state"] for item in fuels]
-        station_observations = [latest.get((station.id, item["fuel_type"])) for item in fuels]
-        station_updated_at = max(
-            (item.observed_at for item in station_observations if item), default=None
-        )
+        station_updated_at = max(station_availability_times, default=None)
         result.stations.append({
             "id": station.id,
             "brand": brand,

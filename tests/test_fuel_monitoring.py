@@ -48,6 +48,7 @@ from app.services.fuel_analytics import (
     refresh_forecasts,
     station_correlations,
 )
+from app.services.fuel_availability import evaluate_fuel_availability
 from app.services.fuel_dashboard import load_fuel_dashboard
 from app.services.fuel_routes import (
     distance_to_route_km,
@@ -83,10 +84,165 @@ def test_unknown_and_missing_fuels_are_not_unavailable():
     assert set(normalize_fuel_states({"status": "unknown", "fuels_now": None}).values()) == {"unknown"}
 
 
-def test_low_queue_and_no_are_explicit():
-    assert normalize_fuel_states({"status": "low", "fuels_now": ["95"]})["95"] == "low"
-    assert normalize_fuel_states({"status": "queue", "fuels_now": ["95"]})["95"] == "low"
+def test_queue_and_low_do_not_claim_physical_low_stock():
+    assert normalize_fuel_states({"status": "low", "fuels_now": ["95"]})["95"] == "available"
+    assert normalize_fuel_states({"status": "queue", "fuels_now": ["95"]})["95"] == "available"
     assert set(normalize_fuel_states({"status": "no", "fuels_now": ["95"]}).values()) == {"unavailable"}
+
+
+def availability_observation(identifier, state, at, *, source_at=None, status="yes", fuel_type="95"):
+    return FuelObservation(
+        id=identifier,
+        station_id=1,
+        fuel_type=fuel_type,
+        state=state,
+        observed_at=at,
+        source_updated_at=source_at,
+        source_status=status,
+        is_stale=False,
+    )
+
+
+def availability_mark(key, at, status, detail, *, author_id=None):
+    raw = {"status": status, "detail": detail}
+    if author_id is not None:
+        raw["author_id"] = author_id
+    return FuelStationMark(
+        station_id=1,
+        provider="gdebenz",
+        source_key=key,
+        text=detail,
+        source_created_at=at,
+        fetched_at=at,
+        raw_data=raw,
+    )
+
+
+def current_availability(observations=(), marks=(), fuel_type="95"):
+    return evaluate_fuel_availability(
+        observations,
+        marks,
+        fuel_type,
+        current_at=datetime(2026, 9, 15, 20),
+        stale_after_minutes=120,
+    )
+
+
+def test_current_availability_requires_independent_positive_evidence():
+    first = datetime(2026, 9, 15, 19)
+    one = current_availability([
+        availability_observation(1, "available", first, source_at=first),
+    ])
+    assert one.state == "candidate"
+
+    confirmed = current_availability([
+        availability_observation(1, "available", first, source_at=first),
+        availability_observation(2, "available", first + timedelta(minutes=10), source_at=first + timedelta(minutes=10)),
+    ])
+    assert confirmed.state == "available"
+
+
+def test_repeated_poll_snapshot_is_one_current_availability_evidence():
+    source_at = datetime(2026, 9, 15, 19)
+    observations = [
+        availability_observation(
+            index,
+            "available",
+            source_at + timedelta(minutes=index),
+            source_at=source_at,
+        )
+        for index in range(10)
+    ]
+    result = current_availability(observations)
+    assert result.state == "candidate"
+    assert result.positive_count == 1
+
+    same_author_marks = [
+        availability_mark("author-1", source_at, "yes", "95", author_id="driver-1"),
+        availability_mark(
+            "author-2",
+            source_at + timedelta(minutes=10),
+            "yes",
+            "95",
+            author_id="driver-1",
+        ),
+    ]
+    same_author = current_availability(marks=same_author_marks)
+    assert same_author.state == "candidate"
+    assert same_author.positive_count == 1
+
+
+def test_newer_contradictions_replace_older_current_availability():
+    start = datetime(2026, 9, 15, 19)
+    observations = [
+        availability_observation(index, state, start + timedelta(minutes=minute), source_at=start + timedelta(minutes=minute))
+        for index, state, minute in (
+            (1, "available", 0), (2, "available", 5),
+            (3, "unavailable", 20), (4, "unavailable", 25),
+        )
+    ]
+    assert current_availability(observations).state == "unavailable"
+
+    reversed_states = [
+        availability_observation(index, state, start + timedelta(minutes=minute), source_at=start + timedelta(minutes=minute))
+        for index, state, minute in (
+            (1, "unavailable", 0), (2, "unavailable", 5),
+            (3, "available", 20), (4, "available", 25),
+        )
+    ]
+    assert current_availability(reversed_states).state == "available"
+
+
+def test_queue_is_separate_from_availability_and_never_creates_it():
+    start = datetime(2026, 9, 15, 19)
+    queue_marks = [
+        availability_mark("queue-1", start, "queue", "95"),
+        availability_mark("queue-2", start + timedelta(minutes=8), "queue", "95"),
+    ]
+    result = current_availability(marks=queue_marks)
+    assert result.state == "available"
+    assert result.has_queue is True
+
+    no_95 = current_availability([
+        availability_observation(1, "unavailable", start, source_at=start, status="queue"),
+    ])
+    assert no_95.state == "unavailable"
+    assert no_95.has_queue is False
+
+
+def test_current_availability_stale_conflict_and_aggregate_mark_deduplication():
+    old = datetime(2026, 9, 15, 16)
+    assert current_availability([
+        availability_observation(1, "available", old, source_at=old),
+    ]).state == "unknown"
+
+    start = datetime(2026, 9, 15, 19)
+    conflict = current_availability([
+        availability_observation(1, "available", start, source_at=start),
+        availability_observation(2, "available", start + timedelta(minutes=5), source_at=start + timedelta(minutes=5)),
+        availability_observation(3, "unavailable", start + timedelta(minutes=10), source_at=start + timedelta(minutes=10)),
+    ])
+    assert conflict.state == "candidate"
+
+    duplicate = current_availability(
+        [availability_observation(1, "available", start, source_at=start)],
+        [availability_mark("same-upstream", start, "yes", "95")],
+    )
+    assert duplicate.state == "candidate"
+    assert duplicate.positive_count == 1
+
+
+@pytest.mark.parametrize("fuel_type", ["95", "98", "100"])
+def test_current_availability_rules_are_generic_for_all_fuels(fuel_type):
+    start = datetime(2026, 9, 15, 19)
+    result = current_availability(
+        marks=[
+            availability_mark(f"{fuel_type}-1", start, "yes", fuel_type),
+            availability_mark(f"{fuel_type}-2", start + timedelta(minutes=5), "yes", fuel_type),
+        ],
+        fuel_type=fuel_type,
+    )
+    assert result.state == "available"
 
 
 def test_old_source_mark_is_stale_without_losing_source_state():
@@ -158,7 +314,7 @@ def test_route_lookup_samples_corridor_filters_and_deduplicates():
     assert {call[2] for call in provider.calls} == {3}
     assert [station["provider_station_id"] for station in stations] == ["on-route"]
     assert stations[0]["distance_to_route_km"] == 0
-    assert [fuel["state"] for fuel in stations[0]["fuels"]] == ["available", "unavailable", "available"]
+    assert [fuel["state"] for fuel in stations[0]["fuels"]] == ["candidate", "unavailable", "candidate"]
     assert stations[0]["updated_at"] == "2026-09-15T09:30:00Z"
     assert distance_to_route_km(59.84, 30.15, 59.84, 30.10, 59.84, 30.20) < 0.01
     assert route_sample_points(59.84, 30.10, 59.84, 30.20, 3)[0] == (59.84, 30.10)
@@ -200,7 +356,8 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
     payload = response.json()
     assert payload["radius_km"] == 3
     assert payload["stations"][0]["provider_station_id"] == "route-api"
-    assert payload["stations"][0]["fuels"][0]["state"] == "low"
+    assert payload["stations"][0]["fuels"][0]["state"] == "candidate"
+    assert payload["stations"][0]["fuels"][0]["has_queue"] is True
     assert payload["stations"][0]["station_id"] == saved.id
     assert "raw" not in payload["stations"][0]
     invalid = client.get(
@@ -348,6 +505,8 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     assert response.status_code == 200
     assert "Пока ничего не отслеживается" in response.text
     assert "Поездка" in response.text
+    assert '/static/style.css?v=75' in response.text
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_fuel_dashboard_renders_forecast_stale_and_collector_error(client, login, make_user, db):
@@ -421,15 +580,22 @@ def test_fuel_dashboard_states_brands_and_privacy_are_built_in_batches(db, make_
     add_subscription(db, second, shared, ("100",))
     add_subscription(db, second, private, ("95",))
     before = FuelObservation(
-        station_id=shared.id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=8)
+        station_id=shared.id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=8),
+        source_updated_at=now - timedelta(minutes=8),
     )
     available = FuelObservation(
-        station_id=shared.id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=3)
+        station_id=shared.id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=3),
+        source_updated_at=now - timedelta(minutes=3),
+    )
+    confirmed = FuelObservation(
+        station_id=shared.id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=1),
+        source_updated_at=now - timedelta(minutes=1),
     )
     candidate = FuelObservation(
-        station_id=shared.id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=2)
+        station_id=shared.id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=2),
+        source_updated_at=now - timedelta(minutes=2),
     )
-    db.add_all([before, available, candidate])
+    db.add_all([before, available, confirmed, candidate])
     db.flush()
     db.add(FuelDeliveryEvent(
         station_id=shared.id, fuel_type="98", window_start=before.observed_at,
@@ -452,13 +618,71 @@ def test_fuel_dashboard_states_brands_and_privacy_are_built_in_batches(db, make_
     finally:
         event.remove(app_engine, "before_cursor_execute", record)
 
-    assert len(statements) == 4
+    assert len(statements) == 5
     assert [station["id"] for station in dashboard.stations] == [shared.id]
     assert dashboard.brands == ["Teboil"]
     assert {fuel["fuel_type"]: fuel["state"] for fuel in dashboard.stations[0]["fuels"]} == {
         "95": "available", "98": "candidate"
     }
     assert dashboard.stations[0]["summary_state"] == "available"
+
+
+def test_delivery_event_does_not_keep_current_availability_alive(db, make_user):
+    user = make_user("fuel-dashboard-expired-event")
+    current_at = datetime(2026, 9, 15, 20)
+    station = FuelStation(
+        owner_id=user.id,
+        provider="gdebenz",
+        provider_station_id="expired-event",
+        brand="Teboil",
+        latitude=59.8,
+        longitude=30.1,
+    )
+    db.add(station)
+    db.flush()
+    add_subscription(db, user, station, ("95",))
+    before = FuelObservation(
+        station_id=station.id,
+        fuel_type="95",
+        state="unavailable",
+        observed_at=current_at - timedelta(hours=5),
+        source_updated_at=current_at - timedelta(hours=5),
+    )
+    after = FuelObservation(
+        station_id=station.id,
+        fuel_type="95",
+        state="available",
+        observed_at=current_at - timedelta(hours=4),
+        source_updated_at=current_at - timedelta(hours=4),
+    )
+    db.add_all([before, after])
+    db.flush()
+    db.add(FuelDeliveryEvent(
+        station_id=station.id,
+        fuel_type="95",
+        window_start=before.observed_at,
+        window_end=after.observed_at,
+        estimated_at=after.observed_at,
+        event_type="confirmed_delivery",
+        confidence=.9,
+        appearance_confidence=.9,
+        delivery_confidence=.9,
+        before_observation_id=before.id,
+        after_observation_id=after.id,
+        detection_reason="historical delivery",
+        evidence_json={},
+        detector_version="test",
+    ))
+    db.commit()
+
+    dashboard = load_fuel_dashboard(
+        db,
+        user.id,
+        stale_after_minutes=120,
+        current_at=current_at,
+    )
+
+    assert dashboard.stations[0]["fuels"][0]["state"] == "unknown"
 
 
 def test_fuel_settings_default_to_env_and_database_override_persists(db):
@@ -971,7 +1195,8 @@ def test_collector_uses_configured_radius_and_matches_station_id(make_user):
     with SessionLocal() as db:
         observation = db.query(FuelObservation).one()
     assert observation.station_id == station_id
-    assert observation.state == "low"
+    assert observation.state == "available"
+    assert observation.source_status == "queue"
 
 
 def observation(identifier, state, minute, *, fuel_type="95", stale=False, confidence=0.8, confirmations=5,
@@ -1390,6 +1615,43 @@ def test_fuel_detail_renders_without_events(client, login, make_user, db):
     assert response.status_code == 200
     assert "Появлений топлива пока не обнаружено" in response.text
     assert "Недостаточно подтверждённых поставок" in response.text
+
+
+def test_fuel_detail_displays_queue_separately_from_availability(client, login, make_user, db):
+    user = make_user("fuel-detail-queue")
+    station = FuelStation(
+        owner_id=user.id,
+        provider="gdebenz",
+        provider_station_id="detail-queue",
+        brand="Teboil",
+        latitude=59.9,
+        longitude=30.2,
+    )
+    db.add(station)
+    db.flush()
+    add_subscription(db, user, station, ("95",))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for minutes in (10, 5):
+        point = now - timedelta(minutes=minutes)
+        db.add(FuelObservation(
+            station_id=station.id,
+            fuel_type="95",
+            state="available",
+            observed_at=point,
+            source_updated_at=point,
+            source_status="queue",
+            is_stale=False,
+        ))
+    db.commit()
+    login(user.username)
+
+    response = client.get(f"/fuel/{station.id}")
+
+    assert response.status_code == 200
+    assert "Ситуация: очередь" in response.text
+    assert "<strong>Есть</strong>" in response.text
+    assert "<strong>Мало</strong>" not in response.text
+    assert "Почему такой статус?" in response.text
 
 
 def test_fuel_detail_renders_delivery_forecast_and_technical_history(client, login, make_user, db):
@@ -1861,11 +2123,12 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
     add_subscription(db, user, stations[2], ("100",))
     add_subscription(db, other, stations[0], ("100",))
     add_subscription(db, other, stations[3], ("95",))
-    before = FuelObservation(station_id=stations[0].id, fuel_type="98", state="unavailable", observed_at=now - timedelta(minutes=9))
-    available_95 = FuelObservation(station_id=stations[0].id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=2))
-    candidate_98 = FuelObservation(station_id=stations[0].id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=1))
-    unavailable_95 = FuelObservation(station_id=stations[1].id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=3))
-    db.add_all([before, available_95, candidate_98, unavailable_95])
+    before = FuelObservation(station_id=stations[0].id, fuel_type="98", state="unavailable", observed_at=now - timedelta(minutes=9), source_updated_at=now - timedelta(minutes=9))
+    available_95 = FuelObservation(station_id=stations[0].id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=4), source_updated_at=now - timedelta(minutes=4))
+    available_95_confirmed = FuelObservation(station_id=stations[0].id, fuel_type="95", state="available", observed_at=now - timedelta(minutes=2), source_updated_at=now - timedelta(minutes=2))
+    candidate_98 = FuelObservation(station_id=stations[0].id, fuel_type="98", state="available", observed_at=now - timedelta(minutes=1), source_updated_at=now - timedelta(minutes=1))
+    unavailable_95 = FuelObservation(station_id=stations[1].id, fuel_type="95", state="unavailable", observed_at=now - timedelta(minutes=3), source_updated_at=now - timedelta(minutes=3))
+    db.add_all([before, available_95, available_95_confirmed, candidate_98, unavailable_95])
     db.flush()
     db.add(FuelDeliveryEvent(
         station_id=stations[0].id, fuel_type="98", window_start=before.observed_at,
@@ -2084,19 +2347,39 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert page.locator(".leaflet-popup").count() == 0
             assert page.evaluate("scrollY") == trip_scroll_before
             assert page.locator('[data-map-sheet]:not([hidden])').count() == 1
+            page.evaluate("window.fuelSheetReference = document.querySelector('[data-map-sheet]')")
+            page.locator(".fuel-map-marker").nth(1).click()
+            assert "720.0 км от начала" in page.locator("[data-map-sheet]").text_content()
+            assert page.evaluate("document.querySelector('[data-map-sheet]') === window.fuelSheetReference")
+            assert page.locator('[data-map-sheet]:not([hidden])').count() == 1
             page.locator("[data-map-sheet-close]").click()
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")
             page.locator('[data-view="list"]').click()
-            assert page.locator("[data-fuel-map-panel]").evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
+            assert page.locator('[data-fuel-view="map"]').evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
+            assert page.locator('[data-fuel-view="trip"]').evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
             page.locator('[data-fuel="98"]').click()
             page.locator(".fuel-filter-open").click()
             assert page.locator(".fuel-filter-panel").is_visible()
             page.locator("#fuelStatusFilter").select_option("candidate")
             page.locator("[data-filter-apply]").click()
             assert not page.locator(".fuel-filter-panel").is_visible()
+            page.evaluate("""() => {
+                const list = document.querySelector('[data-fuel-list]');
+                const source = list.querySelector('[data-station-id]');
+                for (let index = 0; index < 24; index += 1) {
+                    const clone = source.cloneNode(true);
+                    clone.removeAttribute('data-station-id');
+                    clone.hidden = false;
+                    list.append(clone);
+                }
+            }""")
+            assert page.locator('[data-fuel-view="list"]').bounding_box()["height"] > 1000
+            controls_bottom = page.locator(".fuel-dashboard-controls").bounding_box()["y"] + page.locator(".fuel-dashboard-controls").bounding_box()["height"]
             page.locator('[data-view="map"]').click()
-            assert page.locator("[data-fuel-list]").evaluate("element => element.hidden && getComputedStyle(element).display === 'none'")
+            assert page.locator('[data-fuel-view="list"]').evaluate("element => element.hidden && getComputedStyle(element).display === 'none' && element.getBoundingClientRect().height === 0")
+            assert page.locator('[data-fuel-view="map"]').is_visible()
             assert page.locator("#fuelMap").evaluate("element => { const box = element.getBoundingClientRect(); return box.top < innerHeight && box.bottom > 0; }")
+            assert page.locator("#fuelMap").bounding_box()["y"] - controls_bottom < 40
             assert page.locator(".fuel-map-marker").count() == 1
             page.locator(".fuel-map-marker").scroll_into_view_if_needed()
             scroll_before_marker = page.evaluate("scrollY")
@@ -2109,6 +2392,7 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert "Расстояние:" in page.locator("[data-map-distance]").text_content()
             assert page.locator("[data-map-sheet]").evaluate("element => element.parentElement === document.body")
             assert page.locator("[data-map-sheet]").evaluate("element => getComputedStyle(element).position === 'fixed' && Number(getComputedStyle(element).zIndex) > 700")
+            assert page.locator("[data-map-sheet]").evaluate("element => { const box = element.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; }")
             assert page.locator("#fuelMap").is_visible()
             assert page.locator("#fuelMap").bounding_box()["y"] < page.locator("[data-map-sheet]").bounding_box()["y"]
             assert page.locator('[data-map-sheet]:not([hidden])').count() == 1

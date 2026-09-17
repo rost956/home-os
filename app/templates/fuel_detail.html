@@ -12,19 +12,22 @@
 <div class="fuel-detail-grid">
     {% for fuel in tracked_fuels %}
     {% set item = latest[fuel] %}
+    {% set current = availability[fuel] %}
     {% set forecast = forecasts[fuel] %}
     {% set appearance = latest_appearances.get(fuel) %}
     {% set delivery = latest_deliveries.get(fuel) %}
     {% set counts = event_counts[fuel] %}
-    <section class="card fuel-detail-card {{ item.state if item else 'unknown' }}">
-        <div class="fuel-detail-title"><span>АИ-{{ fuel }}</span><strong>{% if not item %}Нет данных{% elif item.state == 'available' %}Есть{% elif item.state == 'low' %}Мало{% elif item.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong></div>
-        {% if item and item.is_stale %}<span class="pill fuel-stale-badge">Данные устарели</span>{% endif %}
+    <section class="card fuel-detail-card {{ current.state }}">
+        <div class="fuel-detail-title"><span>АИ-{{ fuel }}</span><strong>{% if current.state == 'available' %}Есть{% elif current.state == 'candidate' %}Возможно есть{% elif current.state == 'unavailable' %}Нет{% else %}Нет данных{% endif %}</strong></div>
+        {% if current.state == 'unknown' and item %}<span class="pill fuel-stale-badge">Данные устарели</span>{% endif %}
+        {% if current.has_queue %}<span class="pill">Ситуация: очередь</span>{% endif %}
         <dl>
-            <div><dt>Наблюдение источника</dt><dd>{{ item.observed_at|fuel_age if item else 'Пока нет данных' }}</dd></div>
+            <div><dt>Последнее независимое свидетельство</dt><dd>{{ current.observed_at|fuel_age if current.observed_at else 'Пока нет свежих данных' }}</dd></div>
             {% if delivery %}<div><dt>{{ 'Последняя подтверждённая поставка' if delivery.event_type == 'confirmed_delivery' else 'Последняя вероятная поставка' }}</dt><dd>{{ delivery.estimated_at|msk_datetime('%d.%m ~%H:%M') }}</dd></div>
             {% elif appearance %}<div><dt>{{ 'Возможное появление топлива' if appearance.event_type in ('candidate_appearance', 'availability_appearance') else 'Наличие топлива подтверждено' }}</dt><dd>{{ appearance.estimated_at|msk_datetime('%d.%m ~%H:%M') }}</dd></div>
             {% else %}<div><dt>Последнее появление топлива</dt><dd>Пока не обнаружено</dd></div>{% endif %}
         </dl>
+        <details class="fuel-explanation"><summary>Почему такой статус?</summary><div class="fuel-explanation-body">{% for reason in current.explanation %}<p>{{ reason }}</p>{% endfor %}</div></details>
         {% if appearance %}
         <div class="fuel-appearance-summary">
             <span>Наблюдалось: {% if appearance.availability_duration_minutes is not none %}около {{ appearance.availability_duration_minutes|round|int }} мин{% else %}длительность неизвестна{% endif %}</span>

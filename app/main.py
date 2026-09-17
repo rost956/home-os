@@ -141,6 +141,7 @@ from .services.fuel_analytics import (
     MIN_DELIVERY_CONFIDENCE,
     station_correlations,
 )
+from .services.fuel_availability import evaluate_fuel_availability
 from .services.fuel_dashboard import load_fuel_dashboard
 from .services.fuel_notifications import (
     get_or_create_settings as get_fuel_notification_settings,
@@ -3536,6 +3537,27 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
     observations = db.scalars(query.order_by(FuelObservation.observed_at.desc()).limit(200)).all()
     latest = {fuel: db.scalar(select(FuelObservation).where(FuelObservation.station_id == station.id,
         FuelObservation.fuel_type == fuel).order_by(FuelObservation.observed_at.desc()).limit(1)) for fuel in tracked_fuels}
+    marks = db.scalars(select(FuelStationMark).where(FuelStationMark.station_id == station.id).order_by(
+        FuelStationMark.source_created_at.desc(), FuelStationMark.id.desc()
+    ).limit(100)).all()
+    runtime = get_fuel_runtime_settings(db)
+    current_at = utc_now_naive()
+    availability_observations = db.scalars(select(FuelObservation).where(
+        FuelObservation.station_id == station.id,
+        FuelObservation.fuel_type.in_(tracked_fuels),
+        FuelObservation.observed_at >= current_at - timedelta(minutes=runtime.stale_after_minutes),
+        FuelObservation.observed_at <= current_at,
+    )).all()
+    availability = {
+        fuel: evaluate_fuel_availability(
+            (item for item in availability_observations if item.fuel_type == fuel),
+            marks,
+            fuel,
+            current_at=current_at,
+            stale_after_minutes=runtime.stale_after_minutes,
+        )
+        for fuel in tracked_fuels
+    }
     delivery_query = select(FuelDeliveryEvent).where(
         FuelDeliveryEvent.station_id == station.id,
         FuelDeliveryEvent.fuel_type.in_(tracked_fuels),
@@ -3581,19 +3603,16 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
         )
     ).all()
     station_names = {item.id: (item.address or item.brand or item.name or "АЗС") for item in user_stations}
-    marks = db.scalars(select(FuelStationMark).where(FuelStationMark.station_id == station.id).order_by(
-        FuelStationMark.source_created_at.desc(), FuelStationMark.id.desc()
-    ).limit(30)).all()
     chat_messages = db.scalars(select(FuelStationChatMessage).where(
         FuelStationChatMessage.station_id == station.id
     ).order_by(FuelStationChatMessage.source_created_at.desc(), FuelStationChatMessage.id.desc()).limit(12)).all()
-    runtime = get_fuel_runtime_settings(db)
     timeline = load_fuel_timeline(
         db, station.id, tracked_fuels, stale_after_minutes=runtime.stale_after_minutes
     )
     timeline_ticks = [timeline["from"] + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 24)]
     return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
-        "marks": marks, "chat_messages": chat_messages, "fuel_type": fuel_type, "latest": latest,
+        "marks": marks[:30], "chat_messages": chat_messages, "fuel_type": fuel_type, "latest": latest,
+        "availability": availability,
         "deliveries": deliveries,
         "latest_appearances": latest_appearances, "latest_deliveries": latest_deliveries,
         "event_counts": event_counts, "forecasts": forecasts, "correlations": correlations,

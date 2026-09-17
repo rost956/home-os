@@ -352,8 +352,10 @@ def normalize_fuel_states(raw: dict[str, Any], *, stale_after_minutes: int = 120
     if status in {"no", "unavailable"}:
         return {fuel: "unavailable" for fuel in FUEL_TYPES}
     result = {fuel: ("available" if fuel in available else "unavailable") for fuel in FUEL_TYPES}
+    # GdeBenz's queue/low station labels describe the reported situation, not
+    # a measured physical tank level. Keep availability and queue separate.
     if status in {"low", "queue"}:
-        result = {fuel: ("low" if value == "available" else value) for fuel, value in result.items()}
+        result = {fuel: ("available" if value == "available" else value) for fuel, value in result.items()}
     return result
 
 
