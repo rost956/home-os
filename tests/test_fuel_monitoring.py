@@ -53,11 +53,20 @@ from app.services.fuel_dashboard import load_fuel_dashboard
 from app.services.fuel_routes import (
     distance_to_route_km,
     find_stations_near_route,
+    haversine_km,
+    project_onto_route,
+    route_point_at_progress,
     route_sample_points,
 )
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 from app.services.fuel_timeline import build_fuel_timeline
 from app.services.fuel_trip import calculate_trip, select_recommended_stops
+from app.services.route_engine import (
+    OSRMRouteProvider,
+    RouteEngine,
+    RouteNotFound,
+    RouteResult,
+)
 from app.timezone import format_msk
 
 
@@ -72,6 +81,29 @@ def add_subscription(db, user, station, fuel_types=("95", "98", "100"), *, enabl
     )
     db.add(subscription)
     return subscription
+
+
+class StaticRouteEngine:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    async def route(self, start, end):
+        self.calls.append((start, end))
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def exact_route(start, end, *, distance_km, duration_minutes=60, geometry=None):
+    return RouteResult(
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        geometry=tuple(geometry or (start, end)),
+        provider="osrm",
+        profile="driving",
+    )
 
 
 def test_gdebenz_normalization_per_fuel():
@@ -320,6 +352,208 @@ def test_route_lookup_samples_corridor_filters_and_deduplicates():
     assert route_sample_points(59.84, 30.10, 59.84, 30.20, 3)[0] == (59.84, 30.10)
 
 
+def test_osrm_provider_uses_lon_lat_and_normalizes_geometry_to_lat_lon():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={
+            "code": "Ok",
+            "routes": [{
+                "distance": 12_345.6,
+                "duration": 987.0,
+                "geometry": {"coordinates": [
+                    [30.10, 59.83], [30.12, 59.84], [30.14, 59.85],
+                ]},
+            }],
+        }, request=request)
+
+    provider = OSRMRouteProvider(
+        "https://router.test",
+        transport=httpx.MockTransport(handler),
+    )
+    result = asyncio.run(provider.get_route((59.83, 30.10), (59.85, 30.14)))
+    assert requests[0].url.path.endswith(
+        "/route/v1/driving/30.100000,59.830000;30.140000,59.850000"
+    )
+    assert dict(requests[0].url.params) == {
+        "overview": "full",
+        "geometries": "geojson",
+        "steps": "false",
+        "alternatives": "false",
+    }
+    assert result.distance_km == pytest.approx(12.3456)
+    assert result.duration_minutes == pytest.approx(16.45)
+    assert result.geometry == (
+        (59.83, 30.10), (59.84, 30.12), (59.85, 30.14),
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["connect_timeout", "read_timeout", "400", "429", "500", "json", "routes", "geometry"],
+)
+def test_osrm_technical_failures_use_approximate_fallback(kind):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if kind == "connect_timeout":
+            raise httpx.ConnectTimeout("route provider unavailable", request=request)
+        if kind == "read_timeout":
+            raise httpx.ReadTimeout("slow route provider", request=request)
+        if kind in {"400", "429", "500"}:
+            return httpx.Response(int(kind), json={"code": "Error"}, request=request)
+        if kind == "json":
+            return httpx.Response(200, text="not json", request=request)
+        if kind == "routes":
+            return httpx.Response(200, json={"code": "Ok", "routes": []}, request=request)
+        return httpx.Response(200, json={
+            "code": "Ok",
+            "routes": [{"distance": 1000, "duration": 60, "geometry": {"coordinates": [[30, 59]]}}],
+        }, request=request)
+
+    engine = RouteEngine(OSRMRouteProvider(
+        "https://router.test", transport=httpx.MockTransport(handler)
+    ))
+    result = asyncio.run(engine.route((59.0, 30.0), (60.0, 31.0)))
+    assert result.is_approximate is True
+    assert result.provider == "approximate"
+    assert result.duration_minutes is None
+    assert "приблизительно" in result.warnings[0]
+
+
+def test_osrm_no_route_is_not_replaced_with_fake_route():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": "NoRoute", "routes": []}, request=request)
+
+    engine = RouteEngine(OSRMRouteProvider(
+        "https://router.test", transport=httpx.MockTransport(handler)
+    ))
+    with pytest.raises(RouteNotFound, match="маршрут"):
+        asyncio.run(engine.route((59.0, 30.0), (60.0, 31.0)))
+
+
+def test_route_engine_cache_is_ttl_bounded_and_ignores_trip_inputs():
+    class Provider:
+        name = "test"
+        profile = "driving"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def get_route(self, start, end):
+            self.calls += 1
+            return exact_route(start, end, distance_km=100 + self.calls)
+
+    clock = [100.0]
+    provider = Provider()
+    engine = RouteEngine(
+        provider,
+        cache_seconds=30,
+        cache_max_entries=2,
+        clock=lambda: clock[0],
+    )
+    first = asyncio.run(engine.route((59.0, 30.0), (60.0, 31.0)))
+    # Fuel percent, tank and consumption never enter the route cache key.
+    second = asyncio.run(engine.route((59.0, 30.0), (60.0, 31.0)))
+    assert first is second
+    assert provider.calls == 1
+    asyncio.run(engine.route((59.0, 30.0), (61.0, 31.0)))
+    asyncio.run(engine.route((59.0, 30.0), (62.0, 31.0)))
+    assert engine.cache_size == 2
+    clock[0] += 31
+    asyncio.run(engine.route((59.0, 30.0), (62.0, 31.0)))
+    assert provider.calls == 4
+
+
+@pytest.mark.parametrize("coordinate", [(float("nan"), 30), (float("inf"), 30), (91, 30), (59, 181)])
+def test_route_engine_rejects_invalid_coordinates_without_provider_call(coordinate):
+    class Provider:
+        name = "test"
+        profile = "driving"
+        calls = 0
+
+        async def get_route(self, start, end):
+            self.calls += 1
+            raise AssertionError("provider must not be called")
+
+    provider = Provider()
+    with pytest.raises(ValueError, match="Координаты"):
+        asyncio.run(RouteEngine(provider).route(coordinate, (60, 31)))
+    assert provider.calls == 0
+
+
+def test_route_projection_uses_curved_geometry_and_authoritative_distance():
+    u_route = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    on_route = project_onto_route(0.5, 0.01, u_route, 360.0)
+    near_chord = project_onto_route(0.5, 0.5, u_route, 360.0)
+    assert on_route.distance_to_route_km < 2
+    assert near_chord.distance_to_route_km > 50
+
+    scaled = project_onto_route(0.0, 0.5, ((0.0, 0.0), (0.0, 1.0)), 120.0)
+    assert scaled.route_progress_km == pytest.approx(60, abs=0.1)
+    assert route_point_at_progress(((0.0, 0.0), (0.0, 1.0)), 120.0, 60.0) == pytest.approx((0.0, 0.5))
+
+
+def test_real_route_filters_station_near_old_straight_line():
+    class Provider:
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [
+                FuelStationCandidate(
+                    provider="gdebenz", provider_station_id="road", name="На дороге",
+                    latitude=0.5, longitude=0.01,
+                ),
+                FuelStationCandidate(
+                    provider="gdebenz", provider_station_id="chord", name="У прямой",
+                    latitude=0.5, longitude=0.5,
+                ),
+            ]
+
+    stations = asyncio.run(find_stations_near_route(
+        Provider(),
+        start_latitude=0,
+        start_longitude=0,
+        end_latitude=0,
+        end_longitude=1,
+        radius_km=3,
+        route_geometry=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+        route_distance_km=360,
+        sample_progress_km=(60,),
+    ))
+    assert [item["provider_station_id"] for item in stations] == ["road"]
+    assert stations[0]["route_progress_km"] < 100
+
+
+def test_station_order_follows_route_progress_not_direct_distance():
+    class Provider:
+        async def get_stations_near(self, latitude, longitude, radius_km):
+            return [
+                FuelStationCandidate(
+                    provider="gdebenz", provider_station_id="late", name="Позже",
+                    latitude=0.2, longitude=1.0,
+                ),
+                FuelStationCandidate(
+                    provider="gdebenz", provider_station_id="middle", name="Раньше",
+                    latitude=1.0, longitude=0.5,
+                ),
+            ]
+
+    stations = asyncio.run(find_stations_near_route(
+        Provider(),
+        start_latitude=0,
+        start_longitude=0,
+        end_latitude=0,
+        end_longitude=1,
+        radius_km=3,
+        route_geometry=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+        route_distance_km=360,
+        sample_progress_km=(180,),
+    ))
+    assert [item["provider_station_id"] for item in stations] == ["middle", "late"]
+    assert [item["route_progress_km"] for item in stations] == sorted(
+        item["route_progress_km"] for item in stations
+    )
+    assert haversine_km(0, 0, 0.2, 1.0) < haversine_km(0, 0, 1.0, 0.5)
+
+
 def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_user, monkeypatch, db):
     class RouteProvider:
         async def get_stations_near(self, latitude, longitude, radius_km):
@@ -351,10 +585,19 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
     db.commit()
     login(user.username)
     monkeypatch.setattr(main_module, "make_gdebenz_provider", RouteProvider)
+    routing = StaticRouteEngine(exact_route(
+        (59.83, 30.10),
+        (59.84, 30.14),
+        distance_km=3.0,
+        geometry=((59.83, 30.10), (59.835, 30.121), (59.84, 30.14)),
+    ))
+    monkeypatch.setattr(main_module, "make_route_engine", lambda: routing)
     response = client.get(url)
     assert response.status_code == 200
     payload = response.json()
     assert payload["radius_km"] == 3
+    assert payload["route"]["is_approximate"] is False
+    assert len(payload["route"]["geometry"]) == 3
     assert payload["stations"][0]["provider_station_id"] == "route-api"
     assert payload["stations"][0]["fuels"][0]["state"] == "candidate"
     assert payload["stations"][0]["fuels"][0]["has_queue"] is True
@@ -364,6 +607,32 @@ def test_route_stations_api_uses_provider_and_requires_auth(client, login, make_
         "/api/fuel/route-stations?start_lat=91&start_lon=30&end_lat=59&end_lon=30"
     )
     assert invalid.status_code == 422
+    approximate = RouteResult(
+        distance_km=3.1,
+        duration_minutes=None,
+        geometry=((59.83, 30.10), (59.84, 30.14)),
+        provider="approximate",
+        profile="driving",
+        is_approximate=True,
+        warnings=("Расстояние рассчитано приблизительно.",),
+    )
+    monkeypatch.setattr(
+        main_module, "make_route_engine", lambda: StaticRouteEngine(approximate)
+    )
+    fallback = client.get(url)
+    assert fallback.status_code == 200
+    assert fallback.json()["route"]["is_approximate"] is True
+    assert fallback.json()["route"]["warnings"]
+    monkeypatch.setattr(
+        main_module,
+        "make_route_engine",
+        lambda: StaticRouteEngine(error=RouteNotFound(
+            "Автомобильный маршрут между указанными точками не найден."
+        )),
+    )
+    no_route = client.get(url)
+    assert no_route.status_code == 422
+    assert "маршрут" in no_route.json()["detail"]
 
 
 def test_trip_calculation_keeps_safe_reserve_and_fuel_need():
@@ -426,6 +695,47 @@ def test_trip_stop_selection_prioritizes_state_and_excludes_bad_candidates():
     assert warnings == []
 
 
+def test_trip_stop_selection_uses_cumulative_progress_and_warns_when_unsafe():
+    calculation = calculate_trip(
+        1_200,
+        tank_liters=50,
+        consumption_l_per_100km=10,
+        fuel_level_percent=70,
+    )
+
+    def station(identifier, progress):
+        return {
+            "provider_station_id": identifier,
+            "name": identifier,
+            "distance_from_start_km": progress,
+            "route_progress_km": progress,
+            "distance_to_route_km": 0.5,
+            "fuels": [{"fuel_type": "95", "state": "available"}],
+        }
+
+    stops, warnings = select_recommended_stops(
+        [station("one", 250), station("two", 520), station("three", 790), station("four", 1_050)],
+        fuel_type="95",
+        calculation=calculation,
+    )
+    assert [item["distance_from_start_km"] for item in stops] == [250, 520, 790]
+    assert warnings == []
+
+    unsafe_calculation = calculate_trip(
+        500,
+        tank_liters=40,
+        consumption_l_per_100km=10,
+        fuel_level_percent=77.5,
+    )
+    unsafe, warnings = select_recommended_stops(
+        [station("too-far", 330)],
+        fuel_type="95",
+        calculation=unsafe_calculation,
+    )
+    assert unsafe == []
+    assert "Не найдена подходящая АЗС" in warnings[0]
+
+
 def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
     client, login, make_user, monkeypatch, db
 ):
@@ -456,6 +766,14 @@ def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
             )]
 
     monkeypatch.setattr(main_module, "make_gdebenz_provider", TripProvider)
+    routing = StaticRouteEngine(exact_route(
+        (59.0, 30.0),
+        (64.0, 30.0),
+        distance_km=700,
+        duration_minutes=510,
+        geometry=((59.0, 30.0), (60.5, 30.4), (62.5, 30.2), (64.0, 30.0)),
+    ))
+    monkeypatch.setattr(main_module, "make_route_engine", lambda: routing)
     login(user.username)
     response = client.post("/api/fuel/trip-plan", json={
         "vehicle_id": vehicle.id,
@@ -475,7 +793,10 @@ def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
         item["selected_fuel"]["fuel_type"] == "95"
         for item in payload["recommended_stops"]
     )
-    assert payload["warnings"]
+    assert payload["route"]["duration_minutes"] == 510
+    assert payload["route"]["is_approximate"] is False
+    assert payload["route"]["geometry"][1] == [60.5, 30.4]
+    assert payload["warnings"] == []
     missing_data = client.post("/api/fuel/trip-plan", json={
         "vehicle_id": vehicle.id,
         "start": "59.0,30.0",
@@ -496,6 +817,76 @@ def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
         "consumption_l_per_100km": 10,
     })
     assert forbidden_vehicle.status_code == 404
+
+
+def test_trip_plan_api_reports_fallback_and_rejects_no_route(
+    client, login, make_user, monkeypatch, db
+):
+    user = make_user("fuel-trip-routing-errors")
+    vehicle = Vehicle(
+        owner_id=user.id,
+        display_name="Тестовый автомобиль",
+        make="Test",
+        model="Route",
+        year=2020,
+        current_odometer=100,
+    )
+    db.add(vehicle)
+    db.commit()
+    login(user.username)
+
+    fallback = RouteResult(
+        distance_km=118,
+        duration_minutes=None,
+        geometry=((59.0, 30.0), (60.0, 30.0)),
+        provider="approximate",
+        profile="driving",
+        is_approximate=True,
+        warnings=("Сервис дорожных маршрутов временно недоступен. Расстояние рассчитано приблизительно.",),
+    )
+    monkeypatch.setattr(main_module, "make_route_engine", lambda: StaticRouteEngine(fallback))
+    invalid = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id,
+        "start": "nan,30.0",
+        "end": "60.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 100,
+        "tank_liters": 50,
+        "consumption_l_per_100km": 10,
+    })
+    assert invalid.status_code == 400
+    assert "Координаты" in invalid.json()["detail"]
+    response = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id,
+        "start": "59.0,30.0",
+        "end": "60.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 100,
+        "tank_liters": 50,
+        "consumption_l_per_100km": 10,
+    })
+    assert response.status_code == 200
+    assert response.json()["route"]["is_approximate"] is True
+    assert "приблизительно" in response.json()["warnings"][0]
+
+    monkeypatch.setattr(
+        main_module,
+        "make_route_engine",
+        lambda: StaticRouteEngine(error=RouteNotFound(
+            "Автомобильный маршрут между указанными точками не найден."
+        )),
+    )
+    response = client.post("/api/fuel/trip-plan", json={
+        "vehicle_id": vehicle.id,
+        "start": "59.0,30.0",
+        "end": "60.0,30.0",
+        "fuel_type": "95",
+        "fuel_level_percent": 100,
+        "tank_liters": 50,
+        "consumption_l_per_100km": 10,
+    })
+    assert response.status_code == 422
+    assert "маршрут" in response.json()["detail"]
 
 
 def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login, make_user):
@@ -2159,13 +2550,15 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
     leaflet_stub = r"""
     window.fuelGeoCalls = 0;
     window.fuelRouteLines = 0;
+    window.fuelRouteRemovals = 0;
+    window.fuelRouteGeometries = [];
     Object.defineProperty(navigator, 'geolocation', {configurable: true, value: {
       getCurrentPosition(success){ window.fuelGeoCalls += 1; success({coords: {latitude: 59.84, longitude: 30.12}}); }
     }});
     window.L = {
       map: id => ({invalidateSize(){}, setView(){}, fitBounds(){}, closePopup(){ document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); }}),
       tileLayer: () => ({addTo(){ return this; }}),
-      polyline: () => ({addTo(){ window.fuelRouteLines += 1; return this; }, remove(){}}),
+      polyline: points => ({addTo(){ window.fuelRouteLines += 1; window.fuelRouteGeometries.push(points); return this; }, remove(){ window.fuelRouteRemovals += 1; }}),
       layerGroup: () => ({
         elements: [], addTo(){ return this; },
         clearLayers(){ this.elements.forEach(item => item.remove()); this.elements = []; document.querySelectorAll('.leaflet-popup').forEach(item => item.remove()); }
@@ -2194,7 +2587,12 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             "start": {"label": "Санкт-Петербург", "latitude": 59.93, "longitude": 30.31},
             "end": {"label": "Мурманск", "latitude": 68.97, "longitude": 33.08},
             "distance_km": 1350.0,
-            "geometry": [[59.93, 30.31], [68.97, 33.08]],
+            "duration_minutes": 1040.0,
+            "is_approximate": False,
+            "provider": "osrm",
+            "profile": "driving",
+            "warnings": [],
+            "geometry": [[59.93, 30.31], [61.2, 31.1], [65.1, 32.4], [68.97, 33.08]],
         },
         "vehicle": {"id": vehicle.id, "title": "Ford Focus 3", "make": "Ford", "model": "Focus", "consumption_source": "manual"},
         "fuel_type": "95",
@@ -2238,6 +2636,21 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
         ],
         "warnings": ["Расстояние приблизительное."],
     }
+    trip_payload_2 = json.loads(json.dumps(trip_payload))
+    trip_payload_2["route"]["end"] = {
+        "label": "Петрозаводск", "latitude": 61.78, "longitude": 34.35,
+    }
+    trip_payload_2["route"]["distance_km"] = 435.0
+    trip_payload_2["route"]["duration_minutes"] = 360.0
+    trip_payload_2["route"]["geometry"] = [
+        [59.93, 30.31], [60.2, 31.5], [61.0, 33.1], [61.78, 34.35],
+    ]
+    trip_payload_unsafe = json.loads(json.dumps(trip_payload))
+    trip_payload_unsafe["route"]["end"]["label"] = "Опасный маршрут"
+    trip_payload_unsafe["recommended_stops"] = []
+    trip_payload_unsafe["warnings"] = [
+        "Не найдена подходящая АЗС до минимального остатка топлива."
+    ]
     with playwright.sync_playwright() as manager:
         try:
             browser = manager.chromium.launch(headless=True, executable_path=executable) if executable else manager.chromium.launch(headless=True)
@@ -2269,7 +2682,14 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
                         body=Path("app/static/style.css").read_text(encoding="utf-8"),
                     )
                 elif path == "http://homeos.test/api/fuel/trip-plan":
-                    route.fulfill(content_type="application/json", body=json.dumps(trip_payload))
+                    submitted = json.loads(route.request.post_data or "{}")
+                    if submitted.get("end") == "Петрозаводск":
+                        payload = trip_payload_2
+                    elif submitted.get("end") == "Опасный маршрут":
+                        payload = trip_payload_unsafe
+                    else:
+                        payload = trip_payload
+                    route.fulfill(content_type="application/json", body=json.dumps(payload))
                 elif path.endswith("/api/notifications/unread"):
                     route.fulfill(content_type="application/json", body='{"unread_total":0,"threads":[]}')
                 else:
@@ -2323,14 +2743,39 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             page.locator(".fuel-trip-stop").first.wait_for()
             assert page.locator(".fuel-trip-stop").count() == 2
             assert "Через 240 км" in page.locator(".fuel-trip-stop").first.text_content()
-            assert "отклонение +0.8 км" in page.locator(".fuel-trip-stop").first.text_content()
+            assert "до маршрута 0.8 км" in page.locator(".fuel-trip-stop").first.text_content()
             assert "1350 км" in page.locator("[data-trip-summary]").text_content()
             assert page.locator(".fuel-map-marker").count() == 2
             assert page.locator(".fuel-map-marker").nth(1).text_content().strip() == "?"
             assert page.locator(".fuel-trip-endpoint").count() == 2
             assert page.evaluate("window.fuelRouteLines") == 1
+            assert page.evaluate("window.fuelRouteGeometries.at(-1).length") == 4
+            assert page.evaluate("window.fuelRouteGeometries.at(-1)[1]") == [61.2, 31.1]
             page.locator(".fuel-map-marker").first.click()
             assert "240.0 км от начала" in page.locator(".leaflet-popup").text_content()
+            page.locator('[name="end"]').fill("Петрозаводск")
+            page.locator("[data-trip-form] [type=submit]").click()
+            page.wait_for_function("window.fuelRouteLines === 2")
+            assert page.evaluate("window.fuelRouteRemovals") >= 1
+            assert page.evaluate("window.fuelRouteGeometries.at(-1)[1]") == [60.2, 31.5]
+            assert "Петрозаводск" in page.locator("[data-trip-summary]").text_content()
+            assert page.locator(".fuel-map-marker").count() == 2
+
+            page.locator('[name="end"]').fill("Опасный маршрут")
+            page.locator("[data-trip-form] [type=submit]").click()
+            page.get_by_text(
+                "Безопасная остановка не найдена — проверьте предупреждения."
+            ).wait_for()
+            assert "Дополнительная остановка по расчёту не требуется" not in page.locator(
+                "[data-trip-status]"
+            ).text_content()
+            assert "Не найдена подходящая АЗС" in page.locator(
+                "[data-trip-summary]"
+            ).text_content()
+
+            page.locator('[name="end"]').fill("Мурманск")
+            page.locator("[data-trip-form] [type=submit]").click()
+            page.locator(".fuel-trip-stop").first.wait_for()
 
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) === innerWidth")

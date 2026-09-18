@@ -102,6 +102,11 @@ class Settings:
     fuel_poll_interval_seconds: int
     fuel_comments_poll_interval_seconds: int
     fuel_nearby_radius_km: int
+    route_engine_url: str
+    route_engine_profile: str
+    route_engine_timeout_seconds: int
+    route_engine_cache_seconds: int
+    route_engine_cache_max_entries: int
 
     @property
     def is_production(self) -> bool:
@@ -172,6 +177,11 @@ def load_settings() -> Settings:
         fuel_poll_interval_seconds=env_int("FUEL_POLL_INTERVAL_SECONDS", 300, 60, 86_400),
         fuel_comments_poll_interval_seconds=env_int("FUEL_COMMENTS_POLL_INTERVAL_SECONDS", 900, 300, 604_800),
         fuel_nearby_radius_km=env_int("FUEL_NEARBY_RADIUS_KM", 3, 1, 20),
+        route_engine_url=os.getenv("ROUTE_ENGINE_URL", "https://router.project-osrm.org").strip().rstrip("/"),
+        route_engine_profile=os.getenv("ROUTE_ENGINE_PROFILE", "driving").strip() or "driving",
+        route_engine_timeout_seconds=env_int("ROUTE_ENGINE_TIMEOUT_SECONDS", 8, 1, 60),
+        route_engine_cache_seconds=env_int("ROUTE_ENGINE_CACHE_SECONDS", 1_800, 0, 86_400),
+        route_engine_cache_max_entries=env_int("ROUTE_ENGINE_CACHE_MAX_ENTRIES", 128, 1, 10_000),
     )
 
 

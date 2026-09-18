@@ -3,6 +3,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -77,6 +78,7 @@ from .models import (
     PlannerReminderDelivery,
     PushSubscription,
     Recipe,
+    RecipeCollectionShare,
     RecipeCookingTimer,
     RecurringExpense,
     ShoppingCategoryRule,
@@ -147,7 +149,7 @@ from .services.fuel_notifications import (
     get_or_create_settings as get_fuel_notification_settings,
 )
 from .services.fuel_notifications import run_fuel_notification_cycle
-from .services.fuel_routes import distance_to_route_km, find_stations_near_route, haversine_km
+from .services.fuel_routes import find_stations_near_route, haversine_km
 from .services.fuel_settings import (
     FuelRuntimeSettings,
     get_fuel_runtime_settings,
@@ -155,12 +157,9 @@ from .services.fuel_settings import (
 )
 from .services.fuel_timeline import load_fuel_timeline
 from .services.fuel_trip import (
-    ROAD_DISTANCE_FACTOR,
     FuelTripPlanRequest,
     calculate_trip,
     planned_search_distances,
-    route_point_at_fraction,
-    route_progress_fraction,
     select_recommended_stops,
 )
 from .services.planner import (
@@ -184,6 +183,12 @@ from .services.preferences import (
     palette_css_variables,
     validate_gradient,
     validate_palette,
+)
+from .services.route_engine import (
+    OSRMRouteProvider,
+    RouteEngine,
+    RouteNotFound,
+    RouteResult,
 )
 from .services.vehicle_fuel import fuel_segments, fuel_summary
 from .services.vehicle_maintenance import STATUS_ORDER, calculate_maintenance
@@ -335,6 +340,35 @@ def make_gdebenz_provider() -> GdeBenzProvider:
         user_agent=settings.fuel_http_user_agent,
         client_id_path=GDEBENZ_CLIENT_ID_PATH,
     )
+
+
+route_engine = RouteEngine(
+    OSRMRouteProvider(
+        settings.route_engine_url,
+        profile=settings.route_engine_profile,
+        timeout_seconds=settings.route_engine_timeout_seconds,
+    ),
+    cache_seconds=settings.route_engine_cache_seconds,
+    cache_max_entries=settings.route_engine_cache_max_entries,
+)
+
+
+def make_route_engine() -> RouteEngine:
+    return route_engine
+
+
+def _route_payload(route: RouteResult, start: dict[str, Any], end: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "start": start,
+        "end": end,
+        "distance_km": round(route.distance_km, 1),
+        "duration_minutes": round(route.duration_minutes, 1) if route.duration_minutes is not None else None,
+        "geometry": [[latitude, longitude] for latitude, longitude in route.geometry],
+        "provider": route.provider,
+        "profile": route.profile,
+        "is_approximate": route.is_approximate,
+        "warnings": list(route.warnings),
+    }
 
 
 def msk_hour_percent(value: datetime | None) -> float:
@@ -1428,6 +1462,29 @@ def week_start_for(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
 
+def recipe_access_clause(user_id: int):
+    shared_owner_ids = select(RecipeCollectionShare.owner_id).where(
+        RecipeCollectionShare.user_id == user_id
+    )
+    return or_(Recipe.owner_id == user_id, Recipe.owner_id.in_(shared_owner_ids))
+
+
+def require_recipe_access(
+    db: Session,
+    recipe_id: int,
+    user: User,
+    *,
+    load_owner: bool = False,
+) -> Recipe:
+    query = select(Recipe).where(Recipe.id == recipe_id, recipe_access_clause(user.id))
+    if load_owner:
+        query = query.options(selectinload(Recipe.owner))
+    recipe = db.scalar(query)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    return recipe
+
+
 def parse_recipe_steps(raw: str | None) -> list[dict[str, Any]]:
     if not raw:
         return []
@@ -2400,7 +2457,12 @@ def require_chat_access(db: Session, thread_id: int, user: User) -> ChatThread:
 def recipe_media(filename: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     safe_name = Path(filename).name
     expected_path = f"/media/recipes/{safe_name}"
-    recipe = db.scalar(select(Recipe).where(Recipe.image_path == expected_path))
+    recipe = db.scalar(
+        select(Recipe).where(
+            Recipe.image_path == expected_path,
+            recipe_access_clause(user.id),
+        )
+    )
     path = RECIPE_MEDIA_DIR / safe_name
     if not recipe or not path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
@@ -3155,9 +3217,15 @@ async def fuel_route_stations_api(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return public provider stations in a corridor around a straight route."""
+    """Return public provider stations projected onto one automotive route."""
     radius = radius_km or float(get_fuel_runtime_settings(db).nearby_radius_km)
+    start = {"latitude": start_lat, "longitude": start_lon}
+    end = {"latitude": end_lat, "longitude": end_lon}
     try:
+        route = await make_route_engine().route(
+            (start_lat, start_lon),
+            (end_lat, end_lon),
+        )
         stations = await find_stations_near_route(
             make_gdebenz_provider(),
             start_latitude=start_lat,
@@ -3165,7 +3233,11 @@ async def fuel_route_stations_api(
             end_latitude=end_lat,
             end_longitude=end_lon,
             radius_km=radius,
+            route_geometry=route.geometry,
+            route_distance_km=route.distance_km,
         )
+    except RouteNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderUnavailable as exc:
@@ -3190,9 +3262,10 @@ async def fuel_route_stations_api(
     for station in stations:
         station["station_id"] = own_station_ids.get(str(station["provider_station_id"]))
     return {
-        "start": {"latitude": start_lat, "longitude": start_lon},
-        "end": {"latitude": end_lat, "longitude": end_lon},
+        "start": start,
+        "end": end,
         "radius_km": radius,
+        "route": _route_payload(route, start, end),
         "stations": stations,
     }
 
@@ -3204,10 +3277,17 @@ async def _resolve_trip_place(query: str, geocoder: NominatimGeocoder) -> dict[s
     if len(parts) == 2:
         try:
             latitude, longitude = float(parts[0]), float(parts[1])
-            if -90 <= latitude <= 90 and -180 <= longitude <= 180:
-                return {"label": query, "latitude": latitude, "longitude": longitude}
         except ValueError:
             pass
+        else:
+            if (
+                math.isfinite(latitude)
+                and math.isfinite(longitude)
+                and -90 <= latitude <= 90
+                and -180 <= longitude <= 180
+            ):
+                return {"label": query, "latitude": latitude, "longitude": longitude}
+            raise ValueError("Координаты находятся вне допустимого диапазона")
     places = await geocoder.search(query)
     if not places:
         raise ValueError(f"Не удалось найти точку: {query}")
@@ -3267,25 +3347,30 @@ async def fuel_trip_plan_api(
     )
     if straight_distance < 0.5:
         raise HTTPException(status_code=400, detail="Точки маршрута находятся слишком близко")
-    estimated_distance = straight_distance * ROAD_DISTANCE_FACTOR
+    try:
+        route = await make_route_engine().route(
+            (float(start["latitude"]), float(start["longitude"])),
+            (float(end["latitude"]), float(end["longitude"])),
+        )
+    except RouteNotFound as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     calculation = calculate_trip(
-        estimated_distance,
+        route.distance_km,
         tank_liters=request_data.tank_liters,
         consumption_l_per_100km=consumption,
         fuel_level_percent=request_data.fuel_level_percent,
     )
     warnings = list(calculation.pop("warnings", []))
-    warnings.append(
-        "Длина поездки оценена по прямой с поправочным коэффициентом; "
-        "это не пошаговый автомобильный маршрут."
-    )
+    warnings.extend(route.warnings)
 
     candidates_by_id: dict[str, dict[str, Any]] = {}
     search_distances = planned_search_distances(calculation)
     if (
         search_distances
         and search_distances[-1] + float(calculation["safe_full_range_km"])
-        < estimated_distance
+        < route.distance_km
     ):
         warnings.append(
             "Поиск остановок ограничен двадцатью точками; для такой поездки нужен этапный маршрут."
@@ -3295,47 +3380,19 @@ async def fuel_trip_plan_api(
         runtime = get_fuel_runtime_settings(db)
         search_radius = min(10.0, max(3.0, float(runtime.nearby_radius_km)))
         try:
-            for target_distance in search_distances:
-                fraction = min(1.0, target_distance / estimated_distance)
-                latitude, longitude = route_point_at_fraction(
-                    float(start["latitude"]),
-                    float(start["longitude"]),
-                    float(end["latitude"]),
-                    float(end["longitude"]),
-                    fraction,
-                )
-                nearby = await find_stations_near_route(
-                    provider,
-                    start_latitude=latitude,
-                    start_longitude=longitude,
-                    end_latitude=latitude,
-                    end_longitude=longitude,
-                    radius_km=search_radius,
-                )
-                for station in nearby:
-                    progress = route_progress_fraction(
-                        float(station["latitude"]),
-                        float(station["longitude"]),
-                        float(start["latitude"]),
-                        float(start["longitude"]),
-                        float(end["latitude"]),
-                        float(end["longitude"]),
-                    )
-                    station["distance_from_start_km"] = round(
-                        progress * estimated_distance, 1
-                    )
-                    station["distance_to_route_km"] = round(
-                        distance_to_route_km(
-                            float(station["latitude"]),
-                            float(station["longitude"]),
-                            float(start["latitude"]),
-                            float(start["longitude"]),
-                            float(end["latitude"]),
-                            float(end["longitude"]),
-                        ),
-                        2,
-                    )
-                    candidates_by_id[str(station["provider_station_id"])] = station
+            nearby = await find_stations_near_route(
+                provider,
+                start_latitude=float(start["latitude"]),
+                start_longitude=float(start["longitude"]),
+                end_latitude=float(end["latitude"]),
+                end_longitude=float(end["longitude"]),
+                radius_km=search_radius,
+                route_geometry=route.geometry,
+                route_distance_km=route.distance_km,
+                sample_progress_km=search_distances,
+            )
+            for station in nearby:
+                candidates_by_id[str(station["provider_station_id"])] = station
         except ProviderUnavailable:
             warnings.append("Не удалось получить актуальные АЗС; расчёт топлива сохранён.")
 
@@ -3397,15 +3454,7 @@ async def fuel_trip_plan_api(
     )
     warnings.extend(selection_warnings)
     return {
-        "route": {
-            "start": start,
-            "end": end,
-            "distance_km": calculation["distance_km"],
-            "geometry": [
-                [start["latitude"], start["longitude"]],
-                [end["latitude"], end["longitude"]],
-            ],
-        },
+        "route": _route_payload(route, start, end),
         "vehicle": {
             "id": vehicle.id,
             "title": vehicle.title,
@@ -4069,7 +4118,13 @@ def recipes_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Recipe).options(selectinload(Recipe.owner)).order_by(desc(Recipe.created_at))
+    access_clause = recipe_access_clause(user.id)
+    stmt = (
+        select(Recipe)
+        .options(selectinload(Recipe.owner))
+        .where(access_clause)
+        .order_by(desc(Recipe.created_at))
+    )
     q_clean = q.strip()
     tag_clean = tag.strip().lower()
     if q_clean:
@@ -4088,11 +4143,23 @@ def recipes_page(
         stmt = stmt.where(Recipe.servings >= servings_min_value)
     recipes = db.scalars(stmt).all()
     tag_counts: dict[str, int] = defaultdict(int)
-    for recipe in db.scalars(select(Recipe).where(Recipe.owner_id == user.id)).all():
+    for recipe in db.scalars(select(Recipe).where(access_clause)).all():
         for one_tag in (recipe.tags or "").replace(";", ",").split(","):
             clean = one_tag.strip()
             if clean:
                 tag_counts[clean] += 1
+    shares_given = db.scalars(
+        select(RecipeCollectionShare)
+        .options(selectinload(RecipeCollectionShare.user))
+        .where(RecipeCollectionShare.owner_id == user.id)
+        .order_by(RecipeCollectionShare.created_at)
+    ).all()
+    shares_received = db.scalars(
+        select(RecipeCollectionShare)
+        .options(selectinload(RecipeCollectionShare.owner))
+        .where(RecipeCollectionShare.user_id == user.id)
+        .order_by(RecipeCollectionShare.created_at)
+    ).all()
     return render(request, "recipes.html", {
         "user": user,
         "recipes": recipes,
@@ -4102,7 +4169,58 @@ def recipes_page(
         "max_cost": max_cost,
         "servings_min": servings_min,
         "tags": sorted(tag_counts),
+        "shares_given": shares_given,
+        "shares_received": shares_received,
     })
+
+
+@app.post("/recipes/share")
+def recipe_collection_share(
+    username: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    target = db.scalar(select(User).where(User.username == normalize_username(username)))
+    if target is None:
+        return redirect_notice("/recipes", "Пользователь не найден")
+    if target.id == user.id:
+        return redirect_notice("/recipes", "Нельзя открыть доступ самому себе")
+    exists = db.scalar(
+        select(RecipeCollectionShare).where(
+            RecipeCollectionShare.owner_id == user.id,
+            RecipeCollectionShare.user_id == target.id,
+        )
+    )
+    if exists is None:
+        db.add(RecipeCollectionShare(owner_id=user.id, user_id=target.id))
+        db.commit()
+    return redirect_notice("/recipes", f"Доступ открыт для @{target.username}")
+
+
+@app.post("/recipes/share/{share_id}/delete")
+def recipe_collection_share_delete(
+    share_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    share = db.scalar(
+        select(RecipeCollectionShare).where(
+            RecipeCollectionShare.id == share_id,
+            RecipeCollectionShare.owner_id == user.id,
+        )
+    )
+    if share is None:
+        raise HTTPException(status_code=404, detail="Доступ не найден")
+    shared_recipe_ids = select(Recipe.id).where(Recipe.owner_id == share.owner_id)
+    db.execute(
+        sql_delete(RecipeCookingTimer).where(
+            RecipeCookingTimer.owner_id == share.user_id,
+            RecipeCookingTimer.recipe_id.in_(shared_recipe_ids),
+        )
+    )
+    db.delete(share)
+    db.commit()
+    return redirect_notice("/recipes", "Доступ закрыт")
 
 
 @app.get("/recipes/new")
@@ -4205,9 +4323,7 @@ def recipe_detail_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.scalar(select(Recipe).options(selectinload(Recipe.owner)).where(Recipe.id == recipe_id))
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user, load_owner=True)
 
     base_servings = Decimal(str(recipe.servings)) if recipe.servings is not None else None
     target_servings = parse_optional_decimal(servings, "Порции", Decimal("0.1")) if servings.strip() else base_servings
@@ -4250,9 +4366,7 @@ def recipe_cost_from_prices(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     if recipe.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Обновить стоимость можно только в своём рецепте")
     base_servings = Decimal(str(recipe.servings)) if recipe.servings is not None else None
@@ -4274,6 +4388,7 @@ def recipe_timer_status(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_recipe_access(db, recipe_id, user)
     timer = db.scalar(
         select(RecipeCookingTimer).where(
             RecipeCookingTimer.owner_id == user.id,
@@ -4289,9 +4404,7 @@ def recipe_timer_start(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    require_recipe_access(db, recipe_id, user)
     timer = get_or_create_cooking_timer(db, user.id, recipe_id)
     if not timer.is_running:
         timer.started_at = utc_now_naive()
@@ -4309,6 +4422,7 @@ def recipe_timer_stop(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_recipe_access(db, recipe_id, user)
     timer = db.scalar(
         select(RecipeCookingTimer).where(
             RecipeCookingTimer.owner_id == user.id,
@@ -4334,6 +4448,7 @@ def recipe_timer_reset(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_recipe_access(db, recipe_id, user)
     timer = db.scalar(
         select(RecipeCookingTimer).where(
             RecipeCookingTimer.owner_id == user.id,
@@ -4357,9 +4472,7 @@ def recipe_timer_record(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     if recipe.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Записать время можно только в свой рецепт")
     timer = db.scalar(
@@ -4390,9 +4503,7 @@ def recipe_edit_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     if recipe.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Редактировать можно только свой рецепт")
     return render(request, "recipe_form.html", {"user": user, "recipe": recipe, "action": f"/recipes/{recipe.id}/edit", "steps": recipe_steps_for_form(recipe)})
@@ -4415,9 +4526,7 @@ def recipe_update(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     if recipe.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Редактировать можно только свой рецепт")
 
@@ -4453,9 +4562,7 @@ def recipe_delete(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     if recipe.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Удалять можно только свой рецепт")
     delete_recipe_image(recipe.image_path)
@@ -5697,7 +5804,11 @@ def menu_page(
     end_date = start_date + timedelta(days=6)
     today = msk_today()
     default_plan_date = today if start_date <= today <= end_date else selected_date
-    recipes = db.scalars(select(Recipe).where(Recipe.owner_id == user.id).order_by(Recipe.title)).all()
+    recipes = db.scalars(
+        select(Recipe)
+        .where(recipe_access_clause(user.id))
+        .order_by(Recipe.title)
+    ).all()
     items = db.scalars(
         select(MenuItem)
         .options(selectinload(MenuItem.recipe))
@@ -5754,9 +5865,7 @@ def menu_add(
     selected_date = parse_date(plan_date)
     if selected_date is None:
         raise HTTPException(status_code=400, detail="Укажи дату")
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     db.add(
         MenuItem(
             owner_id=user.id,
@@ -6637,7 +6746,19 @@ def global_search_page(
     if q_clean:
         like = f"%{q_clean}%"
         results["users"] = db.scalars(select(User).where(User.id != user.id, User.username.ilike(like)).order_by(User.username).limit(20)).all()
-        results["recipes"] = db.scalars(select(Recipe).where(Recipe.owner_id == user.id, or_(Recipe.title.ilike(like), Recipe.ingredients.ilike(like), Recipe.tags.ilike(like))).order_by(desc(Recipe.created_at)).limit(20)).all()
+        results["recipes"] = db.scalars(
+            select(Recipe)
+            .where(
+                recipe_access_clause(user.id),
+                or_(
+                    Recipe.title.ilike(like),
+                    Recipe.ingredients.ilike(like),
+                    Recipe.tags.ilike(like),
+                ),
+            )
+            .order_by(desc(Recipe.created_at))
+            .limit(20)
+        ).all()
         results["expenses"] = db.scalars(
             select(ExpenseItem)
             .join(ExpenseCategory)
@@ -6676,9 +6797,7 @@ def recipe_to_shopping(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    recipe = db.get(Recipe, recipe_id)
-    if not recipe:
-        raise HTTPException(status_code=404, detail="Рецепт не найден")
+    recipe = require_recipe_access(db, recipe_id, user)
     base_servings = Decimal(str(recipe.servings)) if recipe.servings is not None else None
     target_servings = parse_optional_decimal(servings, "Порции", Decimal("0.1")) if servings.strip() else base_servings
     ratio = target_servings / base_servings if base_servings and target_servings else None

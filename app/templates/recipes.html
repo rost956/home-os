@@ -10,6 +10,35 @@
     </div>
 </div>
 
+<section class="card slim">
+    <div class="card-head">
+        <div>
+            <h2>Общий доступ</h2>
+            <div class="subline">Откройте пользователю просмотр всех ваших текущих и будущих рецептов.</div>
+        </div>
+    </div>
+    <form method="post" action="/recipes/share" class="inline-form compact-form">
+        <input name="username" placeholder="nickname" autocomplete="off" required aria-label="Имя пользователя">
+        <button class="btn" type="submit"><svg class="icon"><use href="#i-plus"></use></svg> Поделиться</button>
+    </form>
+    {% if shares_given %}
+    <div class="share-list">
+        {% for share in shares_given %}
+        <div class="share-chip">
+            <span>@{{ share.user.username }} · просмотр</span>
+            <form method="post" action="/recipes/share/{{ share.id }}/delete"><button type="submit" title="Закрыть доступ" aria-label="Закрыть доступ для {{ share.user.username }}"><svg class="icon"><use href="#i-x"></use></svg></button></form>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if shares_received %}
+    <div class="chips">
+        <span class="subline">Доступны коллекции:</span>
+        {% for share in shares_received %}<span class="chip">@{{ share.owner.username }}</span>{% endfor %}
+    </div>
+    {% endif %}
+</section>
+
 <form method="get" action="/recipes" class="card filters-card auto-search" id="recipeSearchForm">
     <input name="q" value="{{ q }}" placeholder="Поиск" autocomplete="off" id="recipeSearchInput">
     <select name="tag" id="recipeTagFilter">
@@ -32,6 +61,7 @@
                 {% if recipe.cost is not none %}<span>{{ recipe.cost|fmt_decimal }} ₽</span>{% endif %}
                 {% if recipe.servings is not none %}<span><svg class="icon"><use href="#i-servings"></use></svg>{{ recipe.servings|fmt_decimal }}</span>{% endif %}
                 {% if recipe.tags %}<span class="recipe-tags">{{ recipe.tags }}</span>{% endif %}
+                {% if recipe.owner_id != user.id %}<span>от @{{ recipe.owner.username }}</span>{% endif %}
             </small>
         </a>
         {% if recipe.owner_id == user.id %}<form method="post" action="/recipes/{{ recipe.id }}/favorite" class="recipe-favorite-form"><button class="icon-btn favorite-btn{% if recipe.is_favorite %} filled{% endif %}" type="submit" title="Избранное" aria-label="Избранное"><svg class="icon"><use href="#i-star"></use></svg></button></form>{% endif %}

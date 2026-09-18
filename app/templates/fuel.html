@@ -199,7 +199,7 @@
         const title = document.createElement('b'); title.className = 'fuel-map-card-title'; title.textContent = station.name; root.append(title);
         const address = document.createElement('p'); address.textContent = station.address; root.append(address);
         if (station.trip) {
-            const routeDistance = document.createElement('p'); routeDistance.className = 'fuel-map-distance'; routeDistance.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · отклонение ${station.distance_to_route_km.toFixed(1)} км`; root.append(routeDistance);
+            const routeDistance = document.createElement('p'); routeDistance.className = 'fuel-map-distance'; routeDistance.textContent = `${station.distance_from_start_km.toFixed(1)} км от начала · до маршрута ${station.distance_to_route_km.toFixed(1)} км`; root.append(routeDistance);
         } else if (mobile) {
             const distanceLabel = document.createElement('p'); distanceLabel.className = 'fuel-map-distance'; distanceLabel.dataset.mapDistance = ''; distanceLabel.textContent = formatDistance(station); root.append(distanceLabel);
         }
@@ -242,7 +242,7 @@
         const heading = document.createElement('div'); heading.className = 'fuel-trip-stop-heading';
         const sequence = document.createElement('span'); sequence.className = 'pill'; sequence.textContent = `${index + 1}`; heading.append(sequence);
         const title = document.createElement('h3'); title.textContent = station.name; heading.append(title); card.append(heading);
-        const metrics = document.createElement('p'); metrics.className = 'fuel-trip-stop-distance'; metrics.textContent = `Через ${station.distance_from_start_km.toFixed(0)} км · отклонение +${station.distance_to_route_km.toFixed(1)} км`; card.append(metrics);
+        const metrics = document.createElement('p'); metrics.className = 'fuel-trip-stop-distance'; metrics.textContent = `Через ${station.distance_from_start_km.toFixed(0)} км · до маршрута ${station.distance_to_route_km.toFixed(1)} км`; card.append(metrics);
         if (station.address) { const address = document.createElement('p'); address.className = 'subline'; address.textContent = station.address; card.append(address); }
         const fuel = document.createElement('p'); fuel.className = `fuel-trip-stop-fuel ${station.selected_fuel.state}`; fuel.textContent = `АИ-${station.selected_fuel.fuel_type}: ${station.selected_fuel.symbol} ${station.selected_fuel.label}`; card.append(fuel);
         const footer = document.createElement('footer'); footer.textContent = `${station.updated_text} · после заправки ≈ ${station.after_refuel_range_km.toFixed(0)} км`; card.append(footer);
@@ -256,8 +256,12 @@
         const summary = document.createElement('section'); summary.className = 'card fuel-trip-calculation';
         const heading = document.createElement('h2'); heading.textContent = `${tripPlan.route.start.label} → ${tripPlan.route.end.label}`; summary.append(heading);
         const values = document.createElement('div'); values.className = 'fuel-trip-calculation-grid';
+        const duration = tripPlan.route.duration_minutes;
+        const roundedDuration = duration === null || duration === undefined ? null : Math.round(duration);
+        const durationText = roundedDuration === null ? 'нет точной оценки' : `${Math.floor(roundedDuration / 60)} ч ${roundedDuration % 60} мин`;
         const rows = [
-            ['Расстояние', `${calculation.distance_km.toFixed(0)} км`],
+            ['Расстояние', `${calculation.distance_km.toFixed(0)} км${tripPlan.route.is_approximate ? ' · приблизительно' : ''}`],
+            ['Ориентировочное время движения', durationText],
             ['Расход', calculation.consumption_l_per_100km !== undefined ? `${calculation.consumption_l_per_100km.toFixed(1)} л/100 км` : 'не указан'],
             ['Нужно топлива', calculation.required_liters !== undefined ? `${calculation.required_liters.toFixed(1)} л` : 'нет расчёта'],
             ['Текущий запас', calculation.current_range_km !== undefined ? `${calculation.current_range_km.toFixed(0)} км` : 'нет расчёта'],
@@ -292,11 +296,12 @@
         markerLayer.clearLayers();
         if (tripLine) { tripLine.remove(); tripLine = null; }
         const points = isTrip ? [...tripPoints] : [];
-        if (isTrip && tripPoints.length === 2) tripLine = window.L.polyline(tripPoints, {color: '#2563eb', weight: 5, opacity: .78}).addTo(leafletMap);
-        if (isTrip && tripPoints.length === 2) {
+        if (isTrip && tripPoints.length >= 2) tripLine = window.L.polyline(tripPoints, {color: '#2563eb', weight: 5, opacity: .78}).addTo(leafletMap);
+        if (isTrip && tripPoints.length >= 2) {
+            const endpoints = [tripPoints[0], tripPoints[tripPoints.length - 1]];
             [['А', 'Старт'], ['Б', 'Финиш']].forEach(([symbol, label], index) => {
                 const icon = window.L.divIcon({className: `fuel-trip-endpoint ${index ? 'finish' : 'start'}`, html: `<span aria-hidden="true">${symbol}</span>`, iconSize: [38, 38], iconAnchor: [19, 19]});
-                const marker = window.L.marker(tripPoints[index], {icon, title: label, alt: label}).addTo(markerLayer);
+                const marker = window.L.marker(endpoints[index], {icon, title: label, alt: label}).addTo(markerLayer);
                 if (marker.getElement()) marker.getElement().setAttribute('aria-label', label);
             });
         }
@@ -389,7 +394,20 @@
                 const summary = (item.selected_fuel || {}).state || 'unknown';
                 return {...item, id: item.station_id, trip: true, name: item.brand || item.name || 'АЗС', address: item.address || 'Адрес не указан', fuels, summary_state: summary, updated_text: routeUpdatedText(item.updated_at), distance_from_start_km: Number(item.distance_from_start_km), distance_to_route_km: Number(item.distance_to_route_km), after_refuel_range_km: Number(item.after_refuel_range_km)};
             });
-            tripPlan = result; tripStatus.textContent = tripStations.length ? `Подобрано остановок: ${tripStations.length}.` : 'Дополнительная остановка по расчёту не требуется.'; closeMobileSheet(); render();
+            tripPlan = result;
+            const calculation = result.calculation || {};
+            const noStopRequired = calculation.can_plan
+                && Number(calculation.safe_current_range_km) >= Number(calculation.distance_km);
+            if (tripStations.length) {
+                tripStatus.textContent = `Подобрано остановок: ${tripStations.length}.`;
+            } else if (noStopRequired) {
+                tripStatus.textContent = 'Дополнительная остановка по расчёту не требуется.';
+            } else if (!calculation.can_plan) {
+                tripStatus.textContent = 'Добавьте данные автомобиля, чтобы подобрать остановки.';
+            } else {
+                tripStatus.textContent = 'Безопасная остановка не найдена — проверьте предупреждения.';
+            }
+            closeMobileSheet(); render();
         } catch (error) {
             tripPlan = null; tripStations = []; tripPoints = []; tripResults.hidden = true; tripSummary.hidden = true;
             tripStatus.textContent = error instanceof Error ? error.message : 'Не удалось рассчитать поездку';

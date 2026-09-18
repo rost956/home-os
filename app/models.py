@@ -38,6 +38,16 @@ class User(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     recipes: Mapped[list["Recipe"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
+    recipe_shares_given: Mapped[list["RecipeCollectionShare"]] = relationship(
+        back_populates="owner",
+        foreign_keys="RecipeCollectionShare.owner_id",
+        cascade="all, delete-orphan",
+    )
+    recipe_shares_received: Mapped[list["RecipeCollectionShare"]] = relationship(
+        back_populates="user",
+        foreign_keys="RecipeCollectionShare.user_id",
+        cascade="all, delete-orphan",
+    )
     owned_expense_lists: Mapped[list["ExpenseList"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     wishlist_items: Mapped[list["WishlistItem"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     menu_items: Mapped[list["MenuItem"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
@@ -284,6 +294,32 @@ class Recipe(Base):
         if servings_value <= 0:
             return None
         return (self.cost / servings_value).quantize(Decimal("0.01"))
+
+
+class RecipeCollectionShare(Base):
+    """Read-only access to all current and future recipes of one owner."""
+
+    __tablename__ = "recipe_collection_shares"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "user_id", name="uq_recipe_collection_share"),
+        CheckConstraint("owner_id != user_id", name="ck_recipe_collection_share_not_self"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+    owner: Mapped[User] = relationship(
+        back_populates="recipe_shares_given", foreign_keys=[owner_id]
+    )
+    user: Mapped[User] = relationship(
+        back_populates="recipe_shares_received", foreign_keys=[user_id]
+    )
 
 
 

@@ -153,6 +153,12 @@ def _freshness_rank(value: Any, now: datetime) -> int:
     return 0 if age_hours <= 2 else 1
 
 
+def _route_progress(item: dict[str, Any]) -> float:
+    """Use Phase 10.1 progress while accepting the previous API field."""
+    value = item.get("route_progress_km")
+    return float(value if value is not None else item["distance_from_start_km"])
+
+
 def select_recommended_stops(
     candidates: list[dict[str, Any]],
     *,
@@ -172,14 +178,14 @@ def select_recommended_stops(
     full_range = float(calculation["full_range_km"])
     chosen: list[dict[str, Any]] = []
     warnings: list[str] = []
-    remaining = sorted(candidates, key=lambda item: float(item["distance_from_start_km"]))
+    remaining = sorted(candidates, key=_route_progress)
     state_rank = {"available": 0, "low": 1, "candidate": 2, "unknown": 3}
 
     while position + usable_range < route_distance:
         minimum_progress = position + max(10.0, usable_range * 0.45)
         reachable = []
         for station in remaining:
-            station_distance = float(station["distance_from_start_km"])
+            station_distance = _route_progress(station)
             deviation = float(station["distance_to_route_km"])
             fuel = next(
                 (item for item in station.get("fuels", []) if item.get("fuel_type") == fuel_type),
@@ -205,17 +211,17 @@ def select_recommended_stops(
                 float(pair[0]["distance_to_route_km"]),
                 _freshness_rank(pair[0].get("updated_at"), now),
                 0 if pair[0].get("has_confirmed_event") else 1,
-                abs(float(pair[0]["distance_from_start_km"]) - target),
+                abs(_route_progress(pair[0]) - target),
             ),
         )
         stop = dict(station)
         stop["selected_fuel"] = selected_fuel
         stop["after_refuel_range_km"] = round(full_range, 1)
         chosen.append(stop)
-        position = float(station["distance_from_start_km"])
+        position = _route_progress(station)
         usable_range = full_usable_range
         remaining = [
-            item for item in remaining if float(item["distance_from_start_km"]) > position
+            item for item in remaining if _route_progress(item) > position
         ]
         if len(chosen) >= 20:
             warnings.append("Количество остановок ограничено двадцатью.")
