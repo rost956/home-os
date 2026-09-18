@@ -8,7 +8,7 @@
 {% block content %}
 <div class="page-head compact-head fuel-head fuel-dashboard-head">
     <div><h1>Бензин</h1><div class="subline">Где сейчас есть нужное топливо</div></div>
-    <div class="actions dashboard-actions"><a class="btn" href="/fuel/add"><span aria-hidden="true">+</span> АЗС</a><a class="btn secondary" href="/fuel/settings">Настройки</a></div>
+    <div class="actions dashboard-actions"><a class="btn" href="/fuel/add"><span aria-hidden="true">+</span> АЗС</a><a class="btn secondary" href="/vehicles/trips">Мои поездки</a><a class="btn secondary" href="/fuel/settings">Настройки</a></div>
 </div>
 
 <section class="fuel-dashboard-controls" aria-label="Фильтры АЗС">
@@ -130,6 +130,7 @@
     let tripStations = [];
     let tripPoints = [];
     let tripPlan = null;
+    let tripInput = null;
     let activeMapStationId = null;
     let renderedView = null;
     const mobileMapQuery = matchMedia('(max-width: 600px)');
@@ -269,6 +270,7 @@
         rows.forEach(([label, value]) => { const item = document.createElement('div'); const term = document.createElement('span'); const result = document.createElement('b'); term.textContent = label; result.textContent = value; item.append(term, result); values.append(item); }); summary.append(values);
         if (calculation.next_refuel_from_km !== null && calculation.next_refuel_from_km !== undefined) { const next = document.createElement('p'); next.className = 'fuel-trip-next'; next.textContent = `Следующая заправка: примерно через ${calculation.next_refuel_from_km.toFixed(0)}–${calculation.next_refuel_to_km.toFixed(0)} км`; summary.append(next); }
         if (tripPlan.warnings.length) { const warnings = document.createElement('ul'); warnings.className = 'fuel-trip-warnings'; tripPlan.warnings.forEach(message => { const item = document.createElement('li'); item.textContent = message; warnings.append(item); }); summary.append(warnings); }
+        if (calculation.can_plan && tripInput) { const save = document.createElement('button'); save.className = 'btn fuel-trip-save'; save.type = 'button'; save.textContent = 'Сохранить поездку'; save.addEventListener('click', saveTrip); summary.append(save); }
         tripSummary.replaceChildren(summary);
         const title = document.createElement('h2'); title.textContent = 'Рекомендуемые остановки';
         tripResults.replaceChildren(title, ...tripStations.map(tripStopCard));
@@ -323,6 +325,20 @@
             if (points.length === 1) leafletMap.setView(points[0], 15);
             else leafletMap.fitBounds(points, {padding: [28, 28], maxZoom: 15});
         }, 0);
+    }
+    async function saveTrip(event) {
+        const button = event.currentTarget;
+        if (!tripInput || button.disabled) return;
+        button.disabled = true; tripStatus.textContent = 'Сохраняем план поездки…';
+        try {
+            const response = await fetch('/api/fuel/trips', {method: 'POST', headers: {'Accept': 'application/json', 'Content-Type': 'application/json'}, body: JSON.stringify(tripInput)});
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || 'Не удалось сохранить поездку');
+            location.assign(result.detail_url);
+        } catch (error) {
+            tripStatus.textContent = error instanceof Error ? error.message : 'Не удалось сохранить поездку';
+            button.disabled = false;
+        }
     }
     function setFuelView(mode) {
         if (!allowed.view.includes(mode)) mode = 'list';
@@ -395,6 +411,7 @@
                 return {...item, id: item.station_id, trip: true, name: item.brand || item.name || 'АЗС', address: item.address || 'Адрес не указан', fuels, summary_state: summary, updated_text: routeUpdatedText(item.updated_at), distance_from_start_km: Number(item.distance_from_start_km), distance_to_route_km: Number(item.distance_to_route_km), after_refuel_range_km: Number(item.after_refuel_range_km)};
             });
             tripPlan = result;
+            tripInput = {...payload, client_request_id: (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`).replaceAll('-', '_')};
             const calculation = result.calculation || {};
             const noStopRequired = calculation.can_plan
                 && Number(calculation.safe_current_range_km) >= Number(calculation.distance_km);
@@ -409,7 +426,7 @@
             }
             closeMobileSheet(); render();
         } catch (error) {
-            tripPlan = null; tripStations = []; tripPoints = []; tripResults.hidden = true; tripSummary.hidden = true;
+            tripPlan = null; tripInput = null; tripStations = []; tripPoints = []; tripResults.hidden = true; tripSummary.hidden = true;
             tripStatus.textContent = error instanceof Error ? error.message : 'Не удалось рассчитать поездку';
             document.getElementById('fuelMap').hidden = true; mapEmpty.hidden = false; mapEmpty.textContent = 'Не удалось показать поездку. Проверьте данные и повторите попытку.';
         } finally { submit.disabled = false; }

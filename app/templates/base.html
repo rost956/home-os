@@ -16,7 +16,7 @@
     <meta name="theme-color" content="#111827">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=75">
+<link rel="stylesheet" href="/static/style.css?v=76">
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -110,7 +110,11 @@
                 <a href="/watch"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-watch"></use></svg></span><b>Сериалы и фильмы</b></a>
                 <a href="/moments"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-moments"></use></svg></span><b>Моменты</b></a>
                 <a href="/planner"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-planner"></use></svg></span><b>Планировщик</b></a>
-                <a href="/vehicles"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-car"></use></svg></span><b>Авто</b></a>
+                </details>
+                <details class="nav-group" data-nav-group="vehicles" open>
+                <summary class="nav-group-title">Авто</summary>
+                <a href="/vehicles"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-car"></use></svg></span><b>Автомобили</b></a>
+                <a href="/vehicles/trips"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-planner"></use></svg></span><b>Поездки</b></a>
                 <a href="/fuel"><span class="nav-icon" aria-hidden="true"><svg class="icon"><use href="#i-fuel"></use></svg></span><b>Бензин</b></a>
                 </details>
                 <details class="nav-group" data-nav-group="service" open>

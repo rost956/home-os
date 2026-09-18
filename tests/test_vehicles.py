@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.models import Vehicle
 
 
@@ -16,6 +18,34 @@ def vehicle_data(**overrides: str) -> dict[str, str]:
     }
     values.update(overrides)
     return values
+
+
+def test_navigation_has_separate_vehicle_group(client, make_user, login):
+    user = make_user("vehicle-navigation")
+    login(user.username)
+
+    page = client.get("/vehicles")
+    assert page.status_code == 200
+
+    vehicle_group = re.search(
+        r'<details class="nav-group" data-nav-group="vehicles" open>(.*?)</details>',
+        page.text,
+        re.DOTALL,
+    )
+    home_group = re.search(
+        r'<details class="nav-group" data-nav-group="home" open>(.*?)</details>',
+        page.text,
+        re.DOTALL,
+    )
+    assert vehicle_group is not None
+    assert home_group is not None
+    assert '<summary class="nav-group-title">Авто</summary>' in vehicle_group.group(1)
+    assert 'href="/vehicles"' in vehicle_group.group(1)
+    assert "Автомобили" in vehicle_group.group(1)
+    assert 'href="/fuel"' in vehicle_group.group(1)
+    assert "Бензин" in vehicle_group.group(1)
+    assert 'href="/vehicles"' not in home_group.group(1)
+    assert 'href="/fuel"' not in home_group.group(1)
 
 
 def test_vehicle_empty_state_and_create_detail_with_normalized_vin(client, db, make_user, login):

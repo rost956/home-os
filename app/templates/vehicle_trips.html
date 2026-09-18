@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}История поездок{% endblock %}
+{% block body_class %}vehicle-trips-page{% endblock %}
+{% block content %}
+<div class="page-head compact-head vehicle-page-head">
+    <div><h1>Поездки</h1><div class="subline">Сохранённые планы и фактические данные автомобилей</div></div>
+    <a class="btn" href="/fuel?view=trip">Спланировать поездку</a>
+</div>
+<form class="card form vehicle-trip-filters" method="get">
+    <div class="form-row two-cols">
+        <label>Статус<select name="status"><option value="all">Все</option>{% for key, label in status_labels.items() %}<option value="{{ key }}" {% if status_filter == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Автомобиль<select name="vehicle_id"><option value="">Все автомобили</option>{% for vehicle in vehicles %}<option value="{{ vehicle.id }}" {% if vehicle_filter == vehicle.id %}selected{% endif %}>{{ vehicle.title }}</option>{% endfor %}</select></label>
+    </div>
+    <button class="btn secondary" type="submit">Применить</button>
+</form>
+<section class="vehicle-trip-list">
+{% for row in trips %}{% set trip=row.trip %}{% set metrics=row.metrics %}
+    <a class="card vehicle-trip-card" href="/vehicles/trips/{{ trip.id }}">
+        <header><div><h2>{{ trip.start_label }} → {{ trip.end_label }}</h2><p>{{ trip.vehicle.title }} · {{ trip.created_at|msk_datetime }}</p></div><span class="vehicle-trip-status {{ trip.status }}">{{ status_labels[trip.status] }}</span></header>
+        <div class="vehicle-trip-card-metrics">
+            <div><span>План</span><b>{{ trip.planned_distance_km|fmt_decimal }} км</b></div>
+            <div><span>{% if metrics.distance.source == 'odometer' %}По одометру{% else %}Расстояние{% endif %}</span><b>{% if metrics.distance.value is not none %}{% if metrics.distance.quality == 'estimated' %}≈ {% endif %}{{ metrics.distance.value|fmt_decimal }} км{% else %}Нет данных{% endif %}</b></div>
+            <div><span>Топливо</span><b>АИ-{{ trip.fuel_type }}</b></div>
+            <div><span>Расход поездки</span><b>{% if metrics.consumption_l_per_100km is not none %}{% if metrics.consumption_quality != 'actual' %}≈ {% endif %}{{ metrics.consumption_l_per_100km|fmt_decimal }} л/100 км{% else %}Нет данных{% endif %}</b></div>
+            <div><span>Учтено стоимости</span><b>{{ metrics.cost|fmt_decimal }} ₽</b></div>
+        </div>
+    </a>
+{% else %}
+    <section class="card vehicle-empty"><div><h2>Поездок пока нет</h2><p>Рассчитайте маршрут во вкладке «Бензин» и сохраните план.</p><a class="btn" href="/fuel?view=trip">Спланировать поездку</a></div></section>
+{% endfor %}
+</section>
+{% endblock %}

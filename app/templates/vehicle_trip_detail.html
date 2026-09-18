@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ trip.start_label }} → {{ trip.end_label }}{% endblock %}
+{% block body_class %}vehicle-trip-page{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+{% endblock %}
+{% block content %}
+<div class="page-head compact-head vehicle-page-head">
+    <div><h1>{{ trip.title or (trip.start_label ~ ' → ' ~ trip.end_label) }}</h1><div class="subline">{{ trip.vehicle.title }} · АИ-{{ trip.fuel_type }} · создана {{ trip.created_at|msk_datetime }}{% if trip.started_at %} · начата {{ trip.started_at|msk_datetime }}{% endif %}{% if trip.completed_at %} · завершена {{ trip.completed_at|msk_datetime }}{% endif %}</div></div>
+    <div class="actions"><span class="vehicle-trip-status {{ trip.status }}">{{ status_labels[trip.status] }}</span><a class="icon-btn" href="/vehicles/trips" aria-label="К истории"><svg class="icon"><use href="#i-arrow-left"></use></svg></a></div>
+</div>
+
+{% if trip.status == 'planned' %}
+<details class="card vehicle-trip-action" open><summary>Начать поездку</summary><form class="form" method="post" action="/vehicles/trips/{{ trip.id }}/start"><div class="form-row two-cols"><label>Текущий пробег, км<input name="odometer_km" type="number" min="0" max="10000000" value="{{ trip.vehicle.current_odometer }}"></label><label>Текущий уровень топлива<div class="vehicle-trip-fuel-input"><input name="fuel_level" type="number" min="0" step="0.1" value="{{ trip.planned_start_fuel_percent or '' }}"><select name="fuel_unit"><option value="percent">%</option><option value="liters">л</option></select></div></label></div><button class="btn" type="submit">Начать поездку</button></form></details>
+{% elif trip.status == 'active' %}
+<details class="card vehicle-trip-action" open><summary>Завершить поездку</summary><form class="form" method="post" action="/vehicles/trips/{{ trip.id }}/complete"><div class="form-row two-cols"><label>Конечный пробег, км<input name="odometer_km" type="number" min="0" max="10000000" value="{{ trip.vehicle.current_odometer }}"></label><label>Остаток топлива<div class="vehicle-trip-fuel-input"><input name="fuel_level" type="number" min="0" step="0.1"><select name="fuel_unit"><option value="percent">%</option><option value="liters">л</option></select></div></label></div><label>Комментарий<textarea name="notes" maxlength="4000" rows="3"></textarea></label><button class="btn" type="submit">Завершить поездку</button></form></details>
+{% endif %}
+
+<div class="vehicle-trip-detail-grid">
+<div class="vehicle-trip-detail-main">
+<section class="card vehicle-trip-summary-card"><h2>План</h2><div class="vehicle-trip-metrics"><div><span>Расстояние</span><b>{{ trip.planned_distance_km|fmt_decimal }} км{% if trip.route_is_approximate %} · приблизительно{% endif %}</b></div><div><span>Время в пути</span><b>{% if trip.planned_duration_minutes is not none %}{{ (trip.planned_duration_minutes / 60)|round(1) }} ч{% else %}Нет данных{% endif %}</b></div><div><span>Расход для расчёта</span><b>{% if trip.planned_consumption_l_per_100km is not none %}{{ trip.planned_consumption_l_per_100km|fmt_decimal }} л/100 км{% else %}Нет данных{% endif %}</b></div><div><span>Плановая потребность</span><b>{% if trip.planned_fuel_needed_liters is not none %}{{ trip.planned_fuel_needed_liters|fmt_decimal }} л{% else %}Нет данных{% endif %}</b></div><div><span>Рекомендованных остановок</span><b>{{ trip.planned_stops|length }}</b></div></div></section>
+
+<section class="card vehicle-trip-summary-card"><h2>По поездке</h2><div class="vehicle-trip-metrics"><div><span>Расстояние</span><b>{% if metrics.distance.value is not none %}{% if metrics.distance.quality == 'estimated' %}≈ {% endif %}{{ metrics.distance.value|fmt_decimal }} км{% else %}Нет данных{% endif %}</b><small>{{ 'по одометру' if metrics.distance.source == 'odometer' else 'по плану, оценка' }}</small></div>{% if metrics.distance.source == 'odometer' %}<div><span>Относительно плана</span><b>{% set deviation=metrics.distance.value-trip.planned_distance_km %}{% if deviation >= 0 %}+{% endif %}{{ deviation|fmt_decimal }} км</b></div>{% endif %}<div><span>Заправок</span><b>{{ metrics.refuel_count }}</b></div><div><span>Куплено</span><b>{{ metrics.purchased_liters|fmt_decimal }} л</b></div><div><span>Израсходовано</span><b>{% if metrics.fuel_consumed_liters is not none %}{{ metrics.fuel_consumed_liters|fmt_decimal }} л{% else %}Нет данных{% endif %}</b></div><div><span>{% if metrics.consumption_quality == 'actual' %}Фактический расход{% elif metrics.consumption_quality == 'estimated' %}Оценочный расход{% else %}Расход{% endif %}</span><b>{% if metrics.consumption_l_per_100km is not none %}{{ metrics.consumption_l_per_100km|fmt_decimal }} л/100 км{% else %}Нет данных{% endif %}</b></div><div><span>Учтено стоимости</span><b>{{ metrics.cost|fmt_decimal }} ₽</b>{% if not metrics.cost_complete %}<small>Есть заправки без стоимости</small>{% endif %}</div></div>{% if metrics.warning %}<p class="alert error">{{ metrics.warning }}</p>{% endif %}</section>
+
+{% if trip.warnings_json %}<section class="card vehicle-trip-warnings"><h2>Предупреждения плана</h2><ul>{% for warning in trip.warnings_json %}<li>{{ warning }}</li>{% endfor %}</ul></section>{% endif %}
+</div>
+<section class="card vehicle-trip-map-card"><h2>Маршрут</h2><div id="vehicleTripMap" class="vehicle-trip-map" aria-label="Сохранённый маршрут поездки"></div><p class="subline" data-trip-map-error hidden>Карту не удалось загрузить. Данные поездки доступны ниже.</p></section>
+</div>
+
+<section class="card vehicle-trip-stops"><h2>Рекомендованные остановки</h2>{% if trip.planned_stops %}<div class="vehicle-trip-stop-list">{% for stop in trip.planned_stops %}<article><div><b>{{ loop.index }}. {{ stop.station_name }}</b><p>{{ stop.address or 'Адрес не указан' }}</p></div><dl><div><dt>От начала</dt><dd>{{ stop.route_progress_km|fmt_decimal }} км</dd></div><div><dt>Отклонение</dt><dd>{{ stop.distance_to_route_km|fmt_decimal }} км</dd></div><div><dt>АИ-{{ stop.fuel_type }} на момент планирования</dt><dd class="{{ stop.availability_state }}">{{ stop.availability_label }}</dd></div>{% if stop.availability_updated_at %}<div><dt>Данные на момент планирования</dt><dd>{{ stop.availability_updated_at|msk_datetime }}</dd></div>{% endif %}</dl>{% if stop.fuel_links %}<span class="vehicle-trip-used">✓ Заправились</span>{% else %}<span class="subline">Не использована</span>{% endif %}</article>{% endfor %}</div>{% else %}<p class="subline">Дополнительные остановки по расчёту не требовались или подходящие АЗС не найдены.</p>{% endif %}</section>
+
+<section class="card vehicle-trip-refuels"><div class="card-head"><div><h2>Заправки поездки</h2><p class="subline">Используются существующие записи журнала — расходы не дублируются.</p></div>{% if trip.status == 'active' %}<a class="btn" href="/vehicles/{{ trip.vehicle_id }}/fuel/new">Добавить заправку</a>{% endif %}</div>{% if trip.fuel_links %}<div class="vehicle-trip-refuel-list">{% for link in trip.fuel_links %}{% set entry=link.fuel_entry %}<article><div><b>{{ entry.occurred_on.strftime('%d.%m.%Y') }} · {{ entry.liters|fmt_decimal }} л</b><span>{{ entry.odometer|fmt_odometer }} · {{ entry.total_cost|fmt_decimal }} ₽{% if entry.fuel_station %} · {{ entry.fuel_station }}{% endif %}</span></div><form method="post" action="/vehicles/trips/{{ trip.id }}/fuel-entries/{{ entry.id }}/unlink"><button class="link-danger" type="submit">Убрать из поездки</button></form></article>{% endfor %}</div>{% else %}<p class="subline">Связанных заправок пока нет.</p>{% endif %}</section>
+
+{% if suggested_entries and trip.status in ('active', 'completed') %}<section class="card vehicle-trip-suggestions"><h2>Найдены заправки этого автомобиля во время поездки</h2>{% for entry in suggested_entries %}<form method="post" action="/vehicles/trips/{{ trip.id }}/fuel-entries/{{ entry.id }}"><span>{{ entry.occurred_on.strftime('%d.%m.%Y') }} · {{ entry.liters|fmt_decimal }} л · {{ entry.total_cost|fmt_decimal }} ₽</span><select name="planned_stop_id"><option value="">Без привязки к рекомендованной АЗС</option>{% for stop in trip.planned_stops %}<option value="{{ stop.id }}">Остановка {{ stop.sequence }} — {{ stop.station_name }}</option>{% endfor %}</select><button class="btn secondary" type="submit">Добавить</button></form>{% endfor %}</section>{% endif %}
+
+{% if trip.notes %}<section class="card"><h2>Комментарий</h2><p class="vehicle-trip-notes">{{ trip.notes }}</p></section>{% endif %}
+<div class="actions vehicle-trip-danger-actions">{% if trip.status in ('planned', 'active') %}<form method="post" action="/vehicles/trips/{{ trip.id }}/cancel" onsubmit="return confirm('Отменить поездку?')"><button class="btn secondary" type="submit">Отменить поездку</button></form>{% endif %}{% if trip.status != 'active' %}<form method="post" action="/vehicles/trips/{{ trip.id }}/delete" onsubmit="return confirm('Удалить поездку? Заправки останутся в журнале.')"><button class="btn danger" type="submit">Удалить поездку</button></form>{% endif %}</div>
+<script id="vehicleTripGeometry" type="application/json">{{ geometry|tojson }}</script>
+<script id="vehicleTripStops" type="application/json">[{% for stop in trip.planned_stops %}{"name":{{ stop.station_name|tojson }},"latitude":{{ stop.latitude }},"longitude":{{ stop.longitude }},"progress":{{ (stop.route_progress_km|string)|tojson }},"state":{{ stop.availability_label|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]</script>
+{% endblock %}
+{% block scripts %}<script>
+(function () {
+    const host = document.getElementById('vehicleTripMap');
+    if (!host) return;
+    const geometry = JSON.parse(document.getElementById('vehicleTripGeometry').textContent);
+    const stops = JSON.parse(document.getElementById('vehicleTripStops').textContent);
+    function renderMap() {
+        if (!window.L || geometry.length < 2) { document.querySelector('[data-trip-map-error]').hidden = false; return; }
+        const map = window.L.map(host, {scrollWheelZoom: false});
+        window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+        const line = window.L.polyline(geometry, {color: '#2563eb', weight: 5, opacity: .78}).addTo(map);
+        window.L.marker(geometry[0], {title: 'Старт'}).addTo(map).bindTooltip('Старт');
+        window.L.marker(geometry[geometry.length - 1], {title: 'Финиш'}).addTo(map).bindTooltip('Финиш');
+        stops.forEach(stop => window.L.circleMarker([stop.latitude, stop.longitude], {radius: 9, weight: 3, fillOpacity: .9}).addTo(map).bindPopup(`<b>${escapeHtml(stop.name)}</b><br>${escapeHtml(stop.progress)} км<br>АИ-{{ trip.fuel_type }}: ${escapeHtml(stop.state)}`));
+        map.fitBounds(line.getBounds(), {padding: [24, 24]});
+    }
+    function escapeHtml(value) { const element = document.createElement('span'); element.textContent = String(value); return element.innerHTML; }
+    if (document.readyState === 'complete') renderMap(); else window.addEventListener('load', renderMap, {once: true});
+})();
+</script>{% endblock %}

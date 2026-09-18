@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -138,6 +140,7 @@ class Vehicle(Base):
         back_populates="vehicle", cascade="all, delete-orphan"
     )
     fuel_entries: Mapped[list["VehicleFuelEntry"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
+    trips: Mapped[list["VehicleTrip"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
 
     @property
     def title(self) -> str:
@@ -201,6 +204,134 @@ class VehicleFuelEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
     vehicle: Mapped[Vehicle] = relationship(back_populates="fuel_entries")
+    trip_link: Mapped["VehicleTripFuelEntry | None"] = relationship(
+        back_populates="fuel_entry", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class VehicleTrip(Base):
+    __tablename__ = "vehicle_trips"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "client_request_id", name="uq_vehicle_trip_request"),
+        Index("ix_vehicle_trips_owner_status", "owner_id", "status"),
+        Index("ix_vehicle_trips_vehicle_status", "vehicle_id", "status"),
+        Index(
+            "uq_vehicle_trips_one_active",
+            "vehicle_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+        CheckConstraint(
+            "status IN ('planned', 'active', 'completed', 'cancelled')",
+            name="ck_vehicle_trip_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="planned", nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(String(180))
+    start_label: Mapped[str] = mapped_column(String(300), nullable=False)
+    end_label: Mapped[str] = mapped_column(String(300), nullable=False)
+    start_latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    start_longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    end_latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    end_longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    planned_distance_km: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    planned_duration_minutes: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    route_provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    route_profile: Mapped[str] = mapped_column(String(40), nullable=False)
+    route_is_approximate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    route_geometry_polyline: Mapped[str] = mapped_column(Text, nullable=False)
+    planned_consumption_l_per_100km: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    planned_tank_liters: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    planned_start_fuel_percent: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    planned_start_fuel_liters: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    planned_range_km: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    planned_fuel_needed_liters: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    warnings_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    start_odometer_km: Mapped[int | None] = mapped_column(Integer)
+    end_odometer_km: Mapped[int | None] = mapped_column(Integer)
+    start_fuel_liters: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    end_fuel_liters: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    start_fuel_estimated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    end_fuel_estimated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    planned_start_at: Mapped[datetime | None] = mapped_column(DateTime)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False
+    )
+
+    vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
+    planned_stops: Mapped[list["VehicleTripPlannedStop"]] = relationship(
+        back_populates="trip", cascade="all, delete-orphan", order_by="VehicleTripPlannedStop.sequence"
+    )
+    fuel_links: Mapped[list["VehicleTripFuelEntry"]] = relationship(
+        back_populates="trip", cascade="all, delete-orphan"
+    )
+
+
+class VehicleTripPlannedStop(Base):
+    __tablename__ = "vehicle_trip_planned_stops"
+    __table_args__ = (
+        UniqueConstraint("trip_id", "sequence", name="uq_vehicle_trip_stop_sequence"),
+        Index("ix_vehicle_trip_stops_trip", "trip_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicle_trips.id", ondelete="CASCADE"), nullable=False
+    )
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("fuel_stations.id", ondelete="SET NULL"))
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_station_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    station_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    address: Mapped[str | None] = mapped_column(String(300))
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    route_progress_km: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    distance_to_route_km: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    availability_state: Mapped[str] = mapped_column(String(20), nullable=False)
+    availability_label: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    after_refuel_range_km: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+    trip: Mapped[VehicleTrip] = relationship(back_populates="planned_stops")
+    fuel_links: Mapped[list["VehicleTripFuelEntry"]] = relationship(back_populates="planned_stop")
+
+
+class VehicleTripFuelEntry(Base):
+    __tablename__ = "vehicle_trip_fuel_entries"
+    __table_args__ = (
+        UniqueConstraint("fuel_entry_id", name="uq_vehicle_trip_fuel_entry"),
+        Index("ix_vehicle_trip_fuel_entries_trip", "trip_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicle_trips.id", ondelete="CASCADE"), nullable=False
+    )
+    fuel_entry_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicle_fuel_entries.id", ondelete="CASCADE"), nullable=False
+    )
+    planned_stop_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vehicle_trip_planned_stops.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+
+    trip: Mapped[VehicleTrip] = relationship(back_populates="fuel_links")
+    fuel_entry: Mapped[VehicleFuelEntry] = relationship(back_populates="trip_link")
+    planned_stop: Mapped[VehicleTripPlannedStop | None] = relationship(back_populates="fuel_links")
 
 
 class AIUserSettings(Base):

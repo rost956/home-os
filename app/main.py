@@ -93,6 +93,9 @@ from .models import (
     VehicleFuelEntry,
     VehicleLogEntry,
     VehicleMaintenanceItem,
+    VehicleTrip,
+    VehicleTripFuelEntry,
+    VehicleTripPlannedStop,
     WatchItem,
     WishlistItem,
     WishlistShare,
@@ -158,6 +161,10 @@ from .services.fuel_settings import (
 from .services.fuel_timeline import load_fuel_timeline
 from .services.fuel_trip import (
     FuelTripPlanRequest,
+    FuelTripSaveRequest,
+    VehicleTripCompleteRequest,
+    VehicleTripFuelLinkRequest,
+    VehicleTripStartRequest,
     calculate_trip,
     planned_search_distances,
     select_recommended_stops,
@@ -192,6 +199,19 @@ from .services.route_engine import (
 )
 from .services.vehicle_fuel import fuel_segments, fuel_summary
 from .services.vehicle_maintenance import STATUS_ORDER, calculate_maintenance
+from .services.vehicle_trips import (
+    TripValidationError,
+    cancel_trip,
+    complete_trip,
+    create_trip_snapshot,
+    decode_polyline,
+    link_fuel_entry,
+    load_trip,
+    start_trip,
+    suggested_fuel_entries,
+    trip_metrics,
+    unlink_fuel_entry,
+)
 from .timezone import (
     UTC as UTC_TZ,
 )
@@ -739,6 +759,13 @@ def ensure_runtime_schema() -> None:
         FuelNotificationSettings.__table__.create(bind=connection, checkfirst=True)
         FuelNotification.__table__.create(bind=connection, checkfirst=True)
         FuelNotificationDelivery.__table__.create(bind=connection, checkfirst=True)
+        VehicleTrip.__table__.create(bind=connection, checkfirst=True)
+        VehicleTripPlannedStop.__table__.create(bind=connection, checkfirst=True)
+        VehicleTripFuelEntry.__table__.create(bind=connection, checkfirst=True)
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_vehicle_trips_one_active "
+            "ON vehicle_trips (vehicle_id) WHERE status = 'active'"
+        )
 
         user_columns = [row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
         if "theme" not in user_columns:
@@ -3299,8 +3326,7 @@ async def _resolve_trip_place(query: str, geocoder: NominatimGeocoder) -> dict[s
     }
 
 
-@app.post("/api/fuel/trip-plan")
-async def fuel_trip_plan_api(
+async def _build_fuel_trip_plan(
     request_data: FuelTripPlanRequest,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -3467,6 +3493,57 @@ async def fuel_trip_plan_api(
         "recommended_stops": recommendations,
         "warnings": warnings,
     }
+
+
+@app.post("/api/fuel/trip-plan")
+async def fuel_trip_plan_api(
+    request_data: FuelTripPlanRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await _build_fuel_trip_plan(request_data, user, db)
+
+
+@app.post("/api/fuel/trips")
+async def fuel_trip_save_api(
+    request_data: FuelTripSaveRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    vehicle = db.scalar(
+        select(Vehicle).where(
+            Vehicle.id == request_data.vehicle_id,
+            Vehicle.owner_id == user.id,
+        )
+    )
+    if vehicle is None:
+        raise HTTPException(status_code=404, detail="Автомобиль не найден")
+    existing = db.scalar(
+        select(VehicleTrip).where(
+            VehicleTrip.owner_id == user.id,
+            VehicleTrip.client_request_id == request_data.client_request_id,
+        )
+    )
+    if existing is not None:
+        return {"id": existing.id, "created": False, "detail_url": f"/vehicles/trips/{existing.id}"}
+    plan = await _build_fuel_trip_plan(
+        FuelTripPlanRequest(**request_data.model_dump(exclude={"client_request_id", "title"})),
+        user,
+        db,
+    )
+    try:
+        trip, created = create_trip_snapshot(
+            db,
+            owner_id=user.id,
+            vehicle=vehicle,
+            client_request_id=request_data.client_request_id,
+            title=request_data.title,
+            plan=plan,
+        )
+    except TripValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("Vehicle trip created trip_id=%s owner_id=%s", trip.id, user.id)
+    return {"id": trip.id, "created": created, "detail_url": f"/vehicles/trips/{trip.id}"}
 
 
 @app.get("/api/fuel/stations/{station_id}/observations")
@@ -3697,6 +3774,361 @@ def vehicle_create(
     return redirect_notice(f"/vehicles/{vehicle.id}", "Автомобиль добавлен")
 
 
+TRIP_STATUS_LABELS = {
+    "planned": "Запланирована",
+    "active": "В пути",
+    "completed": "Завершена",
+    "cancelled": "Отменена",
+}
+
+
+def require_owned_trip(db: Session, trip_id: int, user: User) -> VehicleTrip:
+    trip = load_trip(db, trip_id, user.id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Поездка не найдена")
+    return trip
+
+
+def _optional_trip_number(value: str, label: str, *, integer: bool = False) -> int | float | None:
+    clean = value.strip().replace(",", ".")
+    if not clean:
+        return None
+    try:
+        result = int(clean) if integer else float(clean)
+    except ValueError as exc:
+        raise TripValidationError(f"Поле «{label}» заполнено неверно") from exc
+    if not math.isfinite(float(result)):
+        raise TripValidationError(f"Поле «{label}» заполнено неверно")
+    return result
+
+
+def _trip_api_payload(trip: VehicleTrip) -> dict[str, Any]:
+    metrics = trip_metrics(trip)
+    return {
+        "id": trip.id,
+        "status": trip.status,
+        "status_label": TRIP_STATUS_LABELS[trip.status],
+        "vehicle": {"id": trip.vehicle.id, "title": trip.vehicle.title},
+        "route": {
+            "start": {"label": trip.start_label, "latitude": trip.start_latitude, "longitude": trip.start_longitude},
+            "end": {"label": trip.end_label, "latitude": trip.end_latitude, "longitude": trip.end_longitude},
+            "distance_km": trip.planned_distance_km,
+            "duration_minutes": trip.planned_duration_minutes,
+            "provider": trip.route_provider,
+            "is_approximate": trip.route_is_approximate,
+            "geometry": decode_polyline(trip.route_geometry_polyline),
+        },
+        "fuel_type": trip.fuel_type,
+        "planned_stops": [
+            {
+                "id": stop.id,
+                "sequence": stop.sequence,
+                "provider_station_id": stop.provider_station_id,
+                "name": stop.station_name,
+                "address": stop.address,
+                "latitude": stop.latitude,
+                "longitude": stop.longitude,
+                "route_progress_km": stop.route_progress_km,
+                "distance_to_route_km": stop.distance_to_route_km,
+                "availability_state": stop.availability_state,
+                "availability_label": stop.availability_label,
+                "availability_updated_at": stop.availability_updated_at,
+            }
+            for stop in trip.planned_stops
+        ],
+        "metrics": metrics,
+        "warnings": trip.warnings_json,
+    }
+
+
+@app.get("/vehicles/trips")
+def vehicle_trips_page(
+    request: Request,
+    status_filter: str = Query("all", alias="status"),
+    vehicle_id: int | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    valid_status = status_filter if status_filter in TRIP_STATUS_LABELS else "all"
+    query = (
+        select(VehicleTrip)
+        .options(
+            selectinload(VehicleTrip.vehicle),
+            selectinload(VehicleTrip.fuel_links).selectinload(VehicleTripFuelEntry.fuel_entry),
+        )
+        .where(VehicleTrip.owner_id == user.id)
+    )
+    if valid_status != "all":
+        query = query.where(VehicleTrip.status == valid_status)
+    if vehicle_id is not None:
+        query = query.where(VehicleTrip.vehicle_id == vehicle_id)
+    trips = db.scalars(query.order_by(VehicleTrip.created_at.desc()).limit(100)).unique().all()
+    vehicles = db.scalars(
+        select(Vehicle).where(Vehicle.owner_id == user.id).order_by(Vehicle.make, Vehicle.model)
+    ).all()
+    return render(request, "vehicle_trips.html", {
+        "user": user,
+        "trips": [{"trip": trip, "metrics": trip_metrics(trip)} for trip in trips],
+        "vehicles": vehicles,
+        "status_filter": valid_status,
+        "vehicle_filter": vehicle_id,
+        "status_labels": TRIP_STATUS_LABELS,
+    })
+
+
+@app.get("/vehicles/trips/{trip_id}")
+def vehicle_trip_detail(
+    request: Request,
+    trip_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    return render(request, "vehicle_trip_detail.html", {
+        "user": user,
+        "trip": trip,
+        "metrics": trip_metrics(trip),
+        "suggested_entries": suggested_fuel_entries(db, trip),
+        "geometry": decode_polyline(trip.route_geometry_polyline),
+        "status_labels": TRIP_STATUS_LABELS,
+    })
+
+
+@app.get("/api/fuel/trips/{trip_id}")
+def vehicle_trip_api(
+    trip_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _trip_api_payload(require_owned_trip(db, trip_id, user))
+
+
+@app.post("/api/fuel/trips/{trip_id}/start")
+def vehicle_trip_start_api(
+    trip_id: int,
+    request_data: VehicleTripStartRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        start_trip(
+            db,
+            trip,
+            odometer_km=request_data.odometer_km,
+            fuel_level=request_data.fuel_level,
+            fuel_unit=request_data.fuel_unit,
+        )
+    except TripValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("Vehicle trip started trip_id=%s owner_id=%s", trip.id, user.id)
+    return _trip_api_payload(load_trip(db, trip.id, user.id))
+
+
+@app.post("/api/fuel/trips/{trip_id}/complete")
+def vehicle_trip_complete_api(
+    trip_id: int,
+    request_data: VehicleTripCompleteRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        complete_trip(
+            db,
+            trip,
+            odometer_km=request_data.odometer_km,
+            fuel_level=request_data.fuel_level,
+            fuel_unit=request_data.fuel_unit,
+            notes=request_data.notes,
+        )
+    except TripValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("Vehicle trip completed trip_id=%s owner_id=%s", trip.id, user.id)
+    return _trip_api_payload(load_trip(db, trip.id, user.id))
+
+
+@app.post("/api/fuel/trips/{trip_id}/cancel")
+def vehicle_trip_cancel_api(
+    trip_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        cancel_trip(db, trip)
+    except TripValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("Vehicle trip cancelled trip_id=%s owner_id=%s", trip.id, user.id)
+    return _trip_api_payload(load_trip(db, trip.id, user.id))
+
+
+@app.post("/api/fuel/trips/{trip_id}/fuel-entries/{entry_id}")
+def vehicle_trip_link_fuel_entry_api(
+    trip_id: int,
+    entry_id: int,
+    request_data: VehicleTripFuelLinkRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    entry = db.scalar(
+        select(VehicleFuelEntry)
+        .join(Vehicle)
+        .where(VehicleFuelEntry.id == entry_id, Vehicle.owner_id == user.id)
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Заправка не найдена")
+    try:
+        link_fuel_entry(
+            db, trip, entry, planned_stop_id=request_data.planned_stop_id
+        )
+    except TripValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("Vehicle trip fuel entry linked trip_id=%s fuel_entry_id=%s", trip.id, entry.id)
+    return _trip_api_payload(load_trip(db, trip.id, user.id))
+
+
+@app.delete("/api/fuel/trips/{trip_id}/fuel-entries/{entry_id}")
+def vehicle_trip_unlink_fuel_entry_api(
+    trip_id: int,
+    entry_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        unlink_fuel_entry(db, trip, entry_id)
+    except TripValidationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    logger.info("Vehicle trip fuel entry unlinked trip_id=%s fuel_entry_id=%s", trip.id, entry_id)
+    return _trip_api_payload(load_trip(db, trip.id, user.id))
+
+
+@app.post("/vehicles/trips/{trip_id}/start")
+def vehicle_trip_start(
+    trip_id: int,
+    odometer_km: str = Form(""),
+    fuel_level: str = Form(""),
+    fuel_unit: str = Form("percent"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        start_trip(
+            db,
+            trip,
+            odometer_km=_optional_trip_number(odometer_km, "Пробег", integer=True),
+            fuel_level=_optional_trip_number(fuel_level, "Топливо"),
+            fuel_unit=fuel_unit,
+        )
+    except TripValidationError as exc:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", str(exc))
+    logger.info("Vehicle trip started trip_id=%s owner_id=%s", trip.id, user.id)
+    return redirect_notice(f"/vehicles/trips/{trip.id}", "Поездка начата")
+
+
+@app.post("/vehicles/trips/{trip_id}/complete")
+def vehicle_trip_complete(
+    trip_id: int,
+    odometer_km: str = Form(""),
+    fuel_level: str = Form(""),
+    fuel_unit: str = Form("percent"),
+    notes: str = Form(""),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        complete_trip(
+            db,
+            trip,
+            odometer_km=_optional_trip_number(odometer_km, "Пробег", integer=True),
+            fuel_level=_optional_trip_number(fuel_level, "Остаток топлива"),
+            fuel_unit=fuel_unit,
+            notes=notes,
+        )
+    except TripValidationError as exc:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", str(exc))
+    logger.info("Vehicle trip completed trip_id=%s owner_id=%s", trip.id, user.id)
+    return redirect_notice(f"/vehicles/trips/{trip.id}", "Поездка завершена")
+
+
+@app.post("/vehicles/trips/{trip_id}/cancel")
+def vehicle_trip_cancel(
+    trip_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        cancel_trip(db, trip)
+    except TripValidationError as exc:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", str(exc))
+    logger.info("Vehicle trip cancelled trip_id=%s owner_id=%s", trip.id, user.id)
+    return redirect_notice(f"/vehicles/trips/{trip.id}", "Поездка отменена")
+
+
+@app.post("/vehicles/trips/{trip_id}/fuel-entries/{entry_id}")
+def vehicle_trip_link_fuel_entry(
+    trip_id: int,
+    entry_id: int,
+    planned_stop_id: str = Form(""),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    entry = db.scalar(
+        select(VehicleFuelEntry)
+        .join(Vehicle)
+        .where(VehicleFuelEntry.id == entry_id, Vehicle.owner_id == user.id)
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Заправка не найдена")
+    try:
+        stop_id = int(planned_stop_id) if planned_stop_id.strip() else None
+        linked = link_fuel_entry(db, trip, entry, planned_stop_id=stop_id)
+    except (ValueError, TripValidationError) as exc:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", str(exc))
+    logger.info("Vehicle trip fuel entry linked trip_id=%s fuel_entry_id=%s", trip.id, entry.id)
+    return redirect_notice(
+        f"/vehicles/trips/{trip.id}",
+        "Заправка добавлена в поездку" if linked else "Заправка уже добавлена",
+    )
+
+
+@app.post("/vehicles/trips/{trip_id}/fuel-entries/{entry_id}/unlink")
+def vehicle_trip_unlink_fuel_entry(
+    trip_id: int,
+    entry_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    try:
+        unlink_fuel_entry(db, trip, entry_id)
+    except TripValidationError as exc:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", str(exc))
+    logger.info("Vehicle trip fuel entry unlinked trip_id=%s fuel_entry_id=%s", trip.id, entry_id)
+    return redirect_notice(f"/vehicles/trips/{trip.id}", "Заправка убрана из поездки")
+
+
+@app.post("/vehicles/trips/{trip_id}/delete")
+def vehicle_trip_delete(
+    trip_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    trip = require_owned_trip(db, trip_id, user)
+    if trip.status not in {"planned", "cancelled", "completed"}:
+        return redirect_notice(f"/vehicles/trips/{trip.id}", "Сначала отмените активную поездку")
+    db.delete(trip)
+    db.commit()
+    logger.info("Vehicle trip deleted trip_id=%s owner_id=%s", trip_id, user.id)
+    return redirect_notice("/vehicles/trips", "Поездка удалена; заправки сохранены")
+
+
 @app.get("/vehicles/{vehicle_id}")
 def vehicle_overview(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     vehicle = require_owned_vehicle(db, vehicle_id, user)
@@ -3717,12 +4149,19 @@ def vehicle_overview(request: Request, vehicle_id: int, user: User = Depends(get
     maintenance_counts = {status: sum(row["state"].status == status for row in maintenance) for status in STATUS_ORDER}
     fuel_entries = db.scalars(select(VehicleFuelEntry).where(VehicleFuelEntry.vehicle_id == vehicle.id).order_by(desc(VehicleFuelEntry.occurred_on), desc(VehicleFuelEntry.id))).all()
     fuel_data = fuel_summary(fuel_entries)
+    recent_trips = db.scalars(
+        select(VehicleTrip)
+        .where(VehicleTrip.vehicle_id == vehicle.id, VehicleTrip.owner_id == user.id)
+        .order_by(VehicleTrip.created_at.desc())
+        .limit(3)
+    ).all()
     return render(request, "vehicle_detail.html", {
         "user": user, "vehicle": vehicle,
         "log_summary": {"count": log_summary[0], "cost": log_summary[1], "latest_date": log_summary[2]},
         "recent_entries": recent_entries, "vehicle_log_type_labels": VEHICLE_LOG_TYPE_LABELS,
         "maintenance": maintenance[:5], "maintenance_counts": maintenance_counts,
         "latest_fuel": fuel_entries[0] if fuel_entries else None, "fuel_summary": fuel_data,
+        "recent_trips": recent_trips, "trip_status_labels": TRIP_STATUS_LABELS,
     })
 
 
@@ -4038,6 +4477,16 @@ def require_fuel_entry(db: Session, vehicle_id: int, entry_id: int) -> VehicleFu
     return entry
 
 
+def active_vehicle_trip(db: Session, vehicle_id: int, owner_id: int) -> VehicleTrip | None:
+    return db.scalar(
+        select(VehicleTrip).where(
+            VehicleTrip.vehicle_id == vehicle_id,
+            VehicleTrip.owner_id == owner_id,
+            VehicleTrip.status == "active",
+        )
+    )
+
+
 def validate_fuel(occurred_on: str, odometer: str, liters: str, total_cost: str, station: str, notes: str) -> dict[str, Any]:
     try:
         result = {"occurred_on": date.fromisoformat(occurred_on), "odometer": parse_optional_int(odometer, "Пробег", 0, 10_000_000), "liters": parse_optional_decimal(liters, "Литры", Decimal("0.001")), "total_cost": require_positive_money(total_cost, "Стоимость")}
@@ -4064,15 +4513,31 @@ def vehicle_fuel_page(request: Request, vehicle_id: int, date_from: str = "", da
 
 @app.get("/vehicles/{vehicle_id}/fuel/new")
 def vehicle_fuel_new(request: Request, vehicle_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": require_owned_vehicle(db, vehicle_id, user), "entry": None, "today": msk_today()})
+    vehicle = require_owned_vehicle(db, vehicle_id, user)
+    return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "active_trip": active_vehicle_trip(db, vehicle.id, user.id)})
 
 
 @app.post("/vehicles/{vehicle_id}/fuel")
-def vehicle_fuel_create(request: Request, vehicle_id: int, occurred_on: str = Form(""), odometer: str = Form(""), liters: str = Form(""), total_cost: str = Form(""), full_tank: str | None = Form(None), fuel_station: str = Form(""), notes: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def vehicle_fuel_create(request: Request, vehicle_id: int, occurred_on: str = Form(""), odometer: str = Form(""), liters: str = Form(""), total_cost: str = Form(""), full_tank: str | None = Form(None), fuel_station: str = Form(""), notes: str = Form(""), trip_id: str = Form(""), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     vehicle = require_owned_vehicle(db, vehicle_id, user)
+    active_trip = active_vehicle_trip(db, vehicle.id, user.id)
     try: data = validate_fuel(occurred_on, odometer, liters, total_cost, fuel_station, notes)
-    except ValueError as exc: return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "error": str(exc), "form": locals()})
-    entry = VehicleFuelEntry(vehicle_id=vehicle.id, full_tank=full_tank is not None, **data); db.add(entry); vehicle.current_odometer = max(vehicle.current_odometer, data["odometer"]); db.commit()
+    except ValueError as exc: return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "error": str(exc), "form": locals(), "active_trip": active_trip})
+    selected_trip = None
+    if trip_id.strip():
+        try:
+            selected_trip_id = int(trip_id)
+        except ValueError:
+            return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "error": "Поездка не найдена", "form": locals(), "active_trip": active_trip})
+        selected_trip = load_trip(db, selected_trip_id, user.id)
+        if selected_trip is None or selected_trip.vehicle_id != vehicle.id or selected_trip.status != "active":
+            return render(request, "vehicle_fuel_form.html", {"user": user, "vehicle": vehicle, "entry": None, "today": msk_today(), "error": "Активная поездка не найдена", "form": locals(), "active_trip": active_trip})
+    entry = VehicleFuelEntry(vehicle_id=vehicle.id, full_tank=full_tank is not None, **data); db.add(entry); vehicle.current_odometer = max(vehicle.current_odometer, data["odometer"]); db.flush()
+    if selected_trip is not None:
+        link_fuel_entry(db, selected_trip, entry)
+        logger.info("Vehicle trip fuel entry linked trip_id=%s fuel_entry_id=%s", selected_trip.id, entry.id)
+    else:
+        db.commit()
     return redirect_notice(f"/vehicles/{vehicle.id}/fuel", "Заправка добавлена")
 
 

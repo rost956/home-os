@@ -68,6 +68,25 @@ class FuelTripPlanRequest(BaseModel):
         return cleaned
 
 
+class FuelTripSaveRequest(FuelTripPlanRequest):
+    client_request_id: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    title: str | None = Field(default=None, max_length=180)
+
+
+class VehicleTripStartRequest(BaseModel):
+    odometer_km: int | None = Field(default=None, ge=0, le=10_000_000)
+    fuel_level: float | None = Field(default=None, ge=0)
+    fuel_unit: Literal["percent", "liters"] = "percent"
+
+
+class VehicleTripCompleteRequest(VehicleTripStartRequest):
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class VehicleTripFuelLinkRequest(BaseModel):
+    planned_stop_id: int | None = Field(default=None, gt=0)
+
+
 def calculate_trip(
     distance_km: float,
     *,

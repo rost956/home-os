@@ -896,7 +896,7 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     assert response.status_code == 200
     assert "Пока ничего не отслеживается" in response.text
     assert "Поездка" in response.text
-    assert '/static/style.css?v=75' in response.text
+    assert '/static/style.css?v=76' in response.text
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -2745,6 +2745,7 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert "Через 240 км" in page.locator(".fuel-trip-stop").first.text_content()
             assert "до маршрута 0.8 км" in page.locator(".fuel-trip-stop").first.text_content()
             assert "1350 км" in page.locator("[data-trip-summary]").text_content()
+            assert page.locator(".fuel-trip-save").is_visible()
             assert page.locator(".fuel-map-marker").count() == 2
             assert page.locator(".fuel-map-marker").nth(1).text_content().strip() == "?"
             assert page.locator(".fuel-trip-endpoint").count() == 2
@@ -2782,6 +2783,7 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             page.locator('[data-view="trip"]').click()
             assert page.locator("[data-trip-panel]").is_visible()
             assert page.locator(".fuel-trip-stop").count() == 2
+            assert page.locator(".fuel-trip-save").is_visible()
             assert page.locator("#fuelMap").is_visible()
             page.locator(".fuel-map-marker").first.scroll_into_view_if_needed()
             trip_scroll_before = page.evaluate("scrollY")

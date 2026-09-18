@@ -3474,6 +3474,68 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
 }
 .cashflow-label b { font-weight: 900; }
 
+/* Vehicle trip history */
+.vehicle-trips-page .container, .vehicle-trip-page .container { min-width: 0; }
+.vehicle-trip-filters { margin-bottom: 14px; box-shadow: none; }
+.vehicle-trip-list { display: grid; min-width: 0; gap: 12px; }
+.vehicle-trip-card { display: grid; min-width: 0; gap: 14px; color: var(--text); box-shadow: none; }
+.vehicle-trip-card:hover { background: var(--soft); text-decoration: none; }
+.vehicle-trip-card header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.vehicle-trip-card header > div { min-width: 0; }
+.vehicle-trip-card h2 { margin: 0; overflow-wrap: anywhere; font-size: 19px; }
+.vehicle-trip-card p { margin: 4px 0 0; color: var(--muted); }
+.vehicle-trip-status { display: inline-flex; flex: 0 0 auto; align-items: center; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--soft); font-size: 12px; font-weight: 900; white-space: nowrap; }
+.vehicle-trip-status.active { color: #1d4ed8; }
+.vehicle-trip-status.completed { color: #15803d; }
+.vehicle-trip-status.cancelled { color: var(--muted); }
+.vehicle-trip-card-metrics, .vehicle-trip-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.vehicle-trip-card-metrics > div, .vehicle-trip-metrics > div { display: grid; min-width: 0; gap: 3px; padding: 10px; border-radius: 10px; background: var(--soft); }
+.vehicle-trip-card-metrics span, .vehicle-trip-metrics span, .vehicle-trip-metrics small { color: var(--muted); font-size: 12px; }
+.vehicle-trip-card-metrics b, .vehicle-trip-metrics b { overflow-wrap: anywhere; }
+.vehicle-trip-action { margin-bottom: 14px; box-shadow: none; }
+.vehicle-trip-action summary { cursor: pointer; font-weight: 900; }
+.vehicle-trip-action .form { margin: 14px 0 0; padding: 0; border: 0; box-shadow: none; }
+.vehicle-trip-fuel-input { display: grid; grid-template-columns: minmax(0, 1fr) 76px; gap: 7px; }
+.vehicle-trip-detail-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(300px, .9fr); min-width: 0; gap: 14px; }
+.vehicle-trip-detail-main { display: grid; min-width: 0; gap: 14px; }
+.vehicle-trip-summary-card, .vehicle-trip-map-card, .vehicle-trip-stops, .vehicle-trip-refuels, .vehicle-trip-suggestions { min-width: 0; box-shadow: none; }
+.vehicle-trip-summary-card h2, .vehicle-trip-map-card h2, .vehicle-trip-stops h2, .vehicle-trip-refuels h2, .vehicle-trip-suggestions h2 { margin-top: 0; }
+.vehicle-trip-map { width: 100%; max-width: 100%; height: 390px; overflow: hidden; border-radius: 10px; background: var(--soft); }
+.vehicle-trip-stop-list, .vehicle-trip-refuel-list { display: grid; gap: 10px; }
+.vehicle-trip-stop-list article { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, auto) auto; min-width: 0; gap: 12px; align-items: center; padding-top: 10px; border-top: 1px solid var(--line); }
+.vehicle-trip-stop-list article:first-child, .vehicle-trip-refuel-list article:first-child { border-top: 0; }
+.vehicle-trip-stop-list p { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.vehicle-trip-stop-list dl { display: flex; flex-wrap: wrap; gap: 12px; margin: 0; }
+.vehicle-trip-stop-list dl div { display: grid; gap: 2px; }
+.vehicle-trip-stop-list dt { color: var(--muted); font-size: 11px; }
+.vehicle-trip-stop-list dd { margin: 0; font-weight: 900; }
+.vehicle-trip-used { color: #15803d; font-size: 12px; font-weight: 900; white-space: nowrap; }
+.vehicle-trip-refuel-list article { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.vehicle-trip-refuel-list article > div { display: grid; min-width: 0; gap: 3px; }
+.vehicle-trip-refuel-list span { color: var(--muted); overflow-wrap: anywhere; }
+.vehicle-trip-suggestions form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, auto) auto; gap: 10px; align-items: center; padding-top: 10px; border-top: 1px solid var(--line); }
+.vehicle-trip-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vehicle-trip-danger-actions { margin-top: 14px; }
+.fuel-trip-save { justify-self: start; }
+
+@media (max-width: 720px) {
+    .vehicle-trip-card header, .vehicle-trip-refuel-list article { align-items: stretch; flex-direction: column; }
+    .vehicle-trip-status { align-self: flex-start; }
+    .vehicle-trip-card-metrics, .vehicle-trip-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .vehicle-trip-detail-grid { grid-template-columns: minmax(0, 1fr); }
+    .vehicle-trip-map { height: min(58vh, 420px); }
+    .vehicle-trip-stop-list article, .vehicle-trip-suggestions form { grid-template-columns: minmax(0, 1fr); }
+    .vehicle-trip-stop-list dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .vehicle-trip-action .form-row { grid-template-columns: minmax(0, 1fr); }
+    .vehicle-trip-action .btn, .vehicle-trip-filters .btn, .vehicle-trip-suggestions .btn, .vehicle-trip-danger-actions form, .vehicle-trip-danger-actions .btn { width: 100%; justify-content: center; }
+    .vehicle-trip-danger-actions { align-items: stretch; flex-direction: column; }
+    .fuel-trip-save { width: 100%; justify-content: center; }
+}
+
+@media (max-width: 420px) {
+    .vehicle-trip-card-metrics, .vehicle-trip-metrics, .vehicle-trip-stop-list dl { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 900px) {
     .income-form { grid-template-columns: 1fr 1fr; }
     .income-form .btn { grid-column: 1 / -1; }
