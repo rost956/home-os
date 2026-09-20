@@ -33,7 +33,13 @@ class FuelAvailability:
 
 
 def _mentioned_fuels(value: str) -> set[str]:
-    return set(re.findall(r"(?<!\d)(95|98|100)(?!\d)", value.replace("АИ-", "").upper()))
+    normalized = value.replace("АИ-", "").upper()
+    return set(
+        re.findall(
+            r"(?<!\d)(?:92|95|98|100)(?!\d)|(?<!\w)(?:ДТ|DT)(?!\w)",
+            normalized,
+        )
+    )
 
 
 def _mark_evidence(mark: FuelStationMark, fuel_type: str) -> AvailabilityEvidence | None:
@@ -109,23 +115,32 @@ def _deduplicate(items: Iterable[AvailabilityEvidence]) -> list[AvailabilityEvid
     )
 
 
-def evaluate_fuel_availability(
+def collect_fuel_availability_evidence(
     observations: Iterable[FuelObservation],
     marks: Iterable[FuelStationMark],
     fuel_type: str,
-    *,
-    current_at: datetime,
-    stale_after_minutes: int,
-) -> FuelAvailability:
-    """Resolve current state from independent recent evidence, newest first."""
-    cutoff = current_at - timedelta(minutes=stale_after_minutes)
-    evidence = _deduplicate(
+) -> tuple[AvailabilityEvidence, ...]:
+    """Return raw evidence used by both current and historical state evaluation."""
+    return tuple(
         item
         for item in (
             *(_observation_evidence(observation) for observation in observations),
             *(_mark_evidence(mark, fuel_type) for mark in marks),
         )
-        if item is not None and cutoff <= item.happened_at <= current_at
+        if item is not None
+    )
+
+
+def evaluate_fuel_availability_evidence(
+    evidence: Iterable[AvailabilityEvidence],
+    *,
+    current_at: datetime,
+    stale_after_minutes: int,
+) -> FuelAvailability:
+    """Resolve availability at a cutoff without using evidence from its future."""
+    cutoff = current_at - timedelta(minutes=stale_after_minutes)
+    evidence = _deduplicate(
+        item for item in evidence if cutoff < item.happened_at <= current_at
     )
     if not evidence:
         return FuelAvailability(
@@ -155,15 +170,21 @@ def evaluate_fuel_availability(
         state: AvailabilityState = "available" if len(current_run) >= 2 else "candidate"
         explanation = [f"Свежих независимых подтверждений: {len(current_run)}."]
         if negatives:
-            explanation.append("Более старые отрицательные отметки вытеснены новыми данными.")
+            explanation.append(
+                "Более старые отрицательные отметки вытеснены новыми данными."
+            )
     else:
         # One fresh negative is decisive when there is no competing positive.
         # After confirmed availability, one contradiction makes the state
         # uncertain; two independent fresh negatives establish unavailability.
         state = "unavailable" if not positives or len(current_run) >= 2 else "candidate"
-        explanation = [f"Свежих независимых отрицательных свидетельств: {len(current_run)}."]
+        explanation = [
+            f"Свежих независимых отрицательных свидетельств: {len(current_run)}."
+        ]
         if positives:
-            explanation.append("Есть более старые положительные данные; учтено противоречие.")
+            explanation.append(
+                "Есть более старые положительные данные; учтено противоречие."
+            )
 
     has_queue = state != "unavailable" and any(item.queue for item in current_run)
     return FuelAvailability(
@@ -173,4 +194,20 @@ def evaluate_fuel_availability(
         positive_count=len(positives),
         negative_count=len(negatives),
         explanation=tuple(explanation),
+    )
+
+
+def evaluate_fuel_availability(
+    observations: Iterable[FuelObservation],
+    marks: Iterable[FuelStationMark],
+    fuel_type: str,
+    *,
+    current_at: datetime,
+    stale_after_minutes: int,
+) -> FuelAvailability:
+    """Resolve current state from independent recent evidence, newest first."""
+    return evaluate_fuel_availability_evidence(
+        collect_fuel_availability_evidence(observations, marks, fuel_type),
+        current_at=current_at,
+        stale_after_minutes=stale_after_minutes,
     )

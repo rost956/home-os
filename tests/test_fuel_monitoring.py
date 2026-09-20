@@ -2229,20 +2229,7 @@ def test_foreign_station_routes_and_api_return_404(client, login, make_user, db)
 def timeline_observation(identifier, fuel_type, state, when, *, stale=False):
     return FuelObservation(
         id=identifier, station_id=1, fuel_type=fuel_type, state=state,
-        observed_at=when, is_stale=stale,
-    )
-
-
-def timeline_event(identifier, fuel_type, start, end, event_type, confidence=0.8):
-    return FuelDeliveryEvent(
-        id=identifier, station_id=1, fuel_type=fuel_type,
-        window_start=start - timedelta(minutes=5), window_end=start,
-        estimated_at=start, disappeared_at=end,
-        before_observation_id=identifier * 10, after_observation_id=identifier * 10 + 1,
-        event_type=event_type, confidence=confidence, appearance_confidence=confidence,
-        delivery_confidence=0.1, availability_duration_minutes=(end - start).total_seconds() / 60 if end else None,
-        detection_reason="test", evidence_json={"mark_support_count": 2, "mark_conflict_count": 0},
-        detector_version="test", classifier_version="test",
+        observed_at=when, source_updated_at=when, is_stale=stale,
     )
 
 
@@ -2263,8 +2250,9 @@ def test_timeline_continuous_unavailable_and_current_interval():
     start = now - timedelta(minutes=30)
     current = build_fuel_timeline(
         [timeline_observation(20, "95", "unavailable", now - timedelta(hours=1)),
-         timeline_observation(21, "95", "available", start)],
-        [timeline_event(2, "95", start, None, "confirmed_availability")],
+         timeline_observation(21, "95", "available", start),
+         timeline_observation(22, "95", "available", start + timedelta(minutes=5))],
+        [],
         ["95"], current_at=now, stale_after_minutes=120,
     )["fuels"]["95"][-1]
     assert current["state"] == "confirmed_available"
@@ -2280,12 +2268,11 @@ def test_timeline_candidate_confirmed_stale_gap_and_window_clipping():
         timeline_observation(2, "95", "unavailable", candidate_start + timedelta(minutes=10)),
         timeline_observation(3, "95", "available", confirmed_start),
     ]
-    events = [
-        timeline_event(1, "95", candidate_start, candidate_start + timedelta(minutes=10), "candidate_appearance", 0.2),
-        timeline_event(2, "95", confirmed_start, None, "confirmed_availability", 0.85),
-    ]
+    observations.append(
+        timeline_observation(4, "95", "available", confirmed_start + timedelta(minutes=5))
+    )
     intervals = build_fuel_timeline(
-        observations, events, ["95"], current_at=now, stale_after_minutes=30
+        observations, [], ["95"], current_at=now, stale_after_minutes=30
     )["fuels"]["95"]
     assert any(item["state"] == "candidate" for item in intervals)
     assert any(item["state"] == "confirmed_available" for item in intervals)
@@ -2296,12 +2283,115 @@ def test_timeline_candidate_confirmed_stale_gap_and_window_clipping():
     clipped = build_fuel_timeline(
         [timeline_observation(10, "100", "available", old_start),
          timeline_observation(11, "100", "unavailable", old_end)],
-        [timeline_event(3, "100", old_start, old_end, "candidate_appearance", 0.3)],
+        [],
         ["100"], current_at=now, stale_after_minutes=1000,
-    )["fuels"]["100"][0]
-    assert clipped["start"] == now - timedelta(hours=24)
-    assert clipped["end"] == old_end
-    assert clipped["state"] == "candidate"
+    )["fuels"]["100"]
+    assert clipped[0]["start"] == now - timedelta(hours=24)
+    assert clipped[0]["state"] == "candidate"
+    assert clipped[-1]["state"] == "unknown"
+
+
+def _availability_at(marks, fuel_type, at):
+    return evaluate_fuel_availability(
+        [], marks, fuel_type, current_at=at, stale_after_minutes=120
+    ).state
+
+
+def _timeline_state_at(intervals, at):
+    return next(
+        item["state"]
+        for item in intervals
+        if item["start"] <= at < item["end"]
+    )
+
+
+def test_real_mark_sequence_reconstructs_95_and_98_without_future_evidence():
+    day = datetime(2026, 9, 15)
+    reports = [
+        ("15:17", "92,95,ДТ"),
+        ("15:31", "92,95,ДТ"),
+        ("15:52", "92,95,ДТ"),
+        ("15:55", "92,95,ДТ"),
+        ("16:09", "92,95,ДТ"),
+        ("16:25", "92,95,ДТ"),
+        ("16:35", "92,95,98,ДТ"),
+        ("16:39", "92,95,ДТ"),
+        ("16:49", "92,95,ДТ"),
+        ("17:08", "92,95,ДТ"),
+        ("17:19", "95"),
+        ("17:24", "92,95,ДТ"),
+        ("17:38", "92,95,ДТ"),
+        ("17:39", "92,95,ДТ"),
+        ("17:58", "92,95,ДТ"),
+        ("18:32", "92,95,ДТ"),
+        ("19:08", "92,95,ДТ"),
+        ("19:20", "92,95,ДТ"),
+        ("19:32", "92,95,ДТ"),
+        ("19:52", "92,95,ДТ"),
+        ("20:09", "92,95,ДТ"),
+        ("20:34", "92,95,ДТ"),
+        ("20:38", "92,95,ДТ"),
+        ("21:03", "92,95,ДТ"),
+        ("21:09", "92,95,ДТ"),
+        ("21:23", "92,95,ДТ"),
+        ("21:29", "92,95,ДТ"),
+        ("21:30", "92,95,ДТ"),
+        ("21:35", ""),
+        ("21:40", "92"),
+    ]
+    marks = []
+    for index, (clock, detail) in enumerate(reports):
+        hour, minute = (int(part) for part in clock.split(":"))
+        marks.append(
+            availability_mark(
+                f"real-{index}", day.replace(hour=hour, minute=minute), "yes", detail
+            )
+        )
+
+    cutoffs = [
+        day.replace(hour=15, minute=20),
+        day.replace(hour=15, minute=40),
+        day.replace(hour=16, minute=40),
+        day.replace(hour=18),
+        day.replace(hour=21, minute=31),
+        day.replace(hour=21, minute=41),
+    ]
+    assert [_availability_at(marks, "95", at) for at in cutoffs] == [
+        "candidate", "available", "available", "available", "available", "candidate"
+    ]
+    assert [_availability_at(marks, "98", at) for at in cutoffs] == [
+        "unavailable", "unavailable", "candidate", "unavailable", "unavailable", "unavailable"
+    ]
+    assert _availability_at(marks, "95", day.replace(hour=21, minute=36)) == "available"
+    assert _availability_at(marks, "98", day.replace(hour=21, minute=36)) == "unavailable"
+
+    current_at = day.replace(hour=21, minute=41)
+    timeline = build_fuel_timeline(
+        [], marks, ["95", "98"], current_at=current_at, stale_after_minutes=120
+    )
+    expected_95 = [
+        "candidate", "confirmed_available", "confirmed_available",
+        "confirmed_available", "confirmed_available", "candidate",
+    ]
+    expected_98 = [
+        "unavailable", "unavailable", "candidate",
+        "unavailable", "unavailable", "unavailable",
+    ]
+    assert [_timeline_state_at(timeline["fuels"]["95"], at) for at in cutoffs[:-1]] + [
+        timeline["fuels"]["95"][-1]["state"]
+    ] == expected_95
+    assert [_timeline_state_at(timeline["fuels"]["98"], at) for at in cutoffs[:-1]] + [
+        timeline["fuels"]["98"][-1]["state"]
+    ] == expected_98
+    assert not any(
+        item["state"] == "confirmed_available" for item in timeline["fuels"]["98"]
+    )
+    for fuel_type in ("95", "98"):
+        current_state = _availability_at(marks, fuel_type, current_at)
+        expected_timeline_state = (
+            "confirmed_available" if current_state == "available" else current_state
+        )
+        assert timeline["fuels"][fuel_type][-1]["state"] == expected_timeline_state
 
 
 def test_legacy_station_migration_creates_subscription_idempotently(make_user):

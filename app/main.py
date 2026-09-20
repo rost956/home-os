@@ -3668,16 +3668,32 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
     ).limit(100)).all()
     runtime = get_fuel_runtime_settings(db)
     current_at = utc_now_naive()
+    availability_cutoff = current_at - timedelta(minutes=runtime.stale_after_minutes)
     availability_observations = db.scalars(select(FuelObservation).where(
         FuelObservation.station_id == station.id,
         FuelObservation.fuel_type.in_(tracked_fuels),
-        FuelObservation.observed_at >= current_at - timedelta(minutes=runtime.stale_after_minutes),
+        FuelObservation.observed_at >= availability_cutoff,
         FuelObservation.observed_at <= current_at,
+    )).all()
+    availability_marks = db.scalars(select(FuelStationMark).where(
+        FuelStationMark.station_id == station.id,
+        or_(
+            and_(
+                FuelStationMark.source_created_at.is_not(None),
+                FuelStationMark.source_created_at >= availability_cutoff,
+                FuelStationMark.source_created_at <= current_at,
+            ),
+            and_(
+                FuelStationMark.source_created_at.is_(None),
+                FuelStationMark.fetched_at >= availability_cutoff,
+                FuelStationMark.fetched_at <= current_at,
+            ),
+        ),
     )).all()
     availability = {
         fuel: evaluate_fuel_availability(
             (item for item in availability_observations if item.fuel_type == fuel),
-            marks,
+            availability_marks,
             fuel,
             current_at=current_at,
             stale_after_minutes=runtime.stale_after_minutes,
@@ -3733,7 +3749,11 @@ def fuel_station_history(request: Request, station_id: int, fuel_type: str | Non
         FuelStationChatMessage.station_id == station.id
     ).order_by(FuelStationChatMessage.source_created_at.desc(), FuelStationChatMessage.id.desc()).limit(12)).all()
     timeline = load_fuel_timeline(
-        db, station.id, tracked_fuels, stale_after_minutes=runtime.stale_after_minutes
+        db,
+        station.id,
+        tracked_fuels,
+        current_at=current_at,
+        stale_after_minutes=runtime.stale_after_minutes,
     )
     timeline_ticks = [timeline["from"] + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 24)]
     return render(request, "fuel_detail.html", {"user": user, "station": station, "observations": observations,
