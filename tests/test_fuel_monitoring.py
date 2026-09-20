@@ -60,7 +60,11 @@ from app.services.fuel_routes import (
 )
 from app.services.fuel_settings import FuelRuntimeSettings, get_fuel_runtime_settings, save_fuel_runtime_settings
 from app.services.fuel_timeline import build_fuel_timeline
-from app.services.fuel_trip import calculate_trip, select_recommended_stops
+from app.services.fuel_trip import (
+    calculate_trip,
+    planned_search_distances,
+    select_recommended_stops,
+)
 from app.services.route_engine import (
     OSRMRouteProvider,
     RouteEngine,
@@ -660,6 +664,22 @@ def test_trip_calculation_missing_vehicle_data_returns_warnings():
     assert len(result["warnings"]) == 2
 
 
+def test_trip_search_covers_reachable_refuelling_window():
+    calculation = calculate_trip(
+        321.5,
+        tank_liters=55,
+        consumption_l_per_100km=10,
+        fuel_level_percent=50,
+    )
+    points = planned_search_distances(calculation, radius_km=10)
+
+    assert points[0] == pytest.approx(86.625)
+    assert points[-1] == pytest.approx(192.5)
+    assert max(right - left for left, right in zip(points, points[1:])) <= 15
+    assert any(abs(point - 112) <= 10 for point in points)
+    assert len(points) <= 50
+
+
 def test_trip_stop_selection_prioritizes_state_and_excludes_bad_candidates():
     calculation = calculate_trip(
         900,
@@ -752,13 +772,13 @@ def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
     db.commit()
 
     class TripProvider:
-        calls = 0
+        calls = []
 
         async def get_stations_near(self, latitude, longitude, radius_km):
-            self.calls += 1
+            self.calls.append((latitude, longitude, radius_km))
             return [FuelStationCandidate(
                 provider="gdebenz",
-                provider_station_id=f"trip-{self.calls}",
+                provider_station_id=f"trip-{len(self.calls)}",
                 brand="Teboil",
                 latitude=latitude,
                 longitude=longitude,
@@ -797,6 +817,8 @@ def test_trip_plan_api_uses_owned_vehicle_and_provider_candidates(
     assert payload["route"]["is_approximate"] is False
     assert payload["route"]["geometry"][1] == [60.5, 30.4]
     assert payload["warnings"] == []
+    assert len(TripProvider.calls) > 2
+    assert {call[2] for call in TripProvider.calls} == {10.0}
     missing_data = client.post("/api/fuel/trip-plan", json={
         "vehicle_id": vehicle.id,
         "start": "59.0,30.0",

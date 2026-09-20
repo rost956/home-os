@@ -160,6 +160,7 @@ from .services.fuel_settings import (
 )
 from .services.fuel_timeline import load_fuel_timeline
 from .services.fuel_trip import (
+    TRIP_MAX_DEVIATION_KM,
     FuelTripPlanRequest,
     FuelTripSaveRequest,
     VehicleTripCompleteRequest,
@@ -3392,7 +3393,11 @@ async def _build_fuel_trip_plan(
     warnings.extend(route.warnings)
 
     candidates_by_id: dict[str, dict[str, Any]] = {}
-    search_distances = planned_search_distances(calculation)
+    search_radius = TRIP_MAX_DEVIATION_KM
+    search_distances = planned_search_distances(
+        calculation,
+        radius_km=search_radius,
+    )
     if (
         search_distances
         and search_distances[-1] + float(calculation["safe_full_range_km"])
@@ -3403,8 +3408,6 @@ async def _build_fuel_trip_plan(
         )
     if search_distances:
         provider = make_gdebenz_provider()
-        runtime = get_fuel_runtime_settings(db)
-        search_radius = min(10.0, max(3.0, float(runtime.nearby_radius_km)))
         try:
             nearby = await find_stations_near_route(
                 provider,

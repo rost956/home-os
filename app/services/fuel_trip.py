@@ -8,10 +8,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .fuel_routes import EARTH_RADIUS_KM
+from .fuel_routes import EARTH_RADIUS_KM, MAX_ROUTE_REQUESTS
 
 SAFE_RESERVE_PERCENT = 15.0
 ROAD_DISTANCE_FACTOR = 1.18
+TRIP_MAX_DEVIATION_KM = 10.0
 
 
 def route_point_at_fraction(
@@ -142,8 +143,13 @@ def calculate_trip(
     }
 
 
-def planned_search_distances(calculation: dict[str, Any]) -> list[float]:
-    """Return useful points around which provider candidates should be requested."""
+def planned_search_distances(
+    calculation: dict[str, Any],
+    *,
+    radius_km: float = TRIP_MAX_DEVIATION_KM,
+    max_requests: int = MAX_ROUTE_REQUESTS,
+) -> list[float]:
+    """Cover every reachable refuelling window with bounded provider requests."""
     if not calculation.get("can_plan"):
         return []
     route_distance = float(calculation["distance_km"])
@@ -151,12 +157,41 @@ def planned_search_distances(calculation: dict[str, Any]) -> list[float]:
     full_range = float(calculation["safe_full_range_km"])
     if first_range >= route_distance:
         return []
-    if first_range <= 0:
+    if first_range <= 0 or full_range <= 0 or radius_km <= 0 or max_requests <= 0:
         return []
-    targets = [max(0.0, first_range * 0.92)]
-    while targets[-1] + full_range < route_distance:
-        targets.append(targets[-1] + full_range * 0.92)
-    return targets[:20]
+
+    windows: list[tuple[float, float]] = []
+    position = 0.0
+    usable_range = first_range
+    while position + usable_range < route_distance and len(windows) < 20:
+        start = position + max(10.0, usable_range * 0.45)
+        end = min(route_distance, position + usable_range)
+        if start <= end:
+            if windows and start <= windows[-1][1]:
+                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+            else:
+                windows.append((start, end))
+        position += usable_range * 0.9
+        usable_range = full_range
+
+    spacing_km = radius_km * 1.5
+    points: list[float] = []
+    for start, end in windows:
+        intervals = max(1, math.ceil((end - start) / spacing_km))
+        points.extend(
+            start + (end - start) * index / intervals
+            for index in range(intervals + 1)
+        )
+    points = sorted(set(round(point, 6) for point in points))
+    if len(points) <= max_requests:
+        return points
+    if max_requests == 1:
+        return [points[len(points) // 2]]
+    indexes = {
+        round(index * (len(points) - 1) / (max_requests - 1))
+        for index in range(max_requests)
+    }
+    return [points[index] for index in sorted(indexes)]
 
 
 def _freshness_rank(value: Any, now: datetime) -> int:
@@ -183,7 +218,7 @@ def select_recommended_stops(
     *,
     fuel_type: str,
     calculation: dict[str, Any],
-    max_deviation_km: float = 10.0,
+    max_deviation_km: float = TRIP_MAX_DEVIATION_KM,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Choose reachable useful stops, ordered in the direction of travel."""
