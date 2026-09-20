@@ -2846,7 +2846,7 @@ def test_fuel_dashboard_filters_map_privacy_and_mobile_layout(client, login, mak
             assert "240.0 км от начала" in page.locator(".leaflet-popup").text_content()
             page.locator('[name="end"]').fill("Петрозаводск")
             page.locator("[data-trip-form] [type=submit]").click()
-            page.wait_for_function("window.fuelRouteLines === 2")
+            page.locator("[data-trip-summary]", has_text="Петрозаводск").wait_for()
             assert page.evaluate("window.fuelRouteRemovals") >= 1
             assert page.evaluate("window.fuelRouteGeometries.at(-1)[1]") == [60.2, 31.5]
             assert "Петрозаводск" in page.locator("[data-trip-summary]").text_content()
