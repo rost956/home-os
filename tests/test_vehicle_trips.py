@@ -411,10 +411,10 @@ def test_trip_history_and_detail_have_no_overflow_at_mobile_or_desktop(
     )
     login(owner.username)
     pages = [client.get("/vehicles/trips").text, client.get(f"/vehicles/trips/{trip.id}").text]
-    stylesheet = client.get("/static/style.css?v=79").text
+    stylesheet = client.get("/static/style.css?v=80").text
     pages = [
         re.sub(
-            r'<link rel="stylesheet" href="/static/style\.css\?v=79">',
+            r'<link rel="stylesheet" href="/static/style\.css\?v=80">',
             f"<style>{stylesheet}</style>",
             re.sub(r'<(?:link|script)[^>]+(?:leaflet|unpkg)[^>]*>(?:</script>)?', "", html),
         )

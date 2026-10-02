@@ -46,19 +46,25 @@
     <p class="comparison-help" id="comparison-help">День 0 — первый день периода. Наведите указатель или выберите день клавишей Tab, чтобы сравнить значения.</p>
     {% if not comparison_has_current_expenses %}<p class="comparison-empty-note">В текущем финансовом периоде фактических трат пока нет; линия остаётся на нуле.</p>{% endif %}
     {% if not comparison_has_previous_expenses %}<p class="comparison-empty-note">В прошлом финансовом периоде фактических трат не было; линия остаётся на нуле.</p>{% endif %}
-    <div class="comparison-plot-scroll" tabindex="0" aria-label="Область графика; прокручивается по горизонтали">
-        <svg class="comparison-plot" style="min-width: {{ comparison_svg_width }}px" viewBox="0 0 {{ comparison_svg_width }} 260" role="group" aria-labelledby="expense-comparison-title" aria-describedby="comparison-help">
+    <div class="comparison-chart-shell" style="--comparison-axis-width: {{ comparison_plot_left }}px">
+        <svg class="comparison-y-axis" viewBox="0 0 {{ comparison_plot_left }} 260" aria-hidden="true" focusable="false">
             {% for tick in range(5) %}
                 {% set tick_y = comparison_plot_bottom - (comparison_plot_bottom - comparison_plot_top) * tick / 4 %}
                 {% set tick_amount = comparison_chart_max * tick / 4 %}
-                <line class="comparison-gridline" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_right }}" y1="{{ tick_y }}" y2="{{ tick_y }}" />
                 <text class="comparison-axis-label" x="{{ comparison_plot_left - 8 }}" y="{{ tick_y + 4 }}" text-anchor="end">{{ tick_amount|fmt_decimal }} ₽</text>
             {% endfor %}
-            <line class="comparison-axis" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_left }}" y1="{{ comparison_plot_top }}" y2="{{ comparison_plot_bottom }}" />
-            <line class="comparison-axis" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_right }}" y1="{{ comparison_plot_bottom }}" y2="{{ comparison_plot_bottom }}" />
+            <line class="comparison-axis" x1="{{ comparison_plot_left - 1 }}" x2="{{ comparison_plot_left - 1 }}" y1="{{ comparison_plot_top }}" y2="{{ comparison_plot_bottom }}" />
+        </svg>
+        <div class="comparison-plot-scroll" tabindex="0" aria-label="Область графика; прокручивается по горизонтали">
+            <svg class="comparison-plot" style="min-width: {{ comparison_svg_width - comparison_plot_left + 18 }}px" viewBox="{{ comparison_plot_left - 18 }} 0 {{ comparison_svg_width - comparison_plot_left + 18 }} 260" preserveAspectRatio="none" role="group" aria-labelledby="expense-comparison-title" aria-describedby="comparison-help">
+            {% for tick in range(5) %}
+                {% set tick_y = comparison_plot_bottom - (comparison_plot_bottom - comparison_plot_top) * tick / 4 %}
+                <line class="comparison-gridline" x1="{{ comparison_plot_left - 18 }}" x2="{{ comparison_plot_right }}" y1="{{ tick_y }}" y2="{{ tick_y }}" />
+            {% endfor %}
+            <line class="comparison-axis" x1="{{ comparison_plot_left - 18 }}" x2="{{ comparison_plot_right }}" y1="{{ comparison_plot_bottom }}" y2="{{ comparison_plot_bottom }}" />
             {% for row in comparison_rows if row.day_index % 5 == 0 or row.day_index == comparison_rows|length - 1 %}
                 {% set x = comparison_plot_left + (comparison_plot_right - comparison_plot_left) * row.day_index / (comparison_rows|length - 1 if comparison_rows|length > 1 else 1) %}
-                <text class="comparison-axis-label" x="{{ x }}" y="{{ comparison_plot_bottom + 22 }}" text-anchor="middle">{{ row.day_index }}</text>
+                <text class="comparison-axis-label" x="{{ x + (2 if row.day_index == 0 else 0) }}" y="{{ comparison_plot_bottom + 22 }}" text-anchor="{{ 'start' if row.day_index == 0 else 'middle' }}">{{ row.day_index }}</text>
             {% endfor %}
             {% if current_svg_points|length > 1 %}<polyline class="comparison-line current-series" points="{% for point in current_svg_points %}{{ point.x }},{{ point.y }} {% endfor %}" />{% endif %}
             {% if previous_svg_points|length > 1 %}<polyline class="comparison-line previous-series" points="{% for point in previous_svg_points %}{{ point.x }},{{ point.y }} {% endfor %}" />{% endif %}
@@ -72,7 +78,8 @@
                 {% set previous_total = row.previous.cumulative_total|fmt_decimal if row.previous else none %}
                 <rect class="comparison-hit" x="{{ x - 16 }}" y="{{ comparison_plot_top }}" width="32" height="{{ comparison_plot_bottom - comparison_plot_top }}" tabindex="0" role="button" aria-label="{% if row.day_index == current_svg_points|length - 1 %}Сегодня; {% endif %}{% if row.day_index == current_svg_points|length - 1 and row.previous %}Сопоставимый день прошлого периода; {% endif %}день {{ row.day_index }} периода. Текущий: {{ current_date or 'нет точки' }}, {{ current_total or 'нет точки' }} рублей. Прошлый: {{ previous_date or 'нет точки' }}, {{ previous_total or 'нет точки' }} рублей." data-day="{{ row.day_index }}" data-current-date="{{ current_date or '' }}" data-current-total="{{ current_total or '' }}" data-previous-date="{{ previous_date or '' }}" data-previous-total="{{ previous_total or '' }}" />
             {% endfor %}
-        </svg>
+            </svg>
+        </div>
     </div>
     <div class="comparison-tooltip" role="status" aria-live="polite" hidden></div>
     <details class="comparison-data">

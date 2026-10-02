@@ -950,7 +950,7 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     assert response.status_code == 200
     assert "Пока ничего не отслеживается" in response.text
     assert "Поездка" in response.text
-    assert '/static/style.css?v=79' in response.text
+    assert '/static/style.css?v=80' in response.text
     assert response.headers["cache-control"] == "no-store"
 
 

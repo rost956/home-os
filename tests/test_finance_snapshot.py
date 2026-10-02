@@ -355,8 +355,8 @@ def test_large_expense_labels_get_axis_space_and_mobile_chart_width(client, db, 
     response = client.get("/finance")
 
     assert response.status_code == 200
-    assert 'x1="94"' in response.text
-    assert 'style="min-width: 1202px" viewBox="0 0 1202 260"' in response.text
+    assert 'class="comparison-y-axis" viewBox="0 0 94 260"' in response.text
+    assert 'style="min-width: 1126px" viewBox="76 0 1126 260"' in response.text
     assert "1000000000 ₽" in response.text
 
 
