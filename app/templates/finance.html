@@ -43,7 +43,7 @@
             <span class="previous-series"><i aria-hidden="true"></i>Прошлый · {{ comparison_chart.previous_start.strftime('%d.%m') }}–{{ comparison_chart.previous_end.strftime('%d.%m.%Y') }}</span>
         </div>
     </div>
-    <p class="comparison-help" id="comparison-help">День 0 — первый день периода. Наведите указатель или выберите день клавишей Tab, чтобы сравнить значения.</p>
+    <p class="comparison-help" id="comparison-help">День 0 — первый день периода. Коснитесь или нажмите на день, чтобы закрепить значения; на компьютере можно также навести указатель или выбрать день клавишей Tab.</p>
     {% if not comparison_has_current_expenses %}<p class="comparison-empty-note">В текущем финансовом периоде фактических трат пока нет; линия остаётся на нуле.</p>{% endif %}
     {% if not comparison_has_previous_expenses %}<p class="comparison-empty-note">В прошлом финансовом периоде фактических трат не было; линия остаётся на нуле.</p>{% endif %}
     <div class="comparison-chart-shell" style="--comparison-axis-width: {{ comparison_plot_left }}px">
@@ -76,7 +76,7 @@
                 {% set previous_date = row.previous.expense_date.strftime('%d.%m.%Y') if row.previous else none %}
                 {% set current_total = row.current.cumulative_total|fmt_decimal if row.current else none %}
                 {% set previous_total = row.previous.cumulative_total|fmt_decimal if row.previous else none %}
-                <rect class="comparison-hit" x="{{ x - 16 }}" y="{{ comparison_plot_top }}" width="32" height="{{ comparison_plot_bottom - comparison_plot_top }}" tabindex="0" role="button" aria-label="{% if row.day_index == current_svg_points|length - 1 %}Сегодня; {% endif %}{% if row.day_index == current_svg_points|length - 1 and row.previous %}Сопоставимый день прошлого периода; {% endif %}день {{ row.day_index }} периода. Текущий: {{ current_date or 'нет точки' }}, {{ current_total or 'нет точки' }} рублей. Прошлый: {{ previous_date or 'нет точки' }}, {{ previous_total or 'нет точки' }} рублей." data-day="{{ row.day_index }}" data-current-date="{{ current_date or '' }}" data-current-total="{{ current_total or '' }}" data-previous-date="{{ previous_date or '' }}" data-previous-total="{{ previous_total or '' }}" />
+                <rect class="comparison-hit" x="{{ x - 16 }}" y="{{ comparison_plot_top }}" width="32" height="{{ comparison_plot_bottom - comparison_plot_top }}" tabindex="0" role="button" aria-pressed="false" aria-label="{% if row.day_index == current_svg_points|length - 1 %}Сегодня; {% endif %}{% if row.day_index == current_svg_points|length - 1 and row.previous %}Сопоставимый день прошлого периода; {% endif %}день {{ row.day_index }} периода. Текущий: {{ current_date or 'нет точки' }}, {{ current_total or 'нет точки' }} рублей. Прошлый: {{ previous_date or 'нет точки' }}, {{ previous_total or 'нет точки' }} рублей." data-day="{{ row.day_index }}" data-current-date="{{ current_date or '' }}" data-current-total="{{ current_total or '' }}" data-previous-date="{{ previous_date or '' }}" data-previous-total="{{ previous_total or '' }}" />
             {% endfor %}
             </svg>
         </div>
@@ -102,6 +102,11 @@
     const card = document.querySelector('.expense-comparison-card');
     if (!card) return;
     const tooltip = card.querySelector('.comparison-tooltip');
+    const plot = card.querySelector('.comparison-plot-scroll');
+    let selectedPoint = null;
+    let pointerInput = false;
+    let touchStart = null;
+    let touchDragged = false;
     const showPoint = (point) => {
         const current = point.dataset.currentDate
             ? `${point.dataset.currentDate}: ${point.dataset.currentTotal} ₽`
@@ -112,12 +117,55 @@
         tooltip.textContent = `День ${point.dataset.day} · Текущий: ${current} · Прошлый: ${previous}`;
         tooltip.hidden = false;
     };
+    const selectPoint = (point) => {
+        if (selectedPoint && selectedPoint !== point) {
+            selectedPoint.classList.remove('is-selected');
+            selectedPoint.setAttribute('aria-pressed', 'false');
+        }
+        selectedPoint = point;
+        point.classList.add('is-selected');
+        point.setAttribute('aria-pressed', 'true');
+        showPoint(point);
+    };
+    plot.addEventListener('pointerdown', (event) => {
+        pointerInput = true;
+        touchDragged = false;
+        touchStart = null;
+        if (event.pointerType === 'touch') {
+            touchStart = { x: event.clientX, y: event.clientY };
+        }
+    }, true);
+    plot.addEventListener('pointermove', (event) => {
+        if (event.pointerType === 'touch' && touchStart &&
+            Math.hypot(event.clientX - touchStart.x, event.clientY - touchStart.y) > 8) {
+            touchDragged = true;
+        }
+    }, true);
+    plot.addEventListener('scroll', () => { if (touchStart) touchDragged = true; });
+    window.addEventListener('pointerup', () => { touchStart = null; }, true);
+    window.addEventListener('pointercancel', (event) => {
+        if (event.pointerType === 'touch') touchDragged = true;
+        touchStart = null;
+    }, true);
+    document.addEventListener('keydown', () => { pointerInput = false; touchDragged = false; }, true);
     card.querySelectorAll('.comparison-hit').forEach((point) => {
         if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
-            point.addEventListener('mouseenter', () => showPoint(point));
+            point.addEventListener('mouseenter', () => { if (!selectedPoint) showPoint(point); });
+            point.addEventListener('mouseleave', () => { if (!selectedPoint) tooltip.hidden = true; });
         }
-        point.addEventListener('focus', () => showPoint(point));
-        point.addEventListener('pointerdown', () => showPoint(point));
+        point.addEventListener('focus', () => {
+            if (!pointerInput) selectPoint(point);
+        });
+        point.addEventListener('click', () => {
+            if (touchDragged) return;
+            selectPoint(point);
+        });
+        point.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectPoint(point);
+            }
+        });
     });
 })();
 </script>

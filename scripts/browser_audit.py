@@ -149,14 +149,14 @@ def main() -> None:
         page.goto(f"{BASE_URL}/finance?from_date=2026-10-01&to_date=2026-10-02")
         first_series = page.locator(".comparison-line.current-series")
         data_days = page.locator(".comparison-hit").count()
-        page.locator(".comparison-hit").nth(1).focus()
-        keyboard_tooltip = page.locator(".comparison-tooltip").inner_text()
         mouse_target = page.locator(".comparison-hit").nth(2).bounding_box()
         page.mouse.move(
             mouse_target["x"] + mouse_target["width"] / 2,
             mouse_target["y"] + mouse_target["height"] / 2,
         )
         mouse_tooltip = page.locator(".comparison-tooltip").inner_text()
+        page.locator(".comparison-hit").nth(1).focus()
+        keyboard_tooltip = page.locator(".comparison-tooltip").inner_text()
         assert "\u0414\u0435\u043d\u044c 1" in keyboard_tooltip and "\u041f\u0440\u043e\u0448\u043b\u044b\u0439" in keyboard_tooltip
         assert "\u0414\u0435\u043d\u044c 2" in mouse_tooltip
         page.locator(".comparison-hit").last.focus()

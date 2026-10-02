@@ -3166,7 +3166,7 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
 .comparison-marker.previous-series { fill: var(--card); stroke: #7c2d12; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .comparison-marker.today-marker, .comparison-marker.comparison-match { stroke-width: 3.5; }
 .comparison-hit { fill: transparent; cursor: crosshair; }
-.comparison-hit:focus { fill: color-mix(in srgb, var(--primary) 14%, transparent); outline: none; }
+.comparison-hit:focus-visible, .comparison-hit.is-selected { fill: color-mix(in srgb, var(--primary) 14%, transparent); outline: none; }
 .comparison-tooltip { min-height: 38px; margin-top: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
 .comparison-tooltip[hidden] { display: none; }
 .comparison-data { margin-top: 10px; }
