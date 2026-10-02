@@ -2699,6 +2699,11 @@ html[data-theme="dark"] .success-alert {
 .fuel-settings-form > .card { display: grid; gap: 16px; }
 .fuel-toggle { min-height: 58px; padding: 12px; border-radius: var(--radius); background: var(--soft); }
 .fuel-toggle input, .fuel-choice-fieldset input { width: 19px; min-height: 19px; accent-color: var(--primary); }
+.fuel-candidates .card form { display: grid; gap: 10px; }
+.fuel-candidate-fuels { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; border: 0; }
+.fuel-candidate-fuels legend { margin-bottom: 4px; font-weight: 800; }
+.fuel-candidate-fuels .check-row { min-height: 44px; }
+.fuel-candidate-fuels input { width: 20px; height: 20px; min-height: 20px; padding: 0; accent-color: var(--primary); }
 .fuel-toggle span { display: grid; gap: 3px; }
 .fuel-toggle small { color: var(--muted); font-weight: 500; }
 .fuel-advanced { border-top: 1px solid var(--line); padding-top: 12px; }
@@ -2804,6 +2809,10 @@ html[data-theme="dark"] .success-alert {
 .fuel-map-marker.unknown { border-style: dotted; background: #64748b; }
 .fuel-trip-endpoint { display: grid; place-items: center; box-sizing: border-box; width: 38px; height: 38px; border: 3px solid var(--card); border-radius: 50%; background: #2563eb; box-shadow: 0 2px 8px rgba(15, 23, 42, .32); color: #fff; font-size: 13px; font-weight: 900; }
 .fuel-trip-endpoint.finish { background: #111827; }
+.fuel-map-card { padding-right: 24px; }
+.fuel-map-zoom { position: absolute; z-index: 10; top: 12px; right: 12px; display: grid; gap: 4px; }
+.fuel-map-zoom[hidden] { display: none; }
+.fuel-map-zoom button { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); font-size: 22px; }
 .fuel-map-card { display: grid; min-width: 210px; gap: 8px; color: var(--text); }
 .fuel-map-card p { margin: 0; color: var(--muted); }
 .fuel-map-card dl { display: grid; gap: 4px; margin: 0; }
@@ -2829,6 +2838,7 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
 }
 @media (max-width: 900px) {
     .fuel-toolbar-line { align-items: center; }
+    .filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .fuel-filter-open { display: inline-flex; }
     .fuel-filter-panel { position: fixed; z-index: 46; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); left: 10px; display: none; max-height: min(80vh, 620px); overflow: auto; align-items: stretch; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
     .fuel-filter-panel.open { display: grid; }
@@ -3132,6 +3142,37 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
 .cashflow-label span, .cashflow-label b { writing-mode: vertical-rl; transform: rotate(180deg); max-height: 46px; white-space: nowrap; font-size: 11px; line-height: 1; }
 .cashflow-label span { color: var(--muted); font-weight: 700; }
 
+.expense-comparison-card { margin: 16px 0; box-shadow: none; }
+.comparison-head { align-items: flex-start; }
+.comparison-head h2 { overflow-wrap: anywhere; }
+.comparison-legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 13px; font-weight: 750; }
+.comparison-legend span { display: inline-flex; min-width: 0; align-items: center; gap: 7px; overflow-wrap: anywhere; }
+.comparison-legend i { display: inline-block; width: 24px; border-top: 3px solid #166534; }
+.comparison-legend .previous-series i { border-top: 3px dashed #7c2d12; }
+.comparison-help { margin: 4px 0 8px; color: var(--muted); font-size: 13px; }
+.comparison-empty-note { margin: 4px 0; color: var(--muted); font-size: 13px; }
+.comparison-plot-scroll, .comparison-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
+.comparison-plot-scroll:focus-visible, .comparison-table-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.comparison-plot { display: block; width: 100%; min-width: 760px; height: 260px; overflow: visible; }
+.comparison-gridline { stroke: var(--line); stroke-width: 1; }
+.comparison-axis { stroke: var(--muted); stroke-width: 1.25; }
+.comparison-axis-label { fill: var(--muted); font-size: 11px; }
+.comparison-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.comparison-line.current-series { stroke: #166534; }
+.comparison-line.previous-series { stroke: #7c2d12; stroke-dasharray: 8 5; }
+.comparison-marker.current-series { fill: var(--card); stroke: #166534; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.comparison-marker.previous-series { fill: var(--card); stroke: #7c2d12; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.comparison-marker.today-marker, .comparison-marker.comparison-match { stroke-width: 3.5; }
+.comparison-hit { fill: transparent; cursor: crosshair; }
+.comparison-hit:focus { fill: color-mix(in srgb, var(--primary) 14%, transparent); outline: none; }
+.comparison-tooltip { min-height: 38px; margin-top: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+.comparison-tooltip[hidden] { display: none; }
+.comparison-data { margin-top: 10px; }
+.comparison-data summary { width: fit-content; min-height: 42px; display: flex; align-items: center; cursor: pointer; font-weight: 750; }
+.comparison-data table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.comparison-data th, .comparison-data td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.comparison-data thead { position: sticky; top: 0; background: var(--card); }
+
 /* Moments journal */
 .moments-head { margin-bottom: 14px; }
 .moments-tools {
@@ -3257,6 +3298,13 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
 .planner-next { transform: rotate(180deg); }
 .planner-month-picker input { min-height: 40px; }
 .planner-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, .8fr); align-items: start; gap: 16px; }
+@media (max-width: 900px) {
+    .planner-head { flex-wrap: wrap; }
+    .planner-head .btn { max-width: 100%; white-space: normal; }
+    .planner-toolbar { flex-wrap: wrap; }
+    .planner-toolbar .btn { max-width: 100%; }
+    .planner-layout { grid-template-columns: minmax(0, 1fr); }
+}
 .planner-calendar { padding: 12px; overflow-x: auto; box-shadow: none; }
 .planner-weekdays, .planner-calendar-grid { min-width: 680px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .planner-weekdays { margin: 0 0 6px; }
@@ -3550,4 +3598,25 @@ body > .fuel-map-sheet { position: fixed; z-index: 1100; right: 12px; bottom: ca
     .cashflow-chart { height: 210px; grid-auto-columns: 46px; gap: 5px; }
     .cashflow-day { min-width: 46px; grid-template-rows: minmax(0, 1fr) 44px; }
     .cashflow-bar { width: 11px; }
+}
+
+@media (max-width: 430px) {
+    .moments-head { align-items: stretch; flex-direction: column; }
+    .moments-head > .btn { width: 100%; justify-content: center; }
+    .fuel-toolbar-line { align-items: stretch; flex-direction: column; }
+    .fuel-toolbar-line > .fuel-filter-open { width: 100%; justify-content: center; }
+    .fuel-view-toggle { width: 100%; }
+    .fuel-view-toggle button { font-size: 12px; line-height: 1.15; padding-inline: 3px; }
+    .container { padding-inline: 10px; }
+    .container > *, .card, .card > *, .page-head > *, .card-head > *, .grid > *, .form-row > *, .palette-token { min-width: 0; max-width: 100%; }
+    .grid, .grid.compact, .action-grid, .vehicle-grid, .fuel-forecast-strip { grid-template-columns: minmax(0, 1fr); }
+    .form-row, .form-row.two-cols, .filter-grid { grid-template-columns: minmax(0, 1fr); }
+    .page-head, .card-head, .week-actions { flex-wrap: wrap; }
+    .btn, button, .pill, .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    .color-control { flex-wrap: wrap; }
+    .palette-token-reset { white-space: normal; }
+    .palette-token > span:first-child, .fuel-advanced summary, .check-row { overflow-wrap: anywhere; }
+    .week-jump-form .inline-form, .week-jump-form .inline-form > * { min-width: 0; max-width: 100%; }
+    .week-jump-form input { width: 100%; min-width: 0; }
+    .fuel-notification-settings, .fuel-notification-settings form, .fuel-notification-settings .form-row, .fuel-notification-settings label { min-width: 0; max-width: 100%; }
 }

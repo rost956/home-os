@@ -5153,6 +5153,43 @@ def finance_page(
         today=today,
     )
     snapshot = build_finance_snapshot(db, user, today=today)
+    comparison_chart = snapshot.expense_comparison_chart
+    max_day_index = max(
+        len(comparison_chart.current_points),
+        len(comparison_chart.previous_points),
+    ) - 1
+    comparison_max = max(
+        (point.cumulative_total for point in (*comparison_chart.current_points, *comparison_chart.previous_points)),
+        default=Decimal("0"),
+    )
+    plot_left = max(56, len(format_decimal(comparison_max)) * 7 + 24)
+    svg_width = max(760, plot_left + 28 + max_day_index * 36)
+    plot_right, plot_top, plot_bottom = svg_width - 20, 18, 212
+    chart_scale = comparison_max or Decimal("1")
+
+    def comparison_svg_points(points):
+        result = []
+        for point in points:
+            x = plot_left + (plot_right - plot_left) * point.day_index / max(1, max_day_index)
+            y = plot_bottom - float(point.cumulative_total / chart_scale) * (plot_bottom - plot_top)
+            result.append({"x": round(x, 2), "y": round(y, 2), "day_index": point.day_index})
+        return result
+
+    current_svg_points = comparison_svg_points(comparison_chart.current_points)
+    previous_svg_points = comparison_svg_points(comparison_chart.previous_points)
+    current_by_index = {point.day_index: point for point in comparison_chart.current_points}
+    previous_by_index = {point.day_index: point for point in comparison_chart.previous_points}
+    comparison_rows = []
+    for day_index in range(max(len(current_svg_points), len(previous_svg_points))):
+        current_point = current_by_index.get(day_index)
+        previous_point = previous_by_index.get(day_index)
+        comparison_rows.append({
+            "day_index": day_index,
+            "current": current_point,
+            "previous": previous_point,
+        })
+    comparison_has_current_expenses = comparison_chart.current_points[-1].cumulative_total > 0
+    comparison_has_previous_expenses = comparison_chart.previous_points[-1].cumulative_total > 0
     forecast_info = snapshot.forecast.as_legacy_dict()
     chart_days: list[dict[str, Any]] = []
     chart_max = Decimal("0.00")
@@ -5170,7 +5207,7 @@ def finance_page(
         day["income_height"] = float(day["income"] / chart_max * 100) if chart_max else 0
         day["expense_height"] = float(day["expense"] / chart_max * 100) if chart_max else 0
         day["forecast_height"] = float(day["forecast_expense"] / chart_max * 100) if chart_max else 0
-    return render(request, "finance.html", {"user": user, "from_date": date_from.isoformat(), "to_date": date_to.isoformat(), "income_total": cashflow.income_total, "expense_total": cashflow.expense_total, "balance": cashflow.balance, "savings_rate": cashflow.savings_rate, "forecast_info": forecast_info, "period_income": snapshot.period_income_total, "forecast_balance": snapshot.forecast_balance, "period_label": format_period_range(period_start, period_end), "cashflow_chart": chart_days, "chart_has_forecast": any(day["is_forecast"] for day in chart_days)})
+    return render(request, "finance.html", {"user": user, "from_date": date_from.isoformat(), "to_date": date_to.isoformat(), "income_total": cashflow.income_total, "expense_total": cashflow.expense_total, "balance": cashflow.balance, "savings_rate": cashflow.savings_rate, "forecast_info": forecast_info, "period_income": snapshot.period_income_total, "forecast_balance": snapshot.forecast_balance, "period_label": format_period_range(period_start, period_end), "cashflow_chart": chart_days, "chart_has_forecast": any(day["is_forecast"] for day in chart_days), "comparison_chart": comparison_chart, "comparison_rows": comparison_rows, "comparison_svg_width": svg_width, "comparison_plot_left": plot_left, "comparison_plot_right": plot_right, "comparison_plot_top": plot_top, "comparison_plot_bottom": plot_bottom, "comparison_chart_max": comparison_max, "comparison_has_current_expenses": comparison_has_current_expenses, "comparison_has_previous_expenses": comparison_has_previous_expenses, "current_svg_points": current_svg_points, "previous_svg_points": previous_svg_points})
 
 
 @app.get("/expenses")

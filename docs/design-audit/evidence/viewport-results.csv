@@ -1,0 +1,745 @@
+﻿url,width,theme,status,final_url,title,heading,horizontal_overflow
+/login,320,light,200,/login,Вход,Вход,False
+/login,320,dark,200,/login,Вход,Вход,False
+/login,360,light,200,/login,Вход,Вход,False
+/login,360,dark,200,/login,Вход,Вход,False
+/login,390,light,200,/login,Вход,Вход,False
+/login,390,dark,200,/login,Вход,Вход,False
+/login,768,light,200,/login,Вход,Вход,False
+/login,768,dark,200,/login,Вход,Вход,False
+/login,1280,light,200,/login,Вход,Вход,False
+/login,1280,dark,200,/login,Вход,Вход,False
+/login,1440,light,200,/login,Вход,Вход,False
+/login,1440,dark,200,/login,Вход,Вход,False
+/register,320,light,200,/register,Регистрация,Регистрация,False
+/register,320,dark,200,/register,Регистрация,Регистрация,False
+/register,360,light,200,/register,Регистрация,Регистрация,False
+/register,360,dark,200,/register,Регистрация,Регистрация,False
+/register,390,light,200,/register,Регистрация,Регистрация,False
+/register,390,dark,200,/register,Регистрация,Регистрация,False
+/register,768,light,200,/register,Регистрация,Регистрация,False
+/register,768,dark,200,/register,Регистрация,Регистрация,False
+/register,1280,light,200,/register,Регистрация,Регистрация,False
+/register,1280,dark,200,/register,Регистрация,Регистрация,False
+/register,1440,light,200,/register,Регистрация,Регистрация,False
+/register,1440,dark,200,/register,Регистрация,Регистрация,False
+/,320,light,200,/today,Сегодня,Сегодня,False
+/,320,dark,200,/today,Сегодня,Сегодня,False
+/,360,light,200,/today,Сегодня,Сегодня,False
+/,360,dark,200,/today,Сегодня,Сегодня,False
+/,390,light,200,/today,Сегодня,Сегодня,False
+/,390,dark,200,/today,Сегодня,Сегодня,False
+/,768,light,200,/today,Сегодня,Сегодня,False
+/,768,dark,200,/today,Сегодня,Сегодня,False
+/,1280,light,200,/today,Сегодня,Сегодня,False
+/,1280,dark,200,/today,Сегодня,Сегодня,False
+/,1440,light,200,/today,Сегодня,Сегодня,False
+/,1440,dark,200,/today,Сегодня,Сегодня,False
+/login,320,light,200,/recipes,Рецепты,Рецепты,False
+/login,320,dark,200,/recipes,Рецепты,Рецепты,False
+/login,360,light,200,/recipes,Рецепты,Рецепты,False
+/login,360,dark,200,/recipes,Рецепты,Рецепты,False
+/login,390,light,200,/recipes,Рецепты,Рецепты,False
+/login,390,dark,200,/recipes,Рецепты,Рецепты,False
+/login,768,light,200,/recipes,Рецепты,Рецепты,False
+/login,768,dark,200,/recipes,Рецепты,Рецепты,False
+/login,1280,light,200,/recipes,Рецепты,Рецепты,False
+/login,1280,dark,200,/recipes,Рецепты,Рецепты,False
+/login,1440,light,200,/recipes,Рецепты,Рецепты,False
+/login,1440,dark,200,/recipes,Рецепты,Рецепты,False
+/register,320,light,200,/recipes,Рецепты,Рецепты,False
+/register,320,dark,200,/recipes,Рецепты,Рецепты,False
+/register,360,light,200,/recipes,Рецепты,Рецепты,False
+/register,360,dark,200,/recipes,Рецепты,Рецепты,False
+/register,390,light,200,/recipes,Рецепты,Рецепты,False
+/register,390,dark,200,/recipes,Рецепты,Рецепты,False
+/register,768,light,200,/recipes,Рецепты,Рецепты,False
+/register,768,dark,200,/recipes,Рецепты,Рецепты,False
+/register,1280,light,200,/recipes,Рецепты,Рецепты,False
+/register,1280,dark,200,/recipes,Рецепты,Рецепты,False
+/register,1440,light,200,/recipes,Рецепты,Рецепты,False
+/register,1440,dark,200,/recipes,Рецепты,Рецепты,False
+/today,320,light,200,/today,Сегодня,Сегодня,False
+/today,320,dark,200,/today,Сегодня,Сегодня,False
+/today,360,light,200,/today,Сегодня,Сегодня,False
+/today,360,dark,200,/today,Сегодня,Сегодня,False
+/today,390,light,200,/today,Сегодня,Сегодня,False
+/today,390,dark,200,/today,Сегодня,Сегодня,False
+/today,768,light,200,/today,Сегодня,Сегодня,False
+/today,768,dark,200,/today,Сегодня,Сегодня,False
+/today,1280,light,200,/today,Сегодня,Сегодня,False
+/today,1280,dark,200,/today,Сегодня,Сегодня,False
+/today,1440,light,200,/today,Сегодня,Сегодня,False
+/today,1440,dark,200,/today,Сегодня,Сегодня,False
+/search,320,light,200,/search,Поиск,Поиск,False
+/search,320,dark,200,/search,Поиск,Поиск,False
+/search,360,light,200,/search,Поиск,Поиск,False
+/search,360,dark,200,/search,Поиск,Поиск,False
+/search,390,light,200,/search,Поиск,Поиск,False
+/search,390,dark,200,/search,Поиск,Поиск,False
+/search,768,light,200,/search,Поиск,Поиск,False
+/search,768,dark,200,/search,Поиск,Поиск,False
+/search,1280,light,200,/search,Поиск,Поиск,False
+/search,1280,dark,200,/search,Поиск,Поиск,False
+/search,1440,light,200,/search,Поиск,Поиск,False
+/search,1440,dark,200,/search,Поиск,Поиск,False
+/settings,320,light,200,/settings,Настройки,Настройки,False
+/settings,320,dark,200,/settings,Настройки,Настройки,False
+/settings,360,light,200,/settings,Настройки,Настройки,False
+/settings,360,dark,200,/settings,Настройки,Настройки,False
+/settings,390,light,200,/settings,Настройки,Настройки,False
+/settings,390,dark,200,/settings,Настройки,Настройки,False
+/settings,768,light,200,/settings,Настройки,Настройки,False
+/settings,768,dark,200,/settings,Настройки,Настройки,False
+/settings,1280,light,200,/settings,Настройки,Настройки,False
+/settings,1280,dark,200,/settings,Настройки,Настройки,False
+/settings,1440,light,200,/settings,Настройки,Настройки,False
+/settings,1440,dark,200,/settings,Настройки,Настройки,False
+/backup,320,light,200,/backup,Бэкап,Бэкап,False
+/backup,320,dark,200,/backup,Бэкап,Бэкап,False
+/backup,360,light,200,/backup,Бэкап,Бэкап,False
+/backup,360,dark,200,/backup,Бэкап,Бэкап,False
+/backup,390,light,200,/backup,Бэкап,Бэкап,False
+/backup,390,dark,200,/backup,Бэкап,Бэкап,False
+/backup,768,light,200,/backup,Бэкап,Бэкап,False
+/backup,768,dark,200,/backup,Бэкап,Бэкап,False
+/backup,1280,light,200,/backup,Бэкап,Бэкап,False
+/backup,1280,dark,200,/backup,Бэкап,Бэкап,False
+/backup,1440,light,200,/backup,Бэкап,Бэкап,False
+/backup,1440,dark,200,/backup,Бэкап,Бэкап,False
+/ai/settings,320,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,320,dark,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,360,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,360,dark,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,390,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,390,dark,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,768,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,768,dark,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,1280,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,1280,dark,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,1440,light,200,/ai/settings,Home AI,Home AI,False
+/ai/settings,1440,dark,200,/ai/settings,Home AI,Home AI,False
+/recipes,320,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,320,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes,360,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,360,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes,390,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,390,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes,768,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,768,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes,1280,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,1280,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes,1440,light,200,/recipes,Рецепты,Рецепты,False
+/recipes,1440,dark,200,/recipes,Рецепты,Рецепты,False
+/recipes/new,320,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,320,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,360,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,360,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,390,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,390,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,768,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,768,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,1280,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,1280,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,1440,light,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/new,1440,dark,200,/recipes/new,Новый рецепт,Новый рецепт,False
+/recipes/import,320,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,320,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,360,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,360,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,390,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,390,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,768,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,768,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,1280,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,1280,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,1440,light,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/import,1440,dark,200,/recipes/import,Импорт рецепта,JSON рецепт,False
+/recipes/1,320,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,320,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,360,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,360,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,390,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,390,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,768,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,768,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,1280,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,1280,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,1440,light,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1,1440,dark,200,/recipes/1,Audit recipe,Audit recipe,False
+/recipes/1/edit,320,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,320,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,360,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,360,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,390,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,390,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,768,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,768,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,1280,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,1280,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,1440,light,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/recipes/1/edit,1440,dark,200,/recipes/1/edit,Редактировать рецепт,Редактирование рецепта,False
+/menu,320,light,200,/menu,Меню,Меню,False
+/menu,320,dark,200,/menu,Меню,Меню,False
+/menu,360,light,200,/menu,Меню,Меню,False
+/menu,360,dark,200,/menu,Меню,Меню,False
+/menu,390,light,200,/menu,Меню,Меню,False
+/menu,390,dark,200,/menu,Меню,Меню,False
+/menu,768,light,200,/menu,Меню,Меню,False
+/menu,768,dark,200,/menu,Меню,Меню,False
+/menu,1280,light,200,/menu,Меню,Меню,False
+/menu,1280,dark,200,/menu,Меню,Меню,False
+/menu,1440,light,200,/menu,Меню,Меню,False
+/menu,1440,dark,200,/menu,Меню,Меню,False
+/shopping,320,light,200,/shopping,Покупки,Покупки,False
+/shopping,320,dark,200,/shopping,Покупки,Покупки,False
+/shopping,360,light,200,/shopping,Покупки,Покупки,False
+/shopping,360,dark,200,/shopping,Покупки,Покупки,False
+/shopping,390,light,200,/shopping,Покупки,Покупки,False
+/shopping,390,dark,200,/shopping,Покупки,Покупки,False
+/shopping,768,light,200,/shopping,Покупки,Покупки,False
+/shopping,768,dark,200,/shopping,Покупки,Покупки,False
+/shopping,1280,light,200,/shopping,Покупки,Покупки,False
+/shopping,1280,dark,200,/shopping,Покупки,Покупки,False
+/shopping,1440,light,200,/shopping,Покупки,Покупки,False
+/shopping,1440,dark,200,/shopping,Покупки,Покупки,False
+/shopping/lists/1,320,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,320,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,360,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,360,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,390,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,390,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,768,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,768,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,1280,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,1280,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,1440,light,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/shopping/lists/1,1440,dark,200,/shopping/lists/1,Audit shopping,Audit shopping,False
+/expenses,320,light,200,/expenses,Траты,Траты,False
+/expenses,320,dark,200,/expenses,Траты,Траты,False
+/expenses,360,light,200,/expenses,Траты,Траты,False
+/expenses,360,dark,200,/expenses,Траты,Траты,False
+/expenses,390,light,200,/expenses,Траты,Траты,False
+/expenses,390,dark,200,/expenses,Траты,Траты,False
+/expenses,768,light,200,/expenses,Траты,Траты,False
+/expenses,768,dark,200,/expenses,Траты,Траты,False
+/expenses,1280,light,200,/expenses,Траты,Траты,False
+/expenses,1280,dark,200,/expenses,Траты,Траты,False
+/expenses,1440,light,200,/expenses,Траты,Траты,False
+/expenses,1440,dark,200,/expenses,Траты,Траты,False
+/expenses/analytics,320,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,320,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,360,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,360,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,390,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,390,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,768,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,768,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,1280,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,1280,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,1440,light,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/analytics,1440,dark,200,/expenses/analytics,Аналитика трат,Аналитика,False
+/expenses/categories/1/analytics,320,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,320,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,360,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,360,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,390,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,390,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,768,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,768,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,1280,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,1280,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,1440,light,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/categories/1/analytics,1440,dark,200,/expenses/categories/1/analytics,Food — аналитика,Food,False
+/expenses/lists/1,320,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,320,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,360,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,360,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,390,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,390,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,768,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,768,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,1280,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,1280,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,1440,light,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/lists/1,1440,dark,200,/expenses/lists/1,Audit shared expenses,Audit shared expenses,False
+/expenses/categories/1,320,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,320,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,360,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,360,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,390,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,390,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,768,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,768,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,1280,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,1280,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,1440,light,200,/expenses/categories/1,Food,Food,False
+/expenses/categories/1,1440,dark,200,/expenses/categories/1,Food,Food,False
+/expenses/planning,320,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,320,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,360,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,360,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,390,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,390,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,768,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,768,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,1280,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,1280,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,1440,light,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/planning,1440,dark,200,/expenses/planning,Лимиты и регулярные траты,Лимиты,False
+/expenses/splits,320,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,320,dark,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,360,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,360,dark,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,390,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,390,dark,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,768,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,768,dark,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,1280,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,1280,dark,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,1440,light,200,/expenses/splits,Долги,Долги,False
+/expenses/splits,1440,dark,200,/expenses/splits,Долги,Долги,False
+/income,320,light,200,/income,Доходы,Доходы,False
+/income,320,dark,200,/income,Доходы,Доходы,False
+/income,360,light,200,/income,Доходы,Доходы,False
+/income,360,dark,200,/income,Доходы,Доходы,False
+/income,390,light,200,/income,Доходы,Доходы,False
+/income,390,dark,200,/income,Доходы,Доходы,False
+/income,768,light,200,/income,Доходы,Доходы,False
+/income,768,dark,200,/income,Доходы,Доходы,False
+/income,1280,light,200,/income,Доходы,Доходы,False
+/income,1280,dark,200,/income,Доходы,Доходы,False
+/income,1440,light,200,/income,Доходы,Доходы,False
+/income,1440,dark,200,/income,Доходы,Доходы,False
+/finance,320,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,320,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,360,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,360,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,390,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,390,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,768,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,768,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,1280,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,1280,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,1440,light,200,/finance,Доходы и траты,Доходы и траты,False
+/finance,1440,dark,200,/finance,Доходы и траты,Доходы и траты,False
+/chats,320,light,200,/chats,Чаты,Чаты,False
+/chats,320,dark,200,/chats,Чаты,Чаты,False
+/chats,360,light,200,/chats,Чаты,Чаты,False
+/chats,360,dark,200,/chats,Чаты,Чаты,False
+/chats,390,light,200,/chats,Чаты,Чаты,False
+/chats,390,dark,200,/chats,Чаты,Чаты,False
+/chats,768,light,200,/chats,Чаты,Чаты,False
+/chats,768,dark,200,/chats,Чаты,Чаты,False
+/chats,1280,light,200,/chats,Чаты,Чаты,False
+/chats,1280,dark,200,/chats,Чаты,Чаты,False
+/chats,1440,light,200,/chats,Чаты,Чаты,False
+/chats,1440,dark,200,/chats,Чаты,Чаты,False
+/chats/1,320,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,320,dark,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,360,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,360,dark,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,390,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,390,dark,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,768,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,768,dark,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,1280,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,1280,dark,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,1440,light,200,/chats/1,Audit chat,Audit chat,False
+/chats/1,1440,dark,200,/chats/1,Audit chat,Audit chat,False
+/wishlist,320,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,320,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,360,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,360,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,390,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,390,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,768,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,768,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,1280,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,1280,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,1440,light,200,/wishlist,Хотелки,Хотелки,False
+/wishlist,1440,dark,200,/wishlist,Хотелки,Хотелки,False
+/wishlist/shared/audituser,320,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,320,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,360,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,360,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,390,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,390,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,768,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,768,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,1280,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,1280,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,1440,light,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/wishlist/shared/audituser,1440,dark,200,/wishlist/shared/audituser,Хотелки @audituser,Хотелки @audituser,False
+/watch,320,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,320,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,360,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,360,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,390,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,390,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,768,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,768,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,1280,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,1280,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,1440,light,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/watch,1440,dark,200,/watch,Сериалы и фильмы,Сериалы и фильмы,False
+/moments,320,light,200,/moments,Моменты,Моменты,False
+/moments,320,dark,200,/moments,Моменты,Моменты,False
+/moments,360,light,200,/moments,Моменты,Моменты,False
+/moments,360,dark,200,/moments,Моменты,Моменты,False
+/moments,390,light,200,/moments,Моменты,Моменты,False
+/moments,390,dark,200,/moments,Моменты,Моменты,False
+/moments,768,light,200,/moments,Моменты,Моменты,False
+/moments,768,dark,200,/moments,Моменты,Моменты,False
+/moments,1280,light,200,/moments,Моменты,Моменты,False
+/moments,1280,dark,200,/moments,Моменты,Моменты,False
+/moments,1440,light,200,/moments,Моменты,Моменты,False
+/moments,1440,dark,200,/moments,Моменты,Моменты,False
+/planner,320,light,200,/planner,Планировщик,Планировщик,False
+/planner,320,dark,200,/planner,Планировщик,Планировщик,False
+/planner,360,light,200,/planner,Планировщик,Планировщик,False
+/planner,360,dark,200,/planner,Планировщик,Планировщик,False
+/planner,390,light,200,/planner,Планировщик,Планировщик,False
+/planner,390,dark,200,/planner,Планировщик,Планировщик,False
+/planner,768,light,200,/planner,Планировщик,Планировщик,False
+/planner,768,dark,200,/planner,Планировщик,Планировщик,False
+/planner,1280,light,200,/planner,Планировщик,Планировщик,False
+/planner,1280,dark,200,/planner,Планировщик,Планировщик,False
+/planner,1440,light,200,/planner,Планировщик,Планировщик,False
+/planner,1440,dark,200,/planner,Планировщик,Планировщик,False
+/vehicles,320,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,320,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,360,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,360,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,390,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,390,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,768,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,768,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,1280,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,1280,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,1440,light,200,/vehicles,Автомобили,Автомобили,False
+/vehicles,1440,dark,200,/vehicles,Автомобили,Автомобили,False
+/vehicles/new,320,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,320,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,360,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,360,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,390,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,390,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,768,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,768,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,1280,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,1280,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,1440,light,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/new,1440,dark,200,/vehicles/new,Новый автомобиль,Добавить автомобиль,False
+/vehicles/1,320,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,320,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,360,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,360,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,390,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,390,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,768,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,768,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,1280,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,1280,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,1440,light,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1,1440,dark,200,/vehicles/1,Audit car,Audit car,False
+/vehicles/1/edit,320,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,320,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,360,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,360,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,390,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,390,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,768,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,768,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,1280,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,1280,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,1440,light,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/edit,1440,dark,200,/vehicles/1/edit,Редактировать автомобиль,Редактировать автомобиль,False
+/vehicles/1/log,320,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,320,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,360,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,360,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,390,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,390,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,768,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,768,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,1280,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,1280,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,1440,light,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log,1440,dark,200,/vehicles/1/log,Бортовой журнал — Audit car,Бортовой журнал,False
+/vehicles/1/log/new,320,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,320,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,360,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,360,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,390,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,390,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,768,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,768,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,1280,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,1280,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,1440,light,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/new,1440,dark,200,/vehicles/1/log/new,Новая запись,Новая запись,False
+/vehicles/1/log/print,320,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,320,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,360,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,360,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,390,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,390,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,768,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,768,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,1280,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,1280,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,1440,light,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/print,1440,dark,200,/vehicles/1/log/print,Бортовой журнал — Audit car,Бортовой журнал: Audit car,False
+/vehicles/1/log/1,320,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,320,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,360,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,360,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,390,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,390,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,768,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,768,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,1280,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,1280,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,1440,light,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1,1440,dark,200,/vehicles/1/log/1,Audit service — бортовой журнал,Audit service,False
+/vehicles/1/log/1/edit,320,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,320,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,360,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,360,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,390,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,390,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,768,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,768,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,1280,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,1280,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,1440,light,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/log/1/edit,1440,dark,200,/vehicles/1/log/1/edit,Редактировать запись,Редактировать запись,False
+/vehicles/1/maintenance,320,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,320,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,360,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,360,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,390,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,390,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,768,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,768,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,1280,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,1280,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,1440,light,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance,1440,dark,200,/vehicles/1/maintenance,Обслуживание — Audit car,Обслуживание,False
+/vehicles/1/maintenance/new,320,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,320,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,360,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,360,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,390,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,390,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,768,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,768,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,1280,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,1280,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,1440,light,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/new,1440,dark,200,/vehicles/1/maintenance/new,Новое обслуживание,Новое обслуживание,False
+/vehicles/1/maintenance/1/edit,320,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,320,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,360,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,360,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,390,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,390,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,768,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,768,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,1280,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,1280,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,1440,light,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/maintenance/1/edit,1440,dark,200,/vehicles/1/maintenance/1/edit,Изменить позицию,Изменить позицию,False
+/vehicles/1/fuel,320,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,320,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,360,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,360,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,390,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,390,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,768,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,768,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,1280,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,1280,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,1440,light,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel,1440,dark,200,/vehicles/1/fuel,Топливо — Audit car,Топливо,False
+/vehicles/1/fuel/new,320,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,320,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,360,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,360,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,390,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,390,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,768,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,768,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,1280,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,1280,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,1440,light,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/new,1440,dark,200,/vehicles/1/fuel/new,Новая заправка,Новая заправка,False
+/vehicles/1/fuel/1/edit,320,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,320,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,360,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,360,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,390,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,390,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,768,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,768,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,1280,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,1280,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,1440,light,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/1/fuel/1/edit,1440,dark,200,/vehicles/1/fuel/1/edit,Редактировать заправку,Редактировать заправку,False
+/vehicles/trips,320,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,320,dark,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,360,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,360,dark,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,390,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,390,dark,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,768,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,768,dark,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,1280,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,1280,dark,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,1440,light,200,/vehicles/trips,История поездок,Поездки,False
+/vehicles/trips,1440,dark,200,/vehicles/trips,История поездок,Поездки,False
+/fuel,320,light,200,/fuel,Бензин,Бензин,False
+/fuel,320,dark,200,/fuel,Бензин,Бензин,False
+/fuel,360,light,200,/fuel,Бензин,Бензин,False
+/fuel,360,dark,200,/fuel,Бензин,Бензин,False
+/fuel,390,light,200,/fuel,Бензин,Бензин,False
+/fuel,390,dark,200,/fuel,Бензин,Бензин,False
+/fuel,768,light,200,/fuel,Бензин,Бензин,False
+/fuel,768,dark,200,/fuel,Бензин,Бензин,False
+/fuel,1280,light,200,/fuel,Бензин,Бензин,False
+/fuel,1280,dark,200,/fuel,Бензин,Бензин,False
+/fuel,1440,light,200,/fuel,Бензин,Бензин,False
+/fuel,1440,dark,200,/fuel,Бензин,Бензин,False
+/fuel/add,320,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,320,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,360,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,360,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,390,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,390,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,768,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,768,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,1280,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,1280,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,1440,light,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/add,1440,dark,200,/fuel/add,Добавить АЗС,Добавить АЗС,False
+/fuel/settings,320,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,320,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,360,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,360,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,390,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,390,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,768,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,768,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,1280,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,1280,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,1440,light,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/settings,1440,dark,200,/fuel/settings,Настройки бензина,Настройки бензина,False
+/fuel/1,320,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,320,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,360,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,360,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,390,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,390,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,768,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,768,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,1280,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,1280,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,1440,light,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1,1440,dark,200,/fuel/1,Audit station — бензин,Audit station,False
+/fuel/1/settings,320,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,320,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,360,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,360,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,390,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,390,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,768,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,768,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,1280,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,1280,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,1440,light,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/fuel/1/settings,1440,dark,200,/fuel/1/settings,Настройки АЗС,Настройки АЗС,False
+/vehicles/trips/1,320,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,320,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,360,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,360,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,390,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,390,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,768,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,768,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,1280,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,1280,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,1440,light,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/vehicles/trips/1,1440,dark,200,/vehicles/trips/1,Moscow → Tula,Audit trip,False
+/files,320,light,200,/files,Файлы,Файлы,False
+/files,320,dark,200,/files,Файлы,Файлы,False
+/files,360,light,200,/files,Файлы,Файлы,False
+/files,360,dark,200,/files,Файлы,Файлы,False
+/files,390,light,200,/files,Файлы,Файлы,False
+/files,390,dark,200,/files,Файлы,Файлы,False
+/files,768,light,200,/files,Файлы,Файлы,False
+/files,768,dark,200,/files,Файлы,Файлы,False
+/files,1280,light,200,/files,Файлы,Файлы,False
+/files,1280,dark,200,/files,Файлы,Файлы,False
+/files,1440,light,200,/files,Файлы,Файлы,False
+/files,1440,dark,200,/files,Файлы,Файлы,False
+/files/new,320,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,320,dark,200,/files/new,Новая передача,Новая передача,False
+/files/new,360,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,360,dark,200,/files/new,Новая передача,Новая передача,False
+/files/new,390,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,390,dark,200,/files/new,Новая передача,Новая передача,False
+/files/new,768,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,768,dark,200,/files/new,Новая передача,Новая передача,False
+/files/new,1280,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,1280,dark,200,/files/new,Новая передача,Новая передача,False
+/files/new,1440,light,200,/files/new,Новая передача,Новая передача,False
+/files/new,1440,dark,200,/files/new,Новая передача,Новая передача,False
+/files/1,320,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,320,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,360,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,360,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,390,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,390,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,768,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,768,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,1280,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,1280,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,1440,light,200,/files/1,Public audit files — Файлы,Public audit files,False
+/files/1,1440,dark,200,/files/1,Public audit files — Файлы,Public audit files,False
+/share/audit-public-token-12345678901234567890,320,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,320,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,360,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,360,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,390,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,390,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,768,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,768,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,1280,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,1280,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,1440,light,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/share/audit-public-token-12345678901234567890,1440,dark,200,/share/audit-public-token-12345678901234567890,Public audit files — общая передача,Public audit files,False
+/files/10,320,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,320,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,360,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,360,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,390,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,390,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,768,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,768,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,1280,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,1280,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,1440,light,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/files/10,1440,dark,200,/files/10,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — Файлы,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,320,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,320,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,360,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,360,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,390,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,390,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,768,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,768,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,1280,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,1280,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,1440,light,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False
+/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,1440,dark,200,/share/OupmZrcYaN-aM3kTZ8qiK--YPhKRb4XFvuG_GfxVlx4,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name- — общая передача,Audit attachment long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-long-name-,False

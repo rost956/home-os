@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+
+import pytest
 
 from app.models import (
     ExpenseCategory,
@@ -13,6 +15,7 @@ from app.models import (
     RecurringExpense,
 )
 from app.services.finance import (
+    build_cumulative_expense_comparison,
     build_finance_snapshot,
     expense_period_bounds,
     previous_expense_period_bounds,
@@ -289,6 +292,8 @@ def test_year_boundary_and_user_scope_include_only_shared_expenses(db, make_user
     assert viewer_snapshot.budget.limit_total == Decimal("0.00")
     assert viewer_snapshot.recurring_payments == ()
     assert viewer_snapshot.comparison.comparable_end == date(2025, 12, 10)
+    assert viewer_snapshot.expense_comparison_chart.current_points[-1].cumulative_total == Decimal("100.00")
+    assert owner_snapshot.expense_comparison_chart.current_points[-1].cumulative_total == Decimal("300.00")
     assert private_list.id != shared_list.id
 
 
@@ -314,6 +319,140 @@ def test_existing_finance_pages_render_snapshot_values(client, db, make_user, lo
     assert finance.status_code == 200
     assert "+500 ₽" in finance.text
     assert "-125,5 ₽" in finance.text
+    assert "Накопленные траты: текущий и прошлый периоды" in finance.text
+    assert "фильтр дат выше на него не влияет" in finance.text
+    assert "Показать значения всех дней" in finance.text
+    assert "04.04.2026" in finance.text
+    assert "В прошлом финансовом периоде фактических трат не было" in finance.text
     assert "+374,5 ₽" in finance.text
     assert analytics.status_code == 200
     assert "125,5 ₽" in analytics.text
+
+
+def test_empty_finance_period_comparison_explains_zero_lines(client, make_user, login, monkeypatch):
+    user = make_user("empty-finance-chart")
+    monkeypatch.setattr("app.main.msk_today", lambda: date(2026, 4, 10))
+    login(user.username)
+
+    response = client.get("/finance")
+
+    assert response.status_code == 200
+    assert "В текущем финансовом периоде фактических трат пока нет" in response.text
+    assert "В прошлом финансовом периоде фактических трат не было" in response.text
+    assert 'class="comparison-line current-series" points="56.0,212.0' in response.text
+    assert 'class="comparison-line previous-series" points="56.0,212.0' in response.text
+    assert 'class="comparison-marker' in response.text
+
+
+def test_large_expense_labels_get_axis_space_and_mobile_chart_width(client, db, make_user, login, monkeypatch):
+    user = make_user("large-finance-chart")
+    _expense_list, food, _transport, _empty = create_expense_list(db, user)
+    add_expense(db, food, "Large expense", "1000000000", date(2026, 4, 1))
+    db.commit()
+    monkeypatch.setattr("app.main.msk_today", lambda: date(2026, 4, 10))
+    login(user.username)
+
+    response = client.get("/finance")
+
+    assert response.status_code == 200
+    assert 'x1="94"' in response.text
+    assert 'style="min-width: 1202px" viewBox="0 0 1202 260"' in response.text
+    assert "1000000000 ₽" in response.text
+
+
+def test_cumulative_expenses_start_on_day_zero_and_keep_zero_days(db, make_user):
+    user = make_user("cumulative-day-zero")
+    _expense_list, food, _transport, _empty = create_expense_list(db, user)
+    add_expense(db, food, "Day zero", "100", date(2026, 4, 15), forecast=False)
+    add_expense(db, food, "Day two", "50", date(2026, 4, 17), forecast=False)
+    add_expense(db, food, "Previous day zero", "100", date(2026, 3, 15), forecast=False)
+    add_expense(db, food, "Previous day two", "50", date(2026, 3, 17), forecast=False)
+    add_expense(db, food, "No analytics", "999", date(2026, 4, 16), analytics=False)
+    db.commit()
+    from app.services.finance import accessible_expense_lists
+
+    comparison = build_cumulative_expense_comparison(
+        accessible_expense_lists(db, user),
+        current_start=date(2026, 4, 15),
+        current_period_end=date(2026, 4, 30),
+        current_end=date(2026, 4, 17),
+        previous_start=date(2026, 3, 15),
+        previous_end=date(2026, 3, 17),
+    )
+
+    assert [point.day_index for point in comparison.current_points] == [0, 1, 2]
+    assert [point.cumulative_total for point in comparison.current_points] == [
+        Decimal("100.00"), Decimal("100.00"), Decimal("150.00")
+    ]
+    assert [point.cumulative_total for point in comparison.previous_points] == [
+        Decimal("100.00"), Decimal("100.00"), Decimal("150.00")
+    ]
+
+
+def test_cumulative_snapshot_stops_today_but_previous_period_is_complete(db, make_user):
+    user = make_user("cumulative-period-bounds")
+    user.expense_period_start_day = 15
+    _expense_list, food, _transport, _empty = create_expense_list(db, user)
+    add_expense(db, food, "Current first", "30", date(2026, 2, 15))
+    add_expense(db, food, "Current today", "70", date(2026, 2, 18))
+    add_expense(db, food, "Current future", "500", date(2026, 2, 19))
+    add_expense(db, food, "Previous last", "20", date(2026, 2, 14))
+    db.commit()
+
+    snapshot = build_finance_snapshot(db, user, today=date(2026, 2, 18))
+    chart = snapshot.expense_comparison_chart
+
+    assert (chart.current_start, chart.current_period_end, chart.current_end) == (
+        date(2026, 2, 15), date(2026, 3, 14), date(2026, 2, 18)
+    )
+    assert (chart.previous_start, chart.previous_end) == (date(2026, 1, 15), date(2026, 2, 14))
+    assert [point.cumulative_total for point in chart.current_points] == [
+        Decimal("30.00"), Decimal("30.00"), Decimal("30.00"), Decimal("100.00")
+    ]
+    assert len(chart.previous_points) == 31
+    assert chart.previous_points[-1].cumulative_total == Decimal("20.00")
+
+
+@pytest.mark.parametrize(
+    ("start_day", "today", "current_start", "current_end", "previous_start", "previous_end"),
+    [
+        (29, date(2024, 2, 29), date(2024, 2, 29), date(2024, 3, 28), date(2024, 1, 29), date(2024, 2, 28)),
+        (30, date(2025, 3, 1), date(2025, 2, 28), date(2025, 3, 29), date(2025, 1, 30), date(2025, 2, 27)),
+        (31, date(2025, 2, 28), date(2025, 2, 28), date(2025, 3, 30), date(2025, 1, 31), date(2025, 2, 27)),
+    ],
+)
+def test_cumulative_chart_clamps_short_months(
+    db, make_user, start_day, today, current_start, current_end, previous_start, previous_end
+):
+    user = make_user(f"clamped-chart-{start_day}")
+    user.expense_period_start_day = start_day
+    db.commit()
+
+    chart = build_finance_snapshot(db, user, today=today).expense_comparison_chart
+
+    assert (chart.current_start, chart.current_period_end) == (current_start, current_end)
+    assert (chart.previous_start, chart.previous_end) == (previous_start, previous_end)
+    assert chart.current_points[0].day_index == 0
+    assert chart.current_points[-1].expense_date == today
+    assert chart.previous_points[-1].expense_date == previous_end
+    assert len(chart.previous_points) == (previous_end - previous_start).days + 1
+
+
+def test_cumulative_chart_uses_moscow_date_at_midnight_boundary(db, make_user):
+    user = make_user("moscow-chart-boundary")
+    _expense_list, food, _transport, _empty = create_expense_list(db, user)
+    db.add(ExpenseItem(
+        category_id=food.id,
+        title="UTC previous day, Moscow new day",
+        amount=Decimal("45.00"),
+        created_at=datetime(2026, 3, 31, 22, 30),
+        include_in_analytics=True,
+        include_in_forecast=False,
+    ))
+    db.commit()
+
+    chart = build_finance_snapshot(db, user, today=date(2026, 4, 1)).expense_comparison_chart
+
+    assert chart.current_points[0].expense_date == date(2026, 4, 1)
+    assert chart.current_points[0].cumulative_total == Decimal("45.00")
+    assert chart.previous_points[-1].cumulative_total == Decimal("0.00")

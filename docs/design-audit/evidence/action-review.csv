@@ -1,0 +1,21 @@
+﻿url,action,result
+/recipes/new,empty form submit,"invalid=3, route=/recipes/new"
+/recipes/import,empty form submit,"invalid=1, route=/recipes/import"
+/shopping,empty form submit,"invalid=1, route=/shopping"
+/expenses,empty form submit,"invalid=1, route=/expenses"
+/expenses/splits,empty form submit,"invalid=3, route=/expenses/splits"
+/income,empty form submit,"invalid=2, route=/income"
+/chats,empty form submit,"invalid=1, route=/chats"
+/wishlist,empty form submit,"invalid=1, route=/wishlist"
+/watch,empty form submit,"invalid=1, route=/watch"
+/vehicles/new,empty form submit,"invalid=2, route=/vehicles/new"
+/vehicles/1/log/new,empty form submit,"invalid=1, route=/vehicles/1/log/new"
+/vehicles/1/maintenance/new,empty form submit,"invalid=1, route=/vehicles/1/maintenance/new"
+/vehicles/1/fuel/new,empty form submit,"invalid=2, route=/vehicles/1/fuel/new"
+/fuel/add,empty form submit,"invalid=1, route=/fuel/add"
+/files/new,empty form submit,"invalid=1, route=/files/new"
+/search,query Audit,"route=/search?q=Audit, matches=7"
+/fuel,open map without key,"Карта не настроена. Список АЗС продолжает работать, расчёт поездки доступен."
+/fuel,open trip view,form_visible=True
+/finance,custom date filter,"fields=2026-09-01..2026-09-30, comparison=1"
+/moments,open add moment,visible_forms=2

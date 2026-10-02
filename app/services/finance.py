@@ -116,6 +116,24 @@ class PeriodComparison:
 
 
 @dataclass(frozen=True)
+class CumulativeExpensePoint:
+    day_index: int
+    expense_date: date
+    cumulative_total: Decimal
+
+
+@dataclass(frozen=True)
+class CumulativeExpenseComparison:
+    current_start: date
+    current_period_end: date
+    current_end: date
+    previous_start: date
+    previous_end: date
+    current_points: tuple[CumulativeExpensePoint, ...]
+    previous_points: tuple[CumulativeExpensePoint, ...]
+
+
+@dataclass(frozen=True)
 class FinanceSnapshot:
     period_start: date
     period_end: date
@@ -129,6 +147,7 @@ class FinanceSnapshot:
     previous_period_expense_total: Decimal
     period_difference: Decimal
     comparison: PeriodComparison
+    expense_comparison_chart: CumulativeExpenseComparison
     categories: tuple[CategoryBreakdown, ...]
     largest_expenses: tuple[LargestExpense, ...]
     budget: BudgetStatus
@@ -349,6 +368,48 @@ def summarize_cashflow(
     )
 
 
+def build_cumulative_expense_comparison(
+    expense_lists: list[ExpenseList],
+    *,
+    current_start: date,
+    current_period_end: date,
+    current_end: date,
+    previous_start: date,
+    previous_end: date,
+) -> CumulativeExpenseComparison:
+    """Build actual cumulative expense series aligned by financial-period day."""
+    daily: dict[date, Decimal] = defaultdict(lambda: ZERO)
+    for expense_list in expense_lists:
+        for category in expense_list.categories:
+            for item in category.items:
+                if not item.include_in_analytics:
+                    continue
+                item_day = msk_date(item.created_at)
+                if item_day is not None and previous_start <= item_day <= previous_end:
+                    daily[item_day] += item.amount
+                if item_day is not None and current_start <= item_day <= current_end:
+                    daily[item_day] += item.amount
+
+    def series(start: date, end: date) -> tuple[CumulativeExpensePoint, ...]:
+        total = ZERO
+        points: list[CumulativeExpensePoint] = []
+        for day_index in range((end - start).days + 1):
+            expense_date = start + timedelta(days=day_index)
+            total += daily[expense_date]
+            points.append(CumulativeExpensePoint(day_index, expense_date, total))
+        return tuple(points)
+
+    return CumulativeExpenseComparison(
+        current_start=current_start,
+        current_period_end=current_period_end,
+        current_end=current_end,
+        previous_start=previous_start,
+        previous_end=previous_end,
+        current_points=series(current_start, current_end),
+        previous_points=series(previous_start, previous_end),
+    )
+
+
 def _budget_status(limits: list[ExpenseLimit], spent_by_category: dict[str, Decimal]) -> BudgetStatus:
     rows: list[BudgetCategoryStatus] = []
     for limit in limits:
@@ -509,6 +570,14 @@ def build_finance_snapshot(
             previous_total=comparison_previous_total,
             difference=comparison_difference,
             percent_change=comparison_percent,
+        ),
+        expense_comparison_chart=build_cumulative_expense_comparison(
+            lists,
+            current_start=period_start,
+            current_period_end=period_end,
+            current_end=actual_end,
+            previous_start=previous_start,
+            previous_end=previous_end,
         ),
         categories=category_rows,
         largest_expenses=tuple(largest[: max(0, largest_limit)]),

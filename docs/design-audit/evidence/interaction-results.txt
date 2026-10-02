@@ -1,0 +1,11 @@
+Finance filter retained period comparison; 30 aligned day targets.
+Keyboard focus tooltip: День 1 · Текущий: 02.10.2026: 100 ₽ · Прошлый: 02.09.2026: 0 ₽
+Mouse hover tooltip: День 2 · Текущий: 03.10.2026: 100 ₽ · Прошлый: 03.09.2026: 0 ₽
+Out-of-range series tooltip: День 29 · Текущий: нет точки в текущем периоде · Прошлый: 30.09.2026: 0 ₽
+Touch tooltip: День 0 · Текущий: 01.10.2026: 100 ₽ · Прошлый: 01.09.2026: 0 ₽
+Rotated viewport with 200% root font overflow: False
+Settings palette preview: #9f1239
+Graph focus color with palette: color(srgb 0.623529 0.0705882 0.223529 / 0.14)
+Registration form error state: Пароли не совпадают
+Login form error state: Неверный ник или пароль
+Finance dark theme screenshot and vehicle log print view captured.

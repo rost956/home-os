@@ -1,0 +1,11 @@
+﻿url,action,final_url,overflow
+/expenses/analytics,list and dates,/expenses/analytics?list_id=1&from_date=2026-10-01&to_date=2026-10-02,False
+/expenses/categories/1/analytics,sort amount descending,/expenses/categories/1/analytics?from_date=2026-10-01&to_date=2026-10-02&list_id=&sort=amount_desc,False
+/vehicles/1/log,search and sort,/vehicles/1/log?entry_type=&date_from=&date_to=&q=Audit&sort=cost_desc,False
+/vehicles/1/fuel,date filter,/vehicles/1/fuel?date_from=2026-10-01&date_to=,False
+/vehicles/trips,planned status,/vehicles/trips?status=planned&vehicle_id=,False
+/files,active filter,/files?status_filter=active&sort=newest,False
+/finance,custom period filter,/finance?from_date=2026-09-01&to_date=2026-09-30,False
+/moments,previous month,/moments?year=2026&month=9,False
+/planner,next month,/planner?month=2026-11,False
+/fuel,AI-95 filter,/fuel?fuel=95,False

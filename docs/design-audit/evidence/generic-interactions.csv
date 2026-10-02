@@ -1,0 +1,59 @@
+﻿url,link,link_status,details,button,page_error
+/,/recipes/new,/recipes/new,,,0
+/today,/recipes/new,/recipes/new,,,0
+/search,,,,,0
+/settings,#palette-controls,,,Основное действие,0
+/backup,/export/data.json,/backup,,,0
+/ai/settings,,,,,0
+/recipes,/recipes/1,/recipes/1,,,0
+/recipes/new,,,,Добавить этап,0
+/recipes/import,,,True->False,,0
+/recipes/1,,,,Начать,0
+/recipes/1/edit,,,,Добавить этап,0
+/menu,/menu,/menu,,,0
+/shopping,/shopping/lists/1,/shopping/lists/1,,,0
+/shopping/lists/1,,,True->False,,0
+/expenses,/expenses/categories/1,/expenses/categories/1,,,0
+/expenses/analytics,/expenses/planning,/expenses/planning,,,0
+/expenses/categories/1/analytics,/expenses/analytics?from_date=2026-10-01&to_date=2026-10-03&list_id=,/expenses/analytics?from_date=2026-10-01&to_date=2026-10-03&list_id=,,,0
+/expenses/lists/1,/expenses/categories/1,/expenses/categories/1,False->True,Редактировать,0
+/expenses/categories/1,/expenses/lists/1,/expenses/lists/1,,Редактировать,0
+/expenses/planning,,,,,0
+/expenses/splits,,,,,0
+/income,/finance,/finance,True->False,,0
+/finance,,,False->True,,0
+/chats,/chats/1,/chats/1,,,0
+/chats/1,,,False->True,,0
+/wishlist,,,True->False,,0
+/wishlist/shared/audituser,,,,,0
+/watch,/watch,/watch,True->False,,0
+/moments,#moment-create,,False->True,,0
+/planner,/planner?month=2026-10&day=2026-10-03,/planner?month=2026-10&day=2026-10-03,True->False,,0
+/vehicles,/vehicles/new,/vehicles/new,,,0
+/vehicles/new,,,,,0
+/vehicles/1,/vehicles/1/edit,/vehicles/1/edit,,,0
+/vehicles/1/edit,,,,,0
+/vehicles/1/log,/vehicles/1,/vehicles/1,,,0
+/vehicles/1/log/new,,,,,0
+/vehicles/1/log/print,,,,,0
+/vehicles/1/log/1,/vehicles/1/log,/vehicles/1/log,,,0
+/vehicles/1/log/1/edit,,,,,0
+/vehicles/1/maintenance,/vehicles/1,/vehicles/1,False->True,,0
+/vehicles/1/maintenance/new,,,,,0
+/vehicles/1/maintenance/1/edit,,,,,0
+/vehicles/1/fuel,/vehicles/1/fuel/new,/vehicles/1/fuel/new,,,0
+/vehicles/1/fuel/new,/vehicles/1/fuel,/vehicles/1/fuel,,,0
+/vehicles/1/fuel/1/edit,/vehicles/1/fuel,/vehicles/1/fuel,,,0
+/vehicles/trips,/fuel?view=trip,/fuel?view=trip,,,0
+/fuel,/fuel/add,/fuel/add,,Список,0
+/fuel/add,/fuel,/fuel,,,0
+/fuel/settings,/fuel,/fuel,False->True,Отключить здесь,0
+/fuel/1,/fuel,/fuel,False->True,"АИ-95, Нет достоверных данных, 00:00–00:00, 24 ч 00 мин",0
+/fuel/1/settings,/fuel/1,/fuel/1,,,0
+/vehicles/trips/1,,,True->False,,0
+/files,/files/new,/files/new,,,0
+/files/new,,,,,0
+/files/1,,,,Скопировать ссылку,0
+/share/audit-public-token-12345678901234567890,,,,,0
+/files/7,/files/7/download/6,/files/7,,Скопировать ссылку,0
+/share/KCbpHmdMQhcb8ZYNP8bOp_YeQiuC_ZxKxbMI4AXe6vY,/share/KCbpHmdMQhcb8ZYNP8bOp_YeQiuC_ZxKxbMI4AXe6vY/files/6/download,/share/KCbpHmdMQhcb8ZYNP8bOp_YeQiuC_ZxKxbMI4AXe6vY,,,0

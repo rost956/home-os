@@ -31,8 +31,87 @@
     </div>
 </section>
 
+<section class="card expense-comparison-card" aria-labelledby="expense-comparison-title">
+    <div class="card-head comparison-head">
+        <div>
+            <h2 id="expense-comparison-title">Накопленные траты: текущий и прошлый периоды</h2>
+            <div class="subline">Текущий период: {{ comparison_chart.current_start.strftime('%d.%m.%Y') }}–{{ comparison_chart.current_period_end.strftime('%d.%m.%Y') }} (данные по {{ comparison_chart.current_end.strftime('%d.%m.%Y') }}) · прошлый период: {{ comparison_chart.previous_start.strftime('%d.%m.%Y') }}–{{ comparison_chart.previous_end.strftime('%d.%m.%Y') }}</div>
+            <div class="subline">Сравнение всегда показывает финансовые периоды; фильтр дат выше на него не влияет.</div>
+        </div>
+        <div class="comparison-legend" aria-label="Обозначения серий">
+            <span class="current-series"><i aria-hidden="true"></i>Текущий · {{ comparison_chart.current_start.strftime('%d.%m') }}–{{ comparison_chart.current_period_end.strftime('%d.%m.%Y') }}</span>
+            <span class="previous-series"><i aria-hidden="true"></i>Прошлый · {{ comparison_chart.previous_start.strftime('%d.%m') }}–{{ comparison_chart.previous_end.strftime('%d.%m.%Y') }}</span>
+        </div>
+    </div>
+    <p class="comparison-help" id="comparison-help">День 0 — первый день периода. Наведите указатель или выберите день клавишей Tab, чтобы сравнить значения.</p>
+    {% if not comparison_has_current_expenses %}<p class="comparison-empty-note">В текущем финансовом периоде фактических трат пока нет; линия остаётся на нуле.</p>{% endif %}
+    {% if not comparison_has_previous_expenses %}<p class="comparison-empty-note">В прошлом финансовом периоде фактических трат не было; линия остаётся на нуле.</p>{% endif %}
+    <div class="comparison-plot-scroll" tabindex="0" aria-label="Область графика; прокручивается по горизонтали">
+        <svg class="comparison-plot" style="min-width: {{ comparison_svg_width }}px" viewBox="0 0 {{ comparison_svg_width }} 260" role="group" aria-labelledby="expense-comparison-title" aria-describedby="comparison-help">
+            {% for tick in range(5) %}
+                {% set tick_y = comparison_plot_bottom - (comparison_plot_bottom - comparison_plot_top) * tick / 4 %}
+                {% set tick_amount = comparison_chart_max * tick / 4 %}
+                <line class="comparison-gridline" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_right }}" y1="{{ tick_y }}" y2="{{ tick_y }}" />
+                <text class="comparison-axis-label" x="{{ comparison_plot_left - 8 }}" y="{{ tick_y + 4 }}" text-anchor="end">{{ tick_amount|fmt_decimal }} ₽</text>
+            {% endfor %}
+            <line class="comparison-axis" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_left }}" y1="{{ comparison_plot_top }}" y2="{{ comparison_plot_bottom }}" />
+            <line class="comparison-axis" x1="{{ comparison_plot_left }}" x2="{{ comparison_plot_right }}" y1="{{ comparison_plot_bottom }}" y2="{{ comparison_plot_bottom }}" />
+            {% for row in comparison_rows if row.day_index % 5 == 0 or row.day_index == comparison_rows|length - 1 %}
+                {% set x = comparison_plot_left + (comparison_plot_right - comparison_plot_left) * row.day_index / (comparison_rows|length - 1 if comparison_rows|length > 1 else 1) %}
+                <text class="comparison-axis-label" x="{{ x }}" y="{{ comparison_plot_bottom + 22 }}" text-anchor="middle">{{ row.day_index }}</text>
+            {% endfor %}
+            {% if current_svg_points|length > 1 %}<polyline class="comparison-line current-series" points="{% for point in current_svg_points %}{{ point.x }},{{ point.y }} {% endfor %}" />{% endif %}
+            {% if previous_svg_points|length > 1 %}<polyline class="comparison-line previous-series" points="{% for point in previous_svg_points %}{{ point.x }},{{ point.y }} {% endfor %}" />{% endif %}
+            {% for point in current_svg_points %}<circle class="comparison-marker current-series{% if point.day_index == current_svg_points|length - 1 %} today-marker{% endif %}" cx="{{ point.x }}" cy="{{ point.y }}" r="{% if point.day_index == current_svg_points|length - 1 %}6{% else %}4{% endif %}" />{% endfor %}
+            {% for point in previous_svg_points %}<rect class="comparison-marker previous-series{% if point.day_index == current_svg_points|length - 1 %} comparison-match{% endif %}" x="{{ point.x - (5 if point.day_index == current_svg_points|length - 1 else 3.5) }}" y="{{ point.y - (5 if point.day_index == current_svg_points|length - 1 else 3.5) }}" width="{{ 10 if point.day_index == current_svg_points|length - 1 else 7 }}" height="{{ 10 if point.day_index == current_svg_points|length - 1 else 7 }}" />{% endfor %}
+            {% for row in comparison_rows %}
+                {% set x = comparison_plot_left + (comparison_plot_right - comparison_plot_left) * row.day_index / (comparison_rows|length - 1 if comparison_rows|length > 1 else 1) %}
+                {% set current_date = row.current.expense_date.strftime('%d.%m.%Y') if row.current else none %}
+                {% set previous_date = row.previous.expense_date.strftime('%d.%m.%Y') if row.previous else none %}
+                {% set current_total = row.current.cumulative_total|fmt_decimal if row.current else none %}
+                {% set previous_total = row.previous.cumulative_total|fmt_decimal if row.previous else none %}
+                <rect class="comparison-hit" x="{{ x - 16 }}" y="{{ comparison_plot_top }}" width="32" height="{{ comparison_plot_bottom - comparison_plot_top }}" tabindex="0" role="button" aria-label="{% if row.day_index == current_svg_points|length - 1 %}Сегодня; {% endif %}{% if row.day_index == current_svg_points|length - 1 and row.previous %}Сопоставимый день прошлого периода; {% endif %}день {{ row.day_index }} периода. Текущий: {{ current_date or 'нет точки' }}, {{ current_total or 'нет точки' }} рублей. Прошлый: {{ previous_date or 'нет точки' }}, {{ previous_total or 'нет точки' }} рублей." data-day="{{ row.day_index }}" data-current-date="{{ current_date or '' }}" data-current-total="{{ current_total or '' }}" data-previous-date="{{ previous_date or '' }}" data-previous-total="{{ previous_total or '' }}" />
+            {% endfor %}
+        </svg>
+    </div>
+    <div class="comparison-tooltip" role="status" aria-live="polite" hidden></div>
+    <details class="comparison-data">
+        <summary>Показать значения всех дней</summary>
+        <div class="comparison-table-scroll" tabindex="0" aria-label="Таблица накопленных трат по дням">
+            <table>
+                <thead><tr><th>День</th><th>Текущий период · дата</th><th>Накоплено</th><th>Прошлый период · дата</th><th>Накоплено</th></tr></thead>
+                <tbody>{% for row in comparison_rows %}<tr><th scope="row">{{ row.day_index }}</th><td>{{ row.current.expense_date.strftime('%d.%m.%Y') if row.current else 'Нет точки' }}</td><td>{{ row.current.cumulative_total|fmt_decimal if row.current else '—' }}{% if row.current %} ₽{% endif %}</td><td>{{ row.previous.expense_date.strftime('%d.%m.%Y') if row.previous else 'Нет точки' }}</td><td>{{ row.previous.cumulative_total|fmt_decimal if row.previous else '—' }}{% if row.previous %} ₽{% endif %}</td></tr>{% endfor %}</tbody>
+            </table>
+        </div>
+    </details>
+</section>
+
 <section class="card finance-forecast-card">
     <div class="card-head"><div><h2>Прогноз до конца периода</h2><div class="subline">Модель: {{ forecast_info.method }}, история за {{ forecast_info.days }} дн., точность {{ forecast_info.confidence }}</div></div><span class="pill">{{ forecast_info.daily_rate|fmt_decimal }} ₽ / день</span></div>
     <div class="finance-forecast-values"><div><span>Ожидаемые траты</span><b>{{ forecast_info.forecast|fmt_decimal }} ₽</b></div><div><span>Доходы периода</span><b>{{ period_income|fmt_decimal }} ₽</b></div><div><span>Остаток</span><b class="{% if forecast_balance < 0 %}negative-text{% else %}positive-text{% endif %}">{{ '+' if forecast_balance >= 0 else '' }}{{ forecast_balance|fmt_decimal }} ₽</b></div></div>
 </section>
+<script>
+(() => {
+    const card = document.querySelector('.expense-comparison-card');
+    if (!card) return;
+    const tooltip = card.querySelector('.comparison-tooltip');
+    const showPoint = (point) => {
+        const current = point.dataset.currentDate
+            ? `${point.dataset.currentDate}: ${point.dataset.currentTotal} ₽`
+            : 'нет точки в текущем периоде';
+        const previous = point.dataset.previousDate
+            ? `${point.dataset.previousDate}: ${point.dataset.previousTotal} ₽`
+            : 'нет точки в прошлом периоде';
+        tooltip.textContent = `День ${point.dataset.day} · Текущий: ${current} · Прошлый: ${previous}`;
+        tooltip.hidden = false;
+    };
+    card.querySelectorAll('.comparison-hit').forEach((point) => {
+        if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+            point.addEventListener('mouseenter', () => showPoint(point));
+        }
+        point.addEventListener('focus', () => showPoint(point));
+        point.addEventListener('pointerdown', () => showPoint(point));
+    });
+})();
+</script>
 {% endblock %}

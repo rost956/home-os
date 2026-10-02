@@ -3,6 +3,7 @@ import json
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import unquote
 
 import httpx
@@ -308,6 +309,37 @@ def test_fuel_station_api_and_soft_disable(client, login, make_user):
     assert len(stations) == 1
     assert stations[0]["enabled"] is True
     assert stations[0]["fuel_types"] == ["98"]
+
+
+def test_fuel_search_candidate_cards_group_tracked_fuels(client, login, make_user, monkeypatch):
+    make_user("fuel-candidate-ui")
+    login("fuel-candidate-ui")
+
+    async def fake_search(_geocoder, _query):
+        return [SimpleNamespace(latitude=59.835, longitude=30.121)]
+
+    async def fake_near(_latitude, _longitude, _radius):
+        return [FuelStationCandidate(
+            provider="gdebenz",
+            provider_station_id="candidate-1",
+            brand="Teboil",
+            address="проспект Ветеранов, 188/1",
+            latitude=59.835,
+            longitude=30.121,
+        )]
+
+    monkeypatch.setattr(main_module.NominatimGeocoder, "search", fake_search)
+    monkeypatch.setattr(main_module, "make_gdebenz_provider", lambda: SimpleNamespace(get_stations_near=fake_near))
+
+    response = client.post("/fuel/search", data={"address": "проспект Ветеранов, 188/1"})
+
+    assert response.status_code == 200
+    assert '<fieldset class="fuel-candidate-fuels">' in response.text
+    assert "Отслеживать топливо" in response.text
+    assert response.text.count('class="check-row"><input type="checkbox" name="fuel_types"') == 3
+    assert 'name="fuel_types" value="95" checked' in response.text
+    assert 'name="fuel_types" value="98" checked' in response.text
+    assert 'name="fuel_types" value="100" checked' in response.text
 
 
 def test_route_lookup_samples_corridor_filters_and_deduplicates():
@@ -918,7 +950,7 @@ def test_fuel_page_renders_with_registered_moscow_datetime_filter(client, login,
     assert response.status_code == 200
     assert "Пока ничего не отслеживается" in response.text
     assert "Поездка" in response.text
-    assert '/static/style.css?v=76' in response.text
+    assert '/static/style.css?v=79' in response.text
     assert response.headers["cache-control"] == "no-store"
 
 
